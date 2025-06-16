@@ -1,13 +1,13 @@
 import FreeCADGui
-import GDSCommand  # stellt sicher, dass der Command registriert ist
+import GDSCommand
 
 class MyWorkbench(FreeCADGui.Workbench):
-    MenuText = "GDSII Workbench"
-    ToolTip = "FreeCAD GDSII Workbench"
-    Icon = ""  # Optional: Hier kann ein Icon-Pfad rein
+    MenuText = "GDSII 3D Import"
+    ToolTip = "Importiert GDSII mit LYP Layernamen und 3D Körpern"
+    Icon = ""  # Hier könnte später ein Icon hin
 
     def Initialize(self):
-        self.appendToolbar("GDSII Tools", ["GDSCommand"])
+        self.appendToolbar("GDS Tools", ["GDSCommand"])
 
     def GetClassName(self):
         return "Gui::PythonWorkbench"
