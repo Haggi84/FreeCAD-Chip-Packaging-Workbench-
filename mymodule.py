@@ -1,86 +1,106 @@
-import FreeCAD
+import xml.etree.ElementTree as ET
 import gdstk
-from PySide2 import QtWidgets
+import FreeCAD
 import Part
-from FreeCAD import Vector
-import os
 
 
-def load_gdsii(file_path):
-    lib = gdstk.read_gds(file_path)
-    return lib
+def parse_lyp(lyp_path):
 
-def parse_lyp(filepath):
-    layers = {}
-    with open(filepath, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith('LAYER'):
-                parts = line.split()
-                if len(parts) >= 3:
-                    try:
-                        layer_id = int(parts[1])
-                        layer_name = parts[2]
-                        layers[layer_id] = layer_name
-                    except:
-                        pass
-    return layers
+    """
+    Parse a LYP file and return a list of tuples (layer_name, layer_id, datatype).
 
-class LayerSelector(QtWidgets.QWidget):
-    def __init__(self, layer_dict, gds_file):
-        super().__init__()
-        self.layer_dict = layer_dict
-        self.gds_file = gds_file
+    only includes visible layers.
+    """
 
-        self.combo = QtWidgets.QComboBox()
-        for lid, lname in sorted(layer_dict.items()):
-            self.combo.addItem(f"{lname} ({lid})", lid)
-
-        self.load_btn = QtWidgets.QPushButton("Layer anzeigen")
-        self.load_btn.clicked.connect(self.load_layer)
-
-        layout = QtWidgets.QVBoxLayout()
-        layout.addWidget(self.combo)
-        layout.addWidget(self.load_btn)
-        self.setLayout(layout)
-
-    def load_layer(self):
-        layer_id = self.combo.currentData()
-        display_layer(self.gds_file, layer_id)
-
-def display_layer(file_path, target_layer):
     try:
-        doc = FreeCAD.activeDocument()
-        if not doc:
-            doc = FreeCAD.newDocument("GDSII_Document")
+        tree = ET.parse(lyp_path)
+        root = tree.getroot()
+        layers = []
 
-        lib = gdstk.read_gds(file_path)
+        # Iterate through the XML elements to find layer properties
+        for layer in root.findall(".//properties"):
+            name = layer.find("name").text if layer.find("name") is not None else "Unknown"
+            source = layer.find("source").text if layer.find("source") is not None else None
+            visible = layer.find("visible").text == "true" if layer.find("visible") is not None else False
+            
+    
+            if visible and source:
+                # Extract layer_id and datatype from the source (e.g.,  "40/0")
+                try:
+                    layer_id, _ = map(int, source.split("/"))
+                    layers.append((name, layer_id))
+                except (ValueError, TypeError):
+                    FreeCAD.Console.PrintWarning(f"Invalid source format in layer {name}: {source}\n")
+                    continue
+
+       
+        return layers
+    
+    except ET.ParseError:
+            FreeCAD.Console.PrintError(f"Error parsing LYP file {lyp_path}: Invalid format\n")
+            return []
+    except FileNotFoundError:
+            FreeCAD.Console.PrintError(f"LYP file {lyp_path} not found\n")
+            return []
+    except Exception as e:
+            FreeCAD.Console.PrintError(f"An error occurred while parsing LYP file {lyp_path}: {str(e)}\n")
+            return []
+    
+def get_gds_layer(gds_path):
+    """
+    Analyze GDS file and return a set of (layer_id, datatype) pairs with geometries.
+    """
+    try:
+        lib = gdstk.read_gds(gds_path)
+        layer_set = set()
+
         for cell in lib.cells:
             for polygon in cell.polygons:
-                if polygon.layer == target_layer:
-                    add_polygon_to_doc(doc, polygon.points)
-        doc.recompute()
-        print(f"Layer {target_layer} angezeigt.")
+                layer_set.add((polygon.layer, polygon.datatype))
+
+        # Return a set of unique layer IDs
+        unique_layers_ids = set(layer[0] for layer in layer_set)
+
+        return unique_layers_ids
+    
     except Exception as e:
-        print("Fehler beim Anzeigen des layer:", e)
+        FreeCAD.Console.PrintError(f"Error reading GDSII file {gds_path}: {str(e)}\n")
+        return set()
 
-def add_polygon_to_doc(doc, points):
-    # Punkte polygon schließen falls offen
-    if points[0] != points[-1]:
-        points = list(points) + [points[0]]
 
-    wire = Part.makePolygon([Vector(p[0], p[1], 0) for p in points])
-    obj = doc.addObject("Part::Feature", "GDS_Polygon")
-    obj.Shape = wire
 
-def run(gds_file, lyp_file):
-    layers = parse_lyp(lyp_file)
-    print("Gefundene Layer aus LYP:")
-    for lid, lname in layers.items():
-        print(f"{lid}: {lname}")
+def load_gds(gds_path, selected_layers):
+    """
+    Load GDS file and return shapes for selected layers.
+    selected_layers is a list of tuples (layer_name, layer_id).
+    """
+    try:
+        lib = gdstk.read_gds(gds_path)
+        shapes = []
 
-    # GUI starten
-    selector = LayerSelector(layers, gds_file)
-    selector.setWindowTitle("Layer Auswahl")
-    selector.show()
-    return selector
+        # Convert selected layers to a set of (layer IDs, datatypes) for filtering
+        selected_layer_set = set()
+        for layer_name, layer_id in selected_layers:
+            selected_layer_set.add((layer_id, 0))  # Assuming datatype is always 0 for simplicity
+        
+
+        for cell in lib.cells:
+            for polygon in cell.polygons:
+                if (polygon.layer, polygon.datatype) in selected_layer_set:
+
+                    # Convert polygon to FreeCAD shape
+                    points = [FreeCAD.Vector(p[0], p[1], 0) for p in polygon.points]
+
+                    if len(points) > 2:
+                        wire = Part.makePolygon(points)
+                        face = Part.Face(wire)
+
+                        # Extrude the face by 3mm in the Z direction
+                        extrude_shape = face.extrude(FreeCAD.Vector(0, 0, 1))
+                        shapes.append(extrude_shape)
+
+        return shapes
+        
+    except Exception as e:
+        FreeCAD.Console.PrintError(f"Error loading GDS file {gds_path}: {str(e)}\n")
+        return []
