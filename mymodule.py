@@ -16,25 +16,34 @@ def parse_lyp(lyp_path):
         tree = ET.parse(lyp_path)
         root = tree.getroot()
         layers = []
+        unique_colors = set()
 
         # Iterate through the XML elements to find layer properties
-        for layer in root.findall(".//properties"):
-            name = layer.find("name").text if layer.find("name") is not None else "Unknown"
-            source = layer.find("source").text if layer.find("source") is not None else None
-            visible = layer.find("visible").text == "true" if layer.find("visible") is not None else False
+        for prop in root.findall(".//properties"):
+            layer_dict = {}
+            for child in prop:
+                layer_dict[child.tag] = child.text if child.text else None
+
+
+            name = layer_dict.get("name", "Unknown Layer")
+            source = layer_dict.get("source", None)
+            visible = layer_dict.get("visible", "false") == "true"
+            frame_color = layer_dict.get("frame-color", "#000000")  # Default to black if not found
+            fill_color = layer_dict.get("fill-color", "#FFFFFF")  # Default to white if not found
             
     
             if visible and source:
                 # Extract layer_id and datatype from the source (e.g.,  "40/0")
                 try:
                     layer_id, _ = map(int, source.split("/"))
-                    layers.append((name, layer_id))
+                    layer_dict["layer_id"] = layer_id
+                    layers.append(layer_dict)
+                    unique_colors.add((frame_color, fill_color))
                 except (ValueError, TypeError):
                     FreeCAD.Console.PrintWarning(f"Invalid source format in layer {name}: {source}\n")
                     continue
 
-       
-        return layers
+        return (layers, unique_colors)
     
     except ET.ParseError:
             FreeCAD.Console.PrintError(f"Error parsing LYP file {lyp_path}: Invalid format\n")
@@ -56,12 +65,9 @@ def get_gds_layer(gds_path):
 
         for cell in lib.cells:
             for polygon in cell.polygons:
-                layer_set.add((polygon.layer, polygon.datatype))
+                layer_set.add(polygon.layer)
 
-        # Return a set of unique layer IDs
-        unique_layers_ids = set(layer[0] for layer in layer_set)
-
-        return unique_layers_ids
+        return layer_set
     
     except Exception as e:
         FreeCAD.Console.PrintError(f"Error reading GDSII file {gds_path}: {str(e)}\n")
@@ -72,24 +78,25 @@ def get_gds_layer(gds_path):
 def load_gds(gds_path, selected_layers):
     """
     Load GDS file and return shapes for selected layers.
-    selected_layers is a list of tuples (layer_name, layer_id).
+    selected_layers is a list of tuples (shape, frame_color).
     """
     try:
         lib = gdstk.read_gds(gds_path)
         shapes = []
 
-        # Convert selected layers to a set of (layer IDs, datatypes) for filtering
-        selected_layer_set = set()
-        for layer_name, layer_id in selected_layers:
-            selected_layer_set.add((layer_id, 0))  # Assuming datatype is always 0 for simplicity
+        # Convert selected layers to a set of layer IDs for GDS
+        layer_set = set()
+        for layer in selected_layers:
+            layer_id = layer.get("layer_id", 0) # Default to 0 if not found
+            layer_set.add((layer_id, 0))  # Assuming datatype is always 0 for simplicity
         
 
         for cell in lib.cells:
             for polygon in cell.polygons:
-                if (polygon.layer, polygon.datatype) in selected_layer_set:
+                if (polygon.layer, polygon.datatype) in layer_set:
 
                     # Convert polygon to FreeCAD shape
-                    points = [FreeCAD.Vector(p[0], p[1], 0) for p in polygon.points]
+                    points = [(p[0], p[1], 0) for p in polygon.points]
 
                     if len(points) > 2:
                         wire = Part.makePolygon(points)
@@ -97,7 +104,11 @@ def load_gds(gds_path, selected_layers):
 
                         # Extrude the face by 3mm in the Z direction
                         extrude_shape = face.extrude(FreeCAD.Vector(0, 0, 1))
-                        shapes.append(extrude_shape)
+
+                        # Set the color from the layer properties
+                        frame_color = selected_layers[0].get("frame-color", "#000000")  # Default to black if not found
+                        fill_color = selected_layers[0].get("fill-color", "#FFFFFF")  # Default to white if not found
+                        shapes.append((extrude_shape, frame_color, fill_color))
 
         return shapes
         
