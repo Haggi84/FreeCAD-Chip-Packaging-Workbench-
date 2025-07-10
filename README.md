@@ -5,4 +5,4 @@ This is a Python AddIn for the OpenSource software FreeCAD. It aims to provide a
 
 To run the AddIn just clone the repository via the command:
 
-"git clone %PATHTOREPOSITORY%" in the ../FreeCAD/Mod/ folder
+```git clone %PATHTOREPOSITORY%``` in the ```../FreeCAD/Mod/``` folder
