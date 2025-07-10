@@ -14,6 +14,8 @@ Following features are currently planned:
     
 The imported file is displayed in a workbench environment. Currently we are at the beginning of the development. 
 
+## Setup
+
 To run the AddIn just clone the repository via the command:
 
 ```git clone %PATHTOREPOSITORY%``` in the ```../FreeCAD/Mod/``` folder
@@ -29,12 +31,17 @@ Once you cloned the repository in the ```../FreeCAD/Mod/``` folder, you have to 
 create a .json file with the name:
 
 **settings.json** 
+
+Insert this code (for Windows systems; you might adjust if you're using a Linux based system) and save the file.
+
 ```
 {
     "python.analysis.extraPaths": [
         "C:/Program Files/FreeCAD 1.0/bin",
-        "C:/users/jozeitler/appdata/roaming/python/python311/site-packages",
+        "C:/users/%USER%/appdata/roaming/python/python311/site-packages",
         "C:/Program Files/FreeCAD 1.0/bin/Lib/site-packages"
     ]
 }
 ```
+
+_**note:** you have to replace ```%USER%``` with the corresponding directory of your system_
