@@ -14,6 +14,11 @@ Following features are currently planned:
     
 The imported file is displayed in a workbench environment. Currently we are at the beginning of the development. 
 
+A possible result for the software could look like some configuration module that allows to configure the elements as stated in the picture below:
+
+<img width="511" height="334" alt="grafik" src="https://github.com/user-attachments/assets/5ac820ee-de2e-4051-97c5-c6499160bba8" />
+
+
 ## Setup
 
 To run the AddIn just clone the repository via the command:
