@@ -1,7 +1,8 @@
 import xml.etree.ElementTree as ET
 import gdstk
 import FreeCAD
-import Part
+from FreeCAD import Part
+#import Part
 
 
 def parse_lyp(lyp_path):

@@ -3,7 +3,7 @@ import mymodule  # stellt sicher, dass dein Modul geladen wird
 import FreeCAD
 import FreeCADGui
 import os
-import Part
+from FreeCAD import Part
 
 def hex_to_rgb(hex_color):
     """

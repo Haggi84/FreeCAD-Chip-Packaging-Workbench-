@@ -1,3 +1,21 @@
+# This is all the relevant stuff that we need for the FreeCAD-DI-PASSIONATE implementation that has to be ignored....
+
+# .json extensions
+*.json
+
+
+
+
+
+
+
+
+
+
+
+
+#this is actually automatically generated stuff.....
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -195,3 +213,6 @@ cython_debug/
 
 # FreeCAD_AddIn stuff:
 .__pycache__/
+.vs/DI-PASSIONATE-FreeCAD/FileContentIndex/a5a4d1b6-41d0-490d-a65b-09786185ecae.vsidx
+.vs/slnx.sqlite
+.vs/DI-PASSIONATE-FreeCAD/v17/.wsuo
