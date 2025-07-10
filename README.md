@@ -25,6 +25,8 @@ To run the AddIn just clone the repository via the command:
 
 ```git clone %PATHTOREPOSITORY%``` in the ```../FreeCAD/Mod/``` folder
 
+## Developer settings
+
 It is suggested to use VSCode. You can download it from the following page:
 
 https://code.visualstudio.com/
