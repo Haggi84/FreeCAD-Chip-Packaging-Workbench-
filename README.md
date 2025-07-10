@@ -1,7 +1,7 @@
 # DI-PASSIONATE-FreeCAD
 ## Development of a FreeCAD plugin for the BMBF project DI-Passionate to enable chip-packaging
 
-This is a Python AddIn for the OpenSource software FreeCAD. It aims to provide a opportunity to import GDSII files for chipdesign. 
+This is a Python AddIn for the OpenSource software FreeCAD (https://www.freecad.org/downloads.php). It aims to provide a opportunity to import GDSII files for chipdesign. 
 
 Following features are currently planned:
 
