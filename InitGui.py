@@ -1,12 +1,12 @@
-import FreeCADGui
-import GDSCommand  # stellt sicher, dass der Command registriert ist
+import FreeCADGui  # stellt sicher, dass der Command registriert ist
 
 class MyWorkbench(FreeCADGui.Workbench):
     MenuText = "GDSII Workbench"
     ToolTip = "FreeCAD GDSII Workbench"
-    Icon = ""  # Optional: Hier kann ein Icon-Pfad rein
+    Icon = "Std_New"  # Use a default FreeCAD icon
 
     def Initialize(self):
+        import GDSCommand
         self.appendToolbar("GDSII Tools", ["GDSCommand"])
 
     def GetClassName(self):
