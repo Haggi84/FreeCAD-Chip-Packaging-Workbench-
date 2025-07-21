@@ -13,6 +13,7 @@ except Exception as e:
 class MyWorkbench(FreeCADGui.Workbench):
     MenuText = "GDSII Workbench"
     ToolTip = "FreeCAD GDSII Workbench"
+    Icon = "Std_New"  # Use a default FreeCAD icon
     Icon = ""  # Optional: Add path to your icon
 
     def Initialize(self):
