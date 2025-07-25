@@ -11,7 +11,11 @@ Following features are currently planned:
 - plan bonding wires
 - assign materials
 - export of assemblies for e.g. thermal simulations
-    
+
+Here are some general ideas (Mindmap):
+
+https://lucid.app/lucidspark/ebb96ac9-c6d3-408a-9ead-51c1aa83efa1/edit?invitationId=inv_3ef9b6cf-fcc6-4717-8b34-9a1598ceaaf7
+
 The imported file is displayed in a workbench environment. Currently we are at the beginning of the development. 
 
 A possible result for the software could look like some configuration module that allows to configure the elements as stated in the picture below:
@@ -51,4 +55,8 @@ Insert this code (for Windows systems; you might adjust if you're using a Linux 
 }
 ```
 
+https://lucid.app/lucidspark/ebb96ac9-c6d3-408a-9ead-51c1aa83efa1/edit?invitationId=inv_3ef9b6cf-fcc6-4717-8b34-9a1598ceaaf7
 _**note:** you have to replace ```%USER%``` with the corresponding directory of your system_
+
+
+
