@@ -1,9 +1,12 @@
-from PySide2 import QtWidgets, QtCore
+from PySide2 import QtWidgets
+import os
 import FreeCAD
 import FreeCADGui
+
 import LeadframeCommand
-import GDSCommand
 import mymodule
+from GDSCommand import style_for_material, load_gds_layers
+
 
 class TransformDialog(QtWidgets.QDialog):
     """
@@ -74,16 +77,14 @@ class TransformDialog(QtWidgets.QDialog):
         }
 
 
-def _bbox_from_shapes(shapes):
-    """
-    Compute (xmin, ymin, xmax, ymax) from a list of (shape, frame_hex, fill_hex).
-    All units are mm.
-    """
-    if not shapes:
+def _bbox_from_entries(entries):
+    """Compute (xmin, ymin, xmax, ymax) from list of dicts returned by load_gds_fast."""
+    if not entries:
         return None
     xmin = ymin = float("inf")
     xmax = ymax = float("-inf")
-    for shape, _, _ in shapes:
+    for entry in entries:
+        shape = entry["shape"]
         bb = shape.BoundBox
         xmin = min(xmin, bb.XMin)
         ymin = min(ymin, bb.YMin)
@@ -96,14 +97,14 @@ class LayeronLeadframe:
     def GetResources(self):
         return {
             "MenuText": "Layer on Leadframe",
-            "ToolTip": "Configure layers on leadframe",
+            "ToolTip": "Place GDS layers onto a configured leadframe, fast and with material highlighting",
             "Pixmap": ""
         }
 
     def Activated(self):
         try:
-            # Step 1: Let the user pick GDS/LYP and layers (preview shown)
-            result = GDSCommand.load_gds_layers()
+            # Pick and preview (module-level function)
+            result = load_gds_layers()
             if not result or result[0] is None:
                 FreeCAD.Console.PrintError("❌ Failed to load GDS layers.\n")
                 return
@@ -113,37 +114,45 @@ class LayeronLeadframe:
                 FreeCAD.Console.PrintError("❌ Missing selected layers or GDS path.\n")
                 return
 
-            # Step 2: Leadframe configuration
+            # IHP mapping (try default next to this module)
+            default_map = os.path.join(os.path.dirname(__file__), "sg13g2.map")
+            ihp_map = mymodule.parse_ihp_map(default_map) if os.path.exists(default_map) else {}
+
+            # Leadframe configuration
             config = LeadframeCommand.configure_leadframe()
             if not config:
                 FreeCAD.Console.PrintError("❌ Leadframe configuration cancelled.\n")
                 return
 
-            frame_length = config["frame_length"]  # mm (X span in our model)
-            frame_width = config["frame_width"]    # mm (Y span)
+            frame_length = config["frame_length"]
+            frame_width = config["frame_width"]
 
-            # Step 3: Optional transform options (rotation/mirror/offset/auto-fit)
+            # Transform options
             tdlg = TransformDialog()
             if tdlg.exec_() != QtWidgets.QDialog.Accepted:
                 FreeCAD.Console.PrintMessage("ℹ Transform dialog cancelled by user.\n")
                 return
             opts = tdlg.get_opts()
 
-            # Step 4: First pass — import with base scale only to measure bbox
+            # First pass — measure bbox at base scale
             first_transform = {
-                "scale": None,        # derive from GDS (mm per user unit)
+                "scale": None,
                 "rot_deg": opts["rot_deg"],
                 "mirror_y": opts["mirror_y"],
                 "tx": 0.0,
                 "ty": 0.0,
                 "z_thickness": 0.03
             }
-            tmp_shapes = mymodule.load_gds(gds_path, selected_layers, first_transform)
-            if not tmp_shapes:
+            tmp_entries = mymodule.load_gds_fast(
+                gds_path, selected_layers, first_transform,
+                preview_2d=False, compound_per_layer=True,
+                min_area_mm2=0.0004, decimate_tol_mm=0.002, skip_fill_datatype=True
+            )
+            if not tmp_entries:
                 QtWidgets.QMessageBox.warning(None, "Warning", "No shapes produced during measurement pass.")
                 return
 
-            bb = _bbox_from_shapes(tmp_shapes)
+            bb = _bbox_from_entries(tmp_entries)
             if not bb:
                 QtWidgets.QMessageBox.warning(None, "Warning", "Failed to compute bounding box for GDS shapes.")
                 return
@@ -151,12 +160,10 @@ class LayeronLeadframe:
             die_w = max(0.0, xmax - xmin)
             die_h = max(0.0, ymax - ymin)
 
-            # Step 5: Compute final transform
-            base_scale = mymodule.derive_base_scale_mm(gds_path)  # mm per user unit
+            # Auto-fit scale
+            base_scale = mymodule.derive_base_scale_mm(gds_path)
             final_scale = base_scale
-
             if opts["auto_fit"] and die_w > 0 and die_h > 0:
-                # Fit into frame window with a margin
                 margin = max(0.0, opts["margin_pct"]) / 100.0
                 fit_w = frame_length * (1.0 - margin)
                 fit_h = frame_width * (1.0 - margin)
@@ -164,7 +171,6 @@ class LayeronLeadframe:
                 if fit_factor < 1.0:
                     final_scale = base_scale * fit_factor
 
-            # Center to origin (leadframe is centered around 0,0)
             cx = (xmin + xmax) / 2.0
             cy = (ymin + ymax) / 2.0
             final_tx = -cx + opts["tx"]
@@ -179,41 +185,62 @@ class LayeronLeadframe:
                 "z_thickness": 0.03
             }
 
-            # Step 6: Final import with transform, into a fresh document
+            # Final import with material styles
             doc = FreeCAD.newDocument("Leadframe_Assembly")
+            try:
+                doc.openTransaction("Final Import")
+            except Exception:
+                pass
 
-            final_shapes = mymodule.load_gds(gds_path, selected_layers, final_transform)
-            if not final_shapes:
+            entries = mymodule.load_gds_fast(
+                gds_path,
+                selected_layers,
+                transform=final_transform,
+                preview_2d=False,
+                compound_per_layer=True,
+                min_area_mm2=0.0004,
+                decimate_tol_mm=0.002,
+                skip_fill_datatype=True
+            )
+            if not entries:
                 QtWidgets.QMessageBox.warning(None, "Warning", "No shapes found for the selected layers (final pass).")
                 return
 
-            # Build FC objects grouped by layer (using color match as before)
             layer_objects = {}
             for layer in selected_layers:
-                layer_id = layer.get("layer_id", 0)
-                datatype = layer.get("datatype", 0)
-                layer_name = layer.get("name", "Unnamed")
-                frame_hex = layer.get("frame-color", "#000000")
-                fill_hex = layer.get("fill-color", "#FFFFFF")
-                layer_objects[layer_id] = []
-                idx = 0
-                for shape, s_frame, s_fill in final_shapes:
-                    if (s_frame, s_fill) == (frame_hex, fill_hex):
-                        obj = doc.addObject("Part::Feature", f"Layer_{layer_name}_{layer_id}_{datatype}_{idx}")
-                        obj.Shape = shape
-                        obj.ViewObject.ShapeColor = _hex_to_rgb(fill_hex)
-                        obj.ViewObject.LineColor = _hex_to_rgb(frame_hex)
-                        layer_objects[layer_id].append(obj)
-                        idx += 1
+                lid = layer.get("layer_id", 0)
+                dt = layer.get("datatype", 0)
+                lname = layer.get("name", "Unnamed")
 
-            # Step 7: Create the leadframe into the same document and place die above it
+                map_entry = ihp_map.get((lid, dt))
+                material_label, shape_rgb, line_rgb, tr = style_for_material(
+                    map_entry["edi_name"] if map_entry else "",
+                    map_entry["edi_types"] if map_entry else set()
+                )
+
+                entry = next((e for e in entries if e["layer_id"] == lid and e["datatype"] == dt), None)
+                if not entry:
+                    continue
+
+                obj = doc.addObject("Part::Feature", f"Layer_{lname}_{lid}_{dt}")
+                obj.Shape = entry["shape"]
+                obj.ViewObject.ShapeColor = shape_rgb
+                obj.ViewObject.LineColor = line_rgb
+                obj.ViewObject.Transparency = tr
+                layer_objects.setdefault(lid, []).append(obj)
+
+            # Build leadframe in same doc
             LeadframeCommand.create_leadframe(config, doc, layer_objects)
+
+            try:
+                doc.commitTransaction()
+            except Exception:
+                pass
 
             doc.recompute()
             FreeCADGui.activeDocument().activeView().viewIsometric()
             FreeCADGui.SendMsgToActiveView("ViewFit")
-
-            QtWidgets.QMessageBox.information(None, "Success", "Leadframe created and GDS aligned successfully.")
+            QtWidgets.QMessageBox.information(None, "Success", "Leadframe created and GDS aligned (fast) with material highlighting.")
 
         except Exception as e:
             FreeCAD.Console.PrintError(f"❌ An error occurred: {str(e)}\n")
@@ -223,11 +250,4 @@ class LayeronLeadframe:
         return True
 
 
-def _hex_to_rgb(hex_color):
-    """Utility for this module (0..1 floats)."""
-    hex_color = hex_color.lstrip('#')
-    return tuple(int(hex_color[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
-
-
-import FreeCADGui
 FreeCADGui.addCommand("LayeronLeadframe", LayeronLeadframe())

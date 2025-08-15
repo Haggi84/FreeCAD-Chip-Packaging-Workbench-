@@ -1,10 +1,14 @@
 import xml.etree.ElementTree as ET
 import math
+import os
 import gdstk
 import FreeCAD
 from FreeCAD import Part
 
 
+# -------------------------------
+# KLayout LYP parsing (colors)
+# -------------------------------
 def parse_lyp(lyp_path):
     """
     Parse a KLayout LYP file and return:
@@ -56,6 +60,62 @@ def parse_lyp(lyp_path):
         return ([], set())
 
 
+# ---------------------------------------
+# IHP .map parsing (technology mapping)
+# ---------------------------------------
+def parse_ihp_map(map_path):
+    """
+    Parse IHP *.map file and return dict keyed by (gds_layer, gds_datatype) -> {
+        'edi_name': <str>,         # e.g. 'TopMetal2'
+        'edi_types': set[str]      # e.g. {'PIN','LEFPIN'} or {'FILL'} ...
+    }
+
+    The map file can contain multiple lines mapping the same (layer,datatype) with
+    different types. We merge them into a set for easier use.
+    """
+    mapping = {}
+    if not map_path or not os.path.exists(map_path):
+        FreeCAD.Console.PrintWarning("IHP MAP file not found. Technology table and material styles may be incomplete.\n")
+        return mapping
+
+    try:
+        with open(map_path, "r", encoding="utf-8", errors="ignore") as f:
+            for raw in f:
+                line = raw.strip()
+                # Skip comments / blanks
+                if not line or line.startswith("#"):
+                    continue
+
+                # Expected tokens, separated by whitespace or tabs:
+                # <EDI_NAME> <EDI_TYPES_csv> <GDS_LAYER> <GDS_DATATYPE>
+                parts = [p for p in line.split() if p]
+                if len(parts) < 4:
+                    continue
+
+                edi_name = parts[0]
+                edi_types_csv = parts[1]
+                try:
+                    gds_layer = int(parts[2])
+                    gds_datatype = int(parts[3])
+                except ValueError:
+                    continue
+
+                key = (gds_layer, gds_datatype)
+                types = set([t.strip().upper() for t in edi_types_csv.split(",") if t.strip()])
+                entry = mapping.get(key, {"edi_name": edi_name, "edi_types": set()})
+                entry["edi_name"] = edi_name  # last one wins (usually identical)
+                entry["edi_types"].update(types)
+                mapping[key] = entry
+
+        return mapping
+    except Exception as e:
+        FreeCAD.Console.PrintError(f"Failed to parse MAP file '{map_path}': {e}\n")
+        return {}
+
+
+# ------------------------------------------------
+# GDS inspection & geometry creation helpers
+# ------------------------------------------------
 def get_gds_layer(gds_path):
     """
     Analyze GDS and return set of (layer_id, datatype) that contain polygons.
@@ -63,13 +123,10 @@ def get_gds_layer(gds_path):
     try:
         lib = gdstk.read_gds(gds_path)
         layer_set = set()
-
         for cell in lib.cells:
             for polygon in cell.polygons:
                 layer_set.add((polygon.layer, polygon.datatype))
-
         return layer_set
-
     except Exception as e:
         FreeCAD.Console.PrintError(f"Error reading GDSII file {gds_path}: {str(e)}\n")
         return set()
@@ -102,67 +159,133 @@ def _transform_point(p, s, rot_deg, mirror_y, tx, ty):
     return xr + tx, yr + ty
 
 
-def load_gds(gds_path, selected_layers, transform=None):
+def _polygon_area_mm2(pts):
+    """Signed area in squared model units (mm^2 once 'pts' are scaled)."""
+    a = 0.0
+    for i in range(len(pts)):
+        x1, y1 = pts[i]
+        x2, y2 = pts[(i + 1) % len(pts)]
+        a += x1 * y2 - x2 * y1
+    return abs(a) * 0.5
+
+
+def _simplify_poly(points, eps):
+    """Drop almost-collinear or too-close points. eps in mm."""
+    if len(points) <= 3 or eps <= 0:
+        return points
+    out = [points[0]]
+    for i in range(1, len(points) - 1):
+        x0, y0 = out[-1]
+        x1, y1 = points[i]
+        x2, y2 = points[i + 1]
+        # distance to previous point
+        if (x1 - x0) ** 2 + (y1 - y0) ** 2 < eps * eps:
+            continue
+        # collinearity check via cross-product magnitude
+        cross = abs((x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0))
+        if cross < eps:
+            continue
+        out.append((x1, y1))
+    out.append(points[-1])
+    return out if len(out) >= 3 else points
+
+
+def load_gds_fast(
+    gds_path,
+    selected_layers,
+    transform=None,
+    *,
+    compound_per_layer=True,
+    preview_2d=False,
+    min_area_mm2=0.0,
+    decimate_tol_mm=0.0,
+    skip_fill_datatype=True
+):
     """
-    Load GDS file and return a list of tuples: (Part.Shape, frame_hex, fill_hex).
+    Faster GDS loader:
+    - builds ONE compound Part shape per selected (layer,datatype)
+    - optional 2D preview (wires only) or thin extrusion
+    - filters tiny polygons and optional FILL (datatype 22) by default
 
-    Args:
-        gds_path (str)
-        selected_layers (list[dict]): each dict with at least layer_id, datatype,
-                                      frame-color, fill-color
-        transform (dict or None): {
-            'scale': None or float (mm per user unit; None => derive from GDS),
-            'rot_deg': float,
-            'mirror_y': bool,
-            'tx': float (mm),
-            'ty': float (mm),
-            'z_thickness': float (mm)  # optional, default 0.03 mm
+    Returns: list of dicts (one entry per selected layer/DT), each:
+        {
+          'shape': Part.Shape,
+          'layer_id': int,
+          'datatype': int,
+          'frame_hex': '#rrggbb',
+          'fill_hex':  '#rrggbb',
         }
-
-    Notes:
-        - Coordinates in GDS are in user units; we convert to mm using 'scale'.
-        - We extrude to a thin volume so shapes are visible in 3D.
     """
     try:
         lib = gdstk.read_gds(gds_path)
         if transform is None:
             transform = {}
 
+        # base scale: mm per user unit
         s = transform.get("scale", None)
         if s is None:
-            # mm per user unit
             s = (lib.unit * 1000.0) if hasattr(lib, "unit") and lib.unit else 0.001
 
         rot_deg = float(transform.get("rot_deg", 0.0))
         mirror_y = bool(transform.get("mirror_y", False))
         tx = float(transform.get("tx", 0.0))
         ty = float(transform.get("ty", 0.0))
-        z_thickness = float(transform.get("z_thickness", 0.03))  # 30 µm
+        z_thickness = float(transform.get("z_thickness", 0.03))  # 30 µm default
 
-        shapes = []
-        layer_set = {(layer.get("layer_id", 0), layer.get("datatype", 0)) for layer in selected_layers}
+        wanted = {(l.get("layer_id", 0), l.get("datatype", 0)) for l in selected_layers}
+        by_layer = {key: [] for key in wanted}
 
+        # collect wires/faces per layer
         for cell in lib.cells:
-            for polygon in cell.polygons:
-                if (polygon.layer, polygon.datatype) in layer_set:
-                    pts2d = [_transform_point(p, s, rot_deg, mirror_y, tx, ty) for p in polygon.points]
-                    if len(pts2d) > 2:
-                        wire = Part.makePolygon([(x, y, 0.0) for (x, y) in pts2d])
-                        # Close wire if needed
-                        if not wire.isClosed():
-                            wire = Part.makePolygon([(x, y, 0.0) for (x, y) in pts2d] + [(*pts2d[0], 0.0)])
+            for poly in cell.polygons:
+                key = (poly.layer, poly.datatype)
+                if key not in wanted:
+                    continue
+                if skip_fill_datatype and poly.datatype == 22:
+                    # IHP: datatype 22 is FILL on many metals -> skip by default
+                    continue
+
+                pts2d = [_transform_point(p, s, rot_deg, mirror_y, tx, ty) for p in poly.points]
+                if decimate_tol_mm > 0.0:
+                    pts2d = _simplify_poly(pts2d, decimate_tol_mm)
+                if len(pts2d) < 3:
+                    continue
+                if min_area_mm2 > 0.0 and _polygon_area_mm2(pts2d) < min_area_mm2:
+                    continue
+
+                # build wire/face
+                wire = Part.makePolygon([(x, y, 0.0) for (x, y) in (pts2d + [pts2d[0]])])
+                if preview_2d:
+                    by_layer[key].append(wire)
+                else:
+                    try:
                         face = Part.Face(wire)
-                        extrude_shape = face.extrude(FreeCAD.Vector(0, 0, z_thickness))
-                        # color mapping via selected layer tuple (frame/fill)
-                        for layer in selected_layers:
-                            if (layer.get("layer_id", 0), layer.get("datatype", 0)) == (polygon.layer, polygon.datatype):
-                                frame_color = layer.get("frame-color", "#000000")
-                                fill_color = layer.get("fill-color", "#FFFFFF")
-                                shapes.append((extrude_shape, frame_color, fill_color))
-                                break
+                    except Exception:
+                        # OCC can fail on degenerate wires; skip safely
+                        continue
+                    if z_thickness > 0:
+                        shp = face.extrude(FreeCAD.Vector(0, 0, z_thickness))
+                    else:
+                        shp = face
+                    by_layer[key].append(shp)
 
-        return shapes
-
+        # one compound per layer
+        results = []
+        for layer in selected_layers:
+            lid = layer.get("layer_id", 0)
+            dt = layer.get("datatype", 0)
+            parts = by_layer.get((lid, dt), [])
+            if not parts:
+                continue
+            compound = Part.makeCompound(parts) if compound_per_layer and len(parts) > 1 else parts[0]
+            results.append({
+                "shape": compound,
+                "layer_id": lid,
+                "datatype": dt,
+                "frame_hex": layer.get("frame-color", "#000000"),
+                "fill_hex": layer.get("fill-color", "#FFFFFF"),
+            })
+        return results
     except Exception as e:
-        FreeCAD.Console.PrintError(f"Error loading GDS file {gds_path}: {str(e)}\n")
+        FreeCAD.Console.PrintError(f"Error loading GDS (fast) {gds_path}: {e}\n")
         return []
