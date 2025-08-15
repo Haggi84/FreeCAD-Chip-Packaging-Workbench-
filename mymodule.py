@@ -75,19 +75,16 @@ def parse_ihp_map(map_path):
     """
     mapping = {}
     if not map_path or not os.path.exists(map_path):
-        FreeCAD.Console.PrintWarning("IHP MAP file not found. Technology table and material styles may be incomplete.\n")
+        FreeCAD.Console.PrintWarning("IHP MAP file not found. Technology table and stacking may be incomplete.\n")
         return mapping
 
     try:
         with open(map_path, "r", encoding="utf-8", errors="ignore") as f:
             for raw in f:
                 line = raw.strip()
-                # Skip comments / blanks
                 if not line or line.startswith("#"):
                     continue
 
-                # Expected tokens, separated by whitespace or tabs:
-                # <EDI_NAME> <EDI_TYPES_csv> <GDS_LAYER> <GDS_DATATYPE>
                 parts = [p for p in line.split() if p]
                 if len(parts) < 4:
                     continue
@@ -103,14 +100,128 @@ def parse_ihp_map(map_path):
                 key = (gds_layer, gds_datatype)
                 types = set([t.strip().upper() for t in edi_types_csv.split(",") if t.strip()])
                 entry = mapping.get(key, {"edi_name": edi_name, "edi_types": set()})
-                entry["edi_name"] = edi_name  # last one wins (usually identical)
+                entry["edi_name"] = edi_name
                 entry["edi_types"].update(types)
                 mapping[key] = entry
-
         return mapping
     except Exception as e:
         FreeCAD.Console.PrintError(f"Failed to parse MAP file '{map_path}': {e}\n")
         return {}
+
+
+# ------------------------------------------------
+# Thickness & stacking helpers (simple defaults)
+# ------------------------------------------------
+
+# Default metal/via thicknesses [µm] – adjust to your PDK as needed.
+THICKNESS_UM = {
+    # routing metals
+    "METAL1": 0.9, "METAL2": 0.9, "METAL3": 0.9, "METAL4": 1.2, "METAL5": 2.0,
+    # top metals
+    "TOPMETAL1": 2.0, "TOPMETAL2": 3.0,
+    # vias
+    "VIA1": 0.5, "VIA2": 0.5, "VIA3": 0.5, "VIA4": 0.5, "TOPVIA1": 1.0, "TOPVIA2": 1.0,
+    # components / comp (use a tiny plate for visibility)
+    "COMP": 0.2,
+}
+
+# Default dielectric spacing (ILD) between stack levels [µm]
+ILD_SPACING_UM = 0.8
+
+
+def _norm(s):
+    return (s or "").upper()
+
+
+def thickness_um_for_edi(edi_name: str) -> float:
+    """
+    Returns thickness in µm for an EDI layer name (best-effort).
+    """
+    n = _norm(edi_name).replace("/", "_")
+    # direct hit
+    if n in THICKNESS_UM:
+        return THICKNESS_UM[n]
+    # pattern-based
+    for key in list(THICKNESS_UM.keys()):
+        if n.startswith(key):
+            return THICKNESS_UM[key]
+    # try to pull trailing number (e.g., Metal5, TopMetal2)
+    if "METAL" in n:
+        # fallback for any metal
+        return 1.0
+    if "VIA" in n:
+        return 0.5
+    return 0.2
+
+
+def stack_rank_for_edi(edi_name: str) -> int:
+    """
+    Compute a sort key for vertical order. Higher rank = closer to the top.
+    TopMetal2 > TopMetal1 > Metal5 > ... > Metal1 > COMP > Vias (around their metals)
+    """
+    n = _norm(edi_name)
+    if n.startswith("TOPMETAL"):
+        # TopMetal2 -> 700, TopMetal1 -> 600
+        try:
+            num = int(''.join([c for c in n if c.isdigit()]) or "0")
+        except Exception:
+            num = 0
+        return 600 + 100 * num
+    if n.startswith("METAL"):
+        try:
+            num = int(''.join([c for c in n if c.isdigit()]) or "1")
+        except Exception:
+            num = 1
+        return 100 * num  # Metal5=500, Metal1=100
+    if n.startswith("COMP"):
+        return 50
+    if n.startswith("TOPVIA"):
+        return 650  # around top metals
+    if n.startswith("VIA"):
+        # place near its upper metal (roughly)
+        try:
+            num = int(''.join([c for c in n if c.isdigit()]) or "1")
+        except Exception:
+            num = 1
+        return 100 * num + 10
+    return 0
+
+
+def build_stack_mm(selected_layers, ihp_map, ild_um: float = ILD_SPACING_UM):
+    """
+    Build a per-layer stacking dictionary:
+        key (layer_id, datatype) -> {'t_mm': float, 'z0_mm': float}
+
+    z0_mm is the *bottom* Z of that layer; thickness is t_mm.
+    Order is computed from edi_name (best-effort).
+    """
+    # Collect ranks & thickness
+    entries = []
+    for L in selected_layers:
+        lid = L.get("layer_id", 0)
+        dt = L.get("datatype", 0)
+        m = ihp_map.get((lid, dt), None)
+        edi = m["edi_name"] if m else L.get("name", "Metal1")
+        rank = stack_rank_for_edi(edi)
+        t_um = thickness_um_for_edi(edi)
+        entries.append(((lid, dt), edi, rank, t_um))
+
+    # Sort by rank ascending (bottom to top)
+    entries.sort(key=lambda e: e[2])
+
+    z_current_um = 0.0
+    out = {}
+    for idx, (key, edi, rank, t_um) in enumerate(entries):
+        # Place at current Z, then add thickness + dielectric (except above top of stack)
+        out[key] = {"t_mm": t_um / 1000.0, "z0_mm": z_current_um / 1000.0}
+        z_current_um += t_um
+        # add ILD spacing before next layer if that next one is a higher rank "metal-ish"
+        if idx < len(entries) - 1:
+            out_next = entries[idx + 1]
+            if "METAL" in _norm(out_next[1]):
+                z_current_um += ild_um
+
+    return out
 
 
 # ------------------------------------------------
@@ -199,12 +310,13 @@ def load_gds_fast(
     preview_2d=False,
     min_area_mm2=0.0,
     decimate_tol_mm=0.0,
-    skip_fill_datatype=True
+    skip_fill_datatype=True,
+    stack_mm=None  # NEW: dict (layer,dt)-> {'t_mm','z0_mm'} for 3D stacking
 ):
     """
     Faster GDS loader:
     - builds ONE compound Part shape per selected (layer,datatype)
-    - optional 2D preview (wires only) or thin extrusion
+    - optional 2D preview (wires only) or 3D with per-layer thickness/offset
     - filters tiny polygons and optional FILL (datatype 22) by default
 
     Returns: list of dicts (one entry per selected layer/DT), each:
@@ -230,7 +342,9 @@ def load_gds_fast(
         mirror_y = bool(transform.get("mirror_y", False))
         tx = float(transform.get("tx", 0.0))
         ty = float(transform.get("ty", 0.0))
-        z_thickness = float(transform.get("z_thickness", 0.03))  # 30 µm default
+
+        # default thickness if no stack provided (thin preview)
+        default_t_mm = float(transform.get("z_thickness", 0.03)) if not preview_2d else 0.0
 
         wanted = {(l.get("layer_id", 0), l.get("datatype", 0)) for l in selected_layers}
         by_layer = {key: [] for key in wanted}
@@ -242,7 +356,7 @@ def load_gds_fast(
                 if key not in wanted:
                     continue
                 if skip_fill_datatype and poly.datatype == 22:
-                    # IHP: datatype 22 is FILL on many metals -> skip by default
+                    # many PDKs: datatype 22 == FILL
                     continue
 
                 pts2d = [_transform_point(p, s, rot_deg, mirror_y, tx, ty) for p in poly.points]
@@ -261,12 +375,18 @@ def load_gds_fast(
                     try:
                         face = Part.Face(wire)
                     except Exception:
-                        # OCC can fail on degenerate wires; skip safely
                         continue
-                    if z_thickness > 0:
-                        shp = face.extrude(FreeCAD.Vector(0, 0, z_thickness))
+                    # pick thickness & offset for this layer
+                    if stack_mm and key in stack_mm:
+                        t_mm = float(stack_mm[key]["t_mm"])
+                        z0 = float(stack_mm[key]["z0_mm"])
                     else:
-                        shp = face
+                        t_mm = default_t_mm
+                        z0 = 0.0
+                    shp = face.extrude(FreeCAD.Vector(0, 0, t_mm))
+                    # translate to its bottom Z
+                    if z0 != 0.0:
+                        shp.translate(FreeCAD.Vector(0, 0, z0))
                     by_layer[key].append(shp)
 
         # one compound per layer

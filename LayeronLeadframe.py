@@ -8,10 +8,20 @@ import mymodule
 from GDSCommand import style_for_material, load_gds_layers
 
 
+def hex_to_rgb(hex_color):
+    hex_color = (hex_color or "#000000").lstrip('#')
+    return tuple(int(hex_color[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+
+
+def is_bondable(types) -> bool:
+    if not types:
+        return False
+    T = {t.upper() for t in types}
+    return any(t in T for t in ("PIN", "LEFPIN", "BUMP", "PAD"))
+
+
 class TransformDialog(QtWidgets.QDialog):
-    """
-    Lets the user control orientation and placement of the die relative to the leadframe.
-    """
+    """Transform options for placing the die relative to the leadframe."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Transform Options")
@@ -78,14 +88,12 @@ class TransformDialog(QtWidgets.QDialog):
 
 
 def _bbox_from_entries(entries):
-    """Compute (xmin, ymin, xmax, ymax) from list of dicts returned by load_gds_fast."""
     if not entries:
         return None
     xmin = ymin = float("inf")
     xmax = ymax = float("-inf")
     for entry in entries:
-        shape = entry["shape"]
-        bb = shape.BoundBox
+        bb = entry["shape"].BoundBox
         xmin = min(xmin, bb.XMin)
         ymin = min(ymin, bb.YMin)
         xmax = max(xmax, bb.XMax)
@@ -97,19 +105,25 @@ class LayeronLeadframe:
     def GetResources(self):
         return {
             "MenuText": "Layer on Leadframe",
-            "ToolTip": "Place GDS layers onto a configured leadframe, fast and with material highlighting",
+            "ToolTip": "Place GDS layers on a leadframe with correct 3D stacking; KLayout-view option supported",
             "Pixmap": ""
         }
 
     def Activated(self):
         try:
-            # Pick and preview (module-level function)
+            # Pick + preview (fast 2D) -> returns options as 7th item
             result = load_gds_layers()
             if not result or result[0] is None:
                 FreeCAD.Console.PrintError("❌ Failed to load GDS layers.\n")
                 return
 
-            preview_doc, _layer_objects, selected_layers, _unique_colors, gds_path, _lyp_path = result
+            # backward compatible unpacking
+            if len(result) >= 7:
+                preview_doc, _, selected_layers, _, gds_path, _, options = result
+            else:
+                preview_doc, _, selected_layers, _, gds_path, _ = result
+                options = {"match_klayout": False, "highlight_bondable": True}
+
             if not selected_layers or not gds_path:
                 FreeCAD.Console.PrintError("❌ Missing selected layers or GDS path.\n")
                 return
@@ -125,7 +139,7 @@ class LayeronLeadframe:
                 return
 
             frame_length = config["frame_length"]
-            frame_width = config["frame_width"]
+            frame_width  = config["frame_width"]
 
             # Transform options
             tdlg = TransformDialog()
@@ -185,10 +199,20 @@ class LayeronLeadframe:
                 "z_thickness": 0.03
             }
 
-            # Final import with material styles
+            # Build per-layer stack in mm (bottom Z + thickness)
+            stack = mymodule.build_stack_mm(selected_layers, ihp_map, ild_um=mymodule.ILD_SPACING_UM)
+
+            # 3D Import parameters derived from options
+            match_klayout = bool(options.get("match_klayout", False))
+            highlight_bondable = bool(options.get("highlight_bondable", True))
+            skip_fill = not match_klayout
+            min_area = 0.0 if match_klayout else 0.0004
+            decimate = 0.0 if match_klayout else 0.002
+
+            # Final import with material styles / LYP colors and correct Z stacking
             doc = FreeCAD.newDocument("Leadframe_Assembly")
             try:
-                doc.openTransaction("Final Import")
+                doc.openTransaction("Final Import (stacked)")
             except Exception:
                 pass
 
@@ -198,9 +222,10 @@ class LayeronLeadframe:
                 transform=final_transform,
                 preview_2d=False,
                 compound_per_layer=True,
-                min_area_mm2=0.0004,
-                decimate_tol_mm=0.002,
-                skip_fill_datatype=True
+                min_area_mm2=min_area,
+                decimate_tol_mm=decimate,
+                skip_fill_datatype=skip_fill,
+                stack_mm=stack
             )
             if not entries:
                 QtWidgets.QMessageBox.warning(None, "Warning", "No shapes found for the selected layers (final pass).")
@@ -209,14 +234,29 @@ class LayeronLeadframe:
             layer_objects = {}
             for layer in selected_layers:
                 lid = layer.get("layer_id", 0)
-                dt = layer.get("datatype", 0)
+                dt  = layer.get("datatype", 0)
                 lname = layer.get("name", "Unnamed")
 
                 map_entry = ihp_map.get((lid, dt))
-                material_label, shape_rgb, line_rgb, tr = style_for_material(
-                    map_entry["edi_name"] if map_entry else "",
-                    map_entry["edi_types"] if map_entry else set()
-                )
+                edi_name  = map_entry["edi_name"] if map_entry else ""
+                types     = map_entry["edi_types"] if map_entry else set()
+
+                # color decision
+                if match_klayout:
+                    shape_rgb = hex_to_rgb(layer.get("fill-color", "#FFFFFF"))
+                    line_rgb  = hex_to_rgb(layer.get("frame-color", "#000000"))
+                    tr = 0
+                    if highlight_bondable and is_bondable(types):
+                        shape_rgb = (0.90, 0.75, 0.20)
+                        line_rgb  = (0.25, 0.20, 0.10)
+                        tr = 0
+                else:
+                    _, shape_rgb, line_rgb, tr = style_for_material(edi_name, types)
+                    if not highlight_bondable and is_bondable(types):
+                        # neutralize highlight
+                        shape_rgb = hex_to_rgb(layer.get("fill-color", "#FFFFFF"))
+                        line_rgb  = hex_to_rgb(layer.get("frame-color", "#000000"))
+                        tr = 0
 
                 entry = next((e for e in entries if e["layer_id"] == lid and e["datatype"] == dt), None)
                 if not entry:
@@ -225,11 +265,16 @@ class LayeronLeadframe:
                 obj = doc.addObject("Part::Feature", f"Layer_{lname}_{lid}_{dt}")
                 obj.Shape = entry["shape"]
                 obj.ViewObject.ShapeColor = shape_rgb
-                obj.ViewObject.LineColor = line_rgb
+                obj.ViewObject.LineColor  = line_rgb
                 obj.ViewObject.Transparency = tr
+
+                if not hasattr(obj, "Bondable"):
+                    obj.addProperty("App::PropertyBool", "Bondable", "Technology", "Can be connected to the leadframe")
+                obj.Bondable = is_bondable(types) if highlight_bondable else False
+
                 layer_objects.setdefault(lid, []).append(obj)
 
-            # Build leadframe in same doc
+            # Create the leadframe geometry in the same doc
             LeadframeCommand.create_leadframe(config, doc, layer_objects)
 
             try:
@@ -240,7 +285,7 @@ class LayeronLeadframe:
             doc.recompute()
             FreeCADGui.activeDocument().activeView().viewIsometric()
             FreeCADGui.SendMsgToActiveView("ViewFit")
-            QtWidgets.QMessageBox.information(None, "Success", "Leadframe created and GDS aligned (fast) with material highlighting.")
+            QtWidgets.QMessageBox.information(None, "Success", "GDS stacked with correct heights; imported with chosen color mode.")
 
         except Exception as e:
             FreeCAD.Console.PrintError(f"❌ An error occurred: {str(e)}\n")

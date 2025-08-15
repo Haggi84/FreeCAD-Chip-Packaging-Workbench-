@@ -11,49 +11,51 @@ import mymodule  # local helper module
 # -----------------------
 def hex_to_rgb(hex_color):
     """Convert a hex color string to an RGB tuple in 0..1."""
-    hex_color = hex_color.lstrip('#')
+    hex_color = (hex_color or "#000000").lstrip('#')
     return tuple(int(hex_color[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
 
 
 def hex_to_qcolor(hex_color):
     """Convert a hex color string to a QColor."""
-    return QtGui.QColor(hex_color)
+    return QtGui.QColor(hex_color or "#000000")
+
+
+def _is_bondable(types: set) -> bool:
+    if not types:
+        return False
+    T = {t.upper() for t in types}
+    return any(t in T for t in ("PIN", "LEFPIN", "BUMP", "PAD"))
 
 
 def style_for_material(edi_name: str, edi_types: set):
     """
     Return a simple material style tuple:
         (material_label:str, shape_rgb:tuple, line_rgb:tuple, transparency:int[0..100])
+    Bondable layers get a gold style.
     """
     en = (edi_name or "").upper()
     et = {t.upper() for t in (edi_types or set())}
 
-    # Defaults
-    label = "Generic"
-    shape = (0.75, 0.75, 0.75)
-    line = (0.10, 0.10, 0.10)
-    tr = 0
+    # Gold highlight for bondable
+    if _is_bondable(et):
+        return ("Bondable metal", (0.90, 0.75, 0.20), (0.25, 0.20, 0.10), 0)
 
-    # PINs & LEFPINs get a "gold-ish" highlight
-    if "PIN" in et or "LEFPIN" in et:
-        return ("Bondable metal", (0.90, 0.75, 0.20), (0.20, 0.15, 0.05), 0)
-
-    # Vias are darker
+    # Vias darker
     if "VIA" in et and "FILL" not in et:
-        return ("Via metal", (0.35, 0.35, 0.35), (0.05, 0.05, 0.05), 0)
+        return ("Via metal", (0.35, 0.35, 0.35), (0.08, 0.08, 0.08), 0)
 
-    # FILL layers -> semi transparent dielectric
+    # Fill semi transparent
     if "FILL" in et:
         return ("Metal fill / dielectric", (0.70, 0.85, 1.0), (0.25, 0.35, 0.45), 70)
 
-    # Top / routing metals
+    # Routing metals
     if en.startswith("TOPMETAL") or en.startswith("METAL"):
         return ("Routing metal", (0.60, 0.60, 0.60), (0.12, 0.12, 0.12), 0)
 
     if en.startswith("COMP") or en.startswith("DIEAREA"):
         return ("Component/Die", (0.80, 0.90, 0.95), (0.25, 0.35, 0.45), 60)
 
-    return (label, shape, line, tr)
+    return ("Generic", (0.75, 0.75, 0.75), (0.10, 0.10, 0.10), 0)
 
 
 # -----------------------------------
@@ -84,8 +86,8 @@ class PropertyPanel(QtWidgets.QDockWidget):
 
         # Tab 3: Technology (from IHP .map)
         self.tech_table = QtWidgets.QTableWidget()
-        self.tech_table.setColumnCount(5)
-        self.tech_table.setHorizontalHeaderLabels(["GDS Layer", "Datatype", "EDI Name", "EDI Types", "Material"])
+        self.tech_table.setColumnCount(6)
+        self.tech_table.setHorizontalHeaderLabels(["GDS Layer", "Datatype", "EDI Name", "EDI Types", "Material", "Bondable"])
         self.tech_table.horizontalHeader().setStretchLastSection(True)
         self.tabs.addTab(self.tech_table, "Technology")
 
@@ -103,14 +105,15 @@ class PropertyPanel(QtWidgets.QDockWidget):
         self.main_widget.setLayout(self.layout)
         self.setWidget(self.main_widget)
 
-        # Stored context for re-selection
+        # Stored context
         self.layer_objects = {}
         self.gds_path = None
         self.lyp_path = None
         self.map_path = None
         self.filtered_layers = None
         self.selected_layers = None
-        self.ihp_map = {}  # (layer,datatype)->{edi_name,edi_types}
+        self.ihp_map = {}   # (layer,datatype)->{edi_name,edi_types}
+        self.options = {"match_klayout": False, "highlight_bondable": True}
 
         self.hide()
 
@@ -124,7 +127,7 @@ class PropertyPanel(QtWidgets.QDockWidget):
         self.layer_objects = layer_objects
         self.selected_layers = selected_layers
 
-        # ---- Layer properties
+        # Layer properties
         if selected_layers:
             for selected_layer in selected_layers:
                 layer_id = selected_layer.get("layer_id", 0)
@@ -151,7 +154,7 @@ class PropertyPanel(QtWidgets.QDockWidget):
         else:
             self.layer_tree.addTopLevelItem(QtWidgets.QTreeWidgetItem(["No layer selected", "Please select a layer"]))
 
-        # ---- Color summary
+        # Color summary
         color_counts = {}
         for selected_layer in selected_layers:
             frame_hex = selected_layer.get("frame-color", "#000000")
@@ -174,7 +177,7 @@ class PropertyPanel(QtWidgets.QDockWidget):
             row += 1
         self.color_table.resizeColumnsToContents()
 
-        # ---- Technology table (IHP map)
+        # Technology table
         self.tech_table.clearContents()
         self.tech_table.setRowCount(len(selected_layers))
         for r, layer in enumerate(selected_layers):
@@ -182,10 +185,10 @@ class PropertyPanel(QtWidgets.QDockWidget):
             dt = int(layer.get("datatype", 0))
             map_entry = self.ihp_map.get((lid, dt), None)
             edi_name = map_entry["edi_name"] if map_entry else "-"
-            edi_types = ", ".join(sorted(map_entry["edi_types"])) if map_entry else "-"
-            material_label, shape_rgb, line_rgb, tr = style_for_material(
-                edi_name, map_entry["edi_types"] if map_entry else set()
-            )
+            types = map_entry["edi_types"] if map_entry else set()
+            edi_types = ", ".join(sorted(types))
+            material_label, shape_rgb, line_rgb, tr = style_for_material(edi_name, types)
+            bondable = "yes" if _is_bondable(types) else "no"
 
             self.tech_table.setItem(r, 0, QtWidgets.QTableWidgetItem(str(lid)))
             self.tech_table.setItem(r, 1, QtWidgets.QTableWidgetItem(str(dt)))
@@ -193,9 +196,11 @@ class PropertyPanel(QtWidgets.QDockWidget):
             self.tech_table.setItem(r, 3, QtWidgets.QTableWidgetItem(edi_types))
 
             mat_item = QtWidgets.QTableWidgetItem(material_label)
-            c = QtGui.QColor.fromRgbF(*shape_rgb)  # show a swatch
+            c = QtGui.QColor.fromRgbF(*shape_rgb)
             mat_item.setBackground(QtGui.QBrush(c))
             self.tech_table.setItem(r, 4, mat_item)
+
+            self.tech_table.setItem(r, 5, QtWidgets.QTableWidgetItem(bondable))
 
         self.tech_table.resizeColumnsToContents()
         self.show()
@@ -206,21 +211,28 @@ class PropertyPanel(QtWidgets.QDockWidget):
             QtWidgets.QMessageBox.critical(None, "Error", "Cannot modify layers: Missing file paths or layer data.")
             return
 
-        dialog = LayerSelector(self.filtered_layers, self.selected_layers)
+        dialog = LayerSelector(self.filtered_layers, self.selected_layers, options=self.options)
         if dialog.exec_():
             selected_layers = dialog.selected_layers
+            options = dialog.options
             if not selected_layers:
                 QtWidgets.QMessageBox.warning(None, "Warning", "No layers selected.")
                 return
 
+            self.options = dict(options)
+
             # New/clean document for preview update
             doc = FreeCAD.ActiveDocument or FreeCAD.newDocument("GDSII_Document")
-
-            # Group changes into one undo step (und vermeidet zig Recomputes)
             try:
                 doc.openTransaction("Update Layer Preview")
             except Exception:
                 pass
+
+            # compute preview params from options
+            match_klayout = bool(options.get("match_klayout", False))
+            skip_fill = not match_klayout
+            min_area = 0.0 if match_klayout else 0.0004
+            decimate = 0.0 if match_klayout else 0.002
 
             # Reload shapes (fast 2D preview)
             layer_objects = {}
@@ -230,9 +242,9 @@ class PropertyPanel(QtWidgets.QDockWidget):
                 transform=None,
                 preview_2d=True,
                 compound_per_layer=True,
-                min_area_mm2=0.0004,
-                decimate_tol_mm=0.002,
-                skip_fill_datatype=True
+                min_area_mm2=min_area,
+                decimate_tol_mm=decimate,
+                skip_fill_datatype=skip_fill
             )
             if not entries:
                 QtWidgets.QMessageBox.warning(None, "Warning", "No shapes found for the selected layers.")
@@ -242,19 +254,37 @@ class PropertyPanel(QtWidgets.QDockWidget):
             for obj in list(doc.Objects):
                 doc.removeObject(obj.Name)
 
+            use_klayout_colors = match_klayout
+            highlight_bondable = bool(options.get("highlight_bondable", True))
+
             for layer in selected_layers:
                 lid = layer.get("layer_id", 0)
                 dt = layer.get("datatype", 0)
                 lname = layer.get("name", "Unnamed")
 
-                # Determine technology / material style
                 map_entry = self.ihp_map.get((lid, dt))
-                material_label, shape_rgb, line_rgb, tr = style_for_material(
-                    map_entry["edi_name"] if map_entry else "",
-                    map_entry["edi_types"] if map_entry else set()
-                )
+                types = map_entry["edi_types"] if map_entry else set()
 
-                # find the compound for this layer
+                # decide colors
+                if use_klayout_colors:
+                    shape_rgb = hex_to_rgb(layer.get("fill-color", "#FFFFFF"))
+                    line_rgb  = hex_to_rgb(layer.get("frame-color", "#000000"))
+                    tr = 0
+                    if highlight_bondable and _is_bondable(types):
+                        shape_rgb = (0.90, 0.75, 0.20)
+                        line_rgb  = (0.25, 0.20, 0.10)
+                        tr = 0
+                else:
+                    _, shape_rgb, line_rgb, tr = style_for_material(
+                        map_entry["edi_name"] if map_entry else "",
+                        types
+                    )
+                    if not highlight_bondable and _is_bondable(types):
+                        # neutralize highlight
+                        shape_rgb = hex_to_rgb(layer.get("fill-color", "#FFFFFF"))
+                        line_rgb  = hex_to_rgb(layer.get("frame-color", "#000000"))
+                        tr = 0
+
                 entry = next((e for e in entries if e["layer_id"] == lid and e["datatype"] == dt), None)
                 if not entry:
                     continue
@@ -282,27 +312,39 @@ class PropertyPanel(QtWidgets.QDockWidget):
 # ---------------------------
 class LayerSelector(QtWidgets.QDialog):
     """
-    Layer selection dialog with quick actions:
-      - 'Import all layers' checkbox
+    Layer selection dialog with quick actions and options:
+      - 'Import all layers'
+      - 'Match KLayout view (no filters, use LYP colors)'
+      - 'Highlight bondable layers (gold)'
       - Select All / Clear / Invert buttons
       - Ctrl+A shortcut to select all
     """
-    def __init__(self, layers, selected_layers=None, parent=None):
+    def __init__(self, layers, selected_layers=None, parent=None, options=None):
         super(LayerSelector, self).__init__(parent)
         self.setWindowTitle("Select Layers")
         self.layers = layers
         self.selected_layers = []
         self.selected_layers_prev = selected_layers or []
+        self.options = dict(options or {"match_klayout": False, "highlight_bondable": True})
 
         main = QtWidgets.QVBoxLayout(self)
 
-        # Quick options
+        # Global options
+        opt_top = QtWidgets.QVBoxLayout()
+        self.chk_match = QtWidgets.QCheckBox("Match KLayout view (no filters, use LYP colors)")
+        self.chk_match.setChecked(bool(self.options.get("match_klayout", False)))
+        self.chk_hl = QtWidgets.QCheckBox("Highlight bondable layers (gold)")
+        self.chk_hl.setChecked(bool(self.options.get("highlight_bondable", True)))
+        opt_top.addWidget(self.chk_match)
+        opt_top.addWidget(self.chk_hl)
+        main.addLayout(opt_top)
+
+        # Quick select row
         opt_row = QtWidgets.QHBoxLayout()
         self.chk_all = QtWidgets.QCheckBox("Import all layers")
         self.chk_all.toggled.connect(self._toggle_all_mode)
         opt_row.addWidget(self.chk_all)
         opt_row.addStretch(1)
-
         self.btn_sel_all = QtWidgets.QPushButton("Select All")
         self.btn_sel_all.clicked.connect(self._select_all)
         self.btn_clear = QtWidgets.QPushButton("Clear")
@@ -311,13 +353,11 @@ class LayerSelector(QtWidgets.QDialog):
         self.btn_invert.clicked.connect(self._invert)
         for b in (self.btn_sel_all, self.btn_clear, self.btn_invert):
             opt_row.addWidget(b)
-
         main.addLayout(opt_row)
 
-        # List
+        # Layer list
         self.layer_list = QtWidgets.QListWidget()
         self.layer_list.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
-        # Ctrl+A shortcut
         QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+A"), self.layer_list, activated=self._select_all)
 
         for layer in self.layers:
@@ -327,7 +367,6 @@ class LayerSelector(QtWidgets.QDialog):
             item = QtWidgets.QListWidgetItem(f"{layer_name} ({layer_id}/{datatype})")
             item.setData(QtCore.Qt.UserRole, layer)
             item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsEnabled)
-            # pre-select old choices
             item.setCheckState(QtCore.Qt.Checked if layer in self.selected_layers_prev else QtCore.Qt.Unchecked)
             self.layer_list.addItem(item)
         main.addWidget(self.layer_list)
@@ -348,7 +387,6 @@ class LayerSelector(QtWidgets.QDialog):
         self.btn_clear.setDisabled(enabled)
         self.btn_invert.setDisabled(enabled)
         if enabled:
-            # visually mark all as checked without disabling check states permanently
             for i in range(self.layer_list.count()):
                 self.layer_list.item(i).setCheckState(QtCore.Qt.Checked)
 
@@ -367,8 +405,11 @@ class LayerSelector(QtWidgets.QDialog):
 
     # --- accept ---
     def accept(self):
+        # options
+        self.options["match_klayout"] = self.chk_match.isChecked()
+        self.options["highlight_bondable"] = self.chk_hl.isChecked()
+
         if self.chk_all.isChecked():
-            # take all layers directly
             self.selected_layers = list(self.layers)
         else:
             self.selected_layers = []
@@ -396,20 +437,20 @@ def load_gds_layers():
     """
     Interactively pick GDS + LYP (+ optional MAP), select visible layers present
     in the GDS, create a fast preview document, and return:
-        (doc, layer_objects, selected_layers, unique_colors, gds_path, lyp_path)
+        (doc, layer_objects, selected_layers, unique_colors, gds_path, lyp_path, options)
     """
     try:
         gds_path, _ = QtWidgets.QFileDialog.getOpenFileName(None, "Select GDS File", "", "GDS Files (*.gds *.GDS)")
         if not gds_path or not os.path.exists(gds_path):
             QtWidgets.QMessageBox.critical(None, "Error", "GDS file not found or invalid path.")
-            return None, None, None, None, None, None
+            return None, None, None, None, None, None, None
 
         lyp_path, _ = QtWidgets.QFileDialog.getOpenFileName(None, "Select LYP File", "", "LYP Files (*.lyp *.LYP)")
         if not lyp_path or not os.path.exists(lyp_path):
             QtWidgets.QMessageBox.critical(None, "Error", "LYP file not found or invalid path.")
-            return None, None, None, None, None, None
+            return None, None, None, None, None, None, None
 
-        # Optional: choose MAP (technology). If cancelled, try default.
+        # Optional MAP (technology)
         map_path, _ = QtWidgets.QFileDialog.getOpenFileName(None, "Select IHP MAP (optional)", "", "MAP Files (*.map *.MAP)")
         if not map_path:
             map_path = _default_map_path()
@@ -419,20 +460,19 @@ def load_gds_layers():
         layers_with_colors = mymodule.parse_lyp(lyp_path)
         if not layers_with_colors:
             QtWidgets.QMessageBox.critical(None, "Error", "No layers found in the LYP file.")
-            return None, None, None, None, None, None
+            return None, None, None, None, None, None, None
 
         layers, unique_colors = layers_with_colors
         gds_layers = mymodule.get_gds_layer(gds_path)
         if not gds_layers:
             QtWidgets.QMessageBox.warning(None, "Warning", "No layers found in the GDS file.")
-            return None, None, None, None, None, None
+            return None, None, None, None, None, None, None
 
         filtered_layers = [layer for layer in layers if (layer.get("layer_id", 0), layer.get("datatype", 0)) in gds_layers]
         if not filtered_layers:
             QtWidgets.QMessageBox.warning(None, "Warning", "No matching layers found between LYP and GDS files.")
-            return None, None, None, None, None, None
+            return None, None, None, None, None, None, None
 
-        # Property panel and preview doc
         property_panel = PropertyPanel(FreeCADGui.getMainWindow())
         property_panel.set_map(ihp_map, map_path)
         FreeCADGui.getMainWindow().addDockWidget(QtCore.Qt.RightDockWidgetArea, property_panel)
@@ -441,13 +481,24 @@ def load_gds_layers():
         property_panel.filtered_layers = filtered_layers
         property_panel.update_properties([], unique_colors, {})
 
-        # Layer selection (now with 'Import all layers')
-        dialog = LayerSelector(filtered_layers)
+        dialog = LayerSelector(filtered_layers, options=property_panel.options)
         if dialog.exec_():
             selected_layers = dialog.selected_layers
+            options = dialog.options
             if not selected_layers:
                 QtWidgets.QMessageBox.warning(None, "Warning", "No layers selected.")
-                return None, None, None, None, None, None
+                return None, None, None, None, None, None, None
+
+            # save options to panel (needed for modify action)
+            property_panel.options = dict(options)
+
+            # params derived from options
+            match_klayout = bool(options.get("match_klayout", False))
+            skip_fill = not match_klayout
+            min_area = 0.0 if match_klayout else 0.0004
+            decimate = 0.0 if match_klayout else 0.002
+            use_klayout_colors = match_klayout
+            highlight_bondable = bool(options.get("highlight_bondable", True))
 
             # Fast preview document (2D wires + compounds)
             doc = FreeCAD.newDocument("GDSII_Document")
@@ -462,13 +513,13 @@ def load_gds_layers():
                 transform=None,
                 preview_2d=True,
                 compound_per_layer=True,
-                min_area_mm2=0.0004,   # ~20 µm × 20 µm
-                decimate_tol_mm=0.002, # ~2 µm vertex merge
-                skip_fill_datatype=True
+                min_area_mm2=min_area,
+                decimate_tol_mm=decimate,
+                skip_fill_datatype=skip_fill
             )
             if not entries:
                 QtWidgets.QMessageBox.warning(None, "Warning", "No shapes found for the selected layers.")
-                return None, None, None, None, None, None
+                return None, None, None, None, None, None, None
 
             layer_objects = {}
             for layer in selected_layers:
@@ -476,12 +527,28 @@ def load_gds_layers():
                 dt = layer.get("datatype", 0)
                 lname = layer.get("name", "Unnamed")
 
-                # Material style from technology mapping
                 map_entry = ihp_map.get((lid, dt))
-                material_label, shape_rgb, line_rgb, tr = style_for_material(
-                    map_entry["edi_name"] if map_entry else "",
-                    map_entry["edi_types"] if map_entry else set()
-                )
+                types = map_entry["edi_types"] if map_entry else set()
+
+                # decide colors
+                if use_klayout_colors:
+                    shape_rgb = hex_to_rgb(layer.get("fill-color", "#FFFFFF"))
+                    line_rgb  = hex_to_rgb(layer.get("frame-color", "#000000"))
+                    tr = 0
+                    if highlight_bondable and _is_bondable(types):
+                        shape_rgb = (0.90, 0.75, 0.20)
+                        line_rgb  = (0.25, 0.20, 0.10)
+                        tr = 0
+                else:
+                    _, shape_rgb, line_rgb, tr = style_for_material(
+                        map_entry["edi_name"] if map_entry else "",
+                        types
+                    )
+                    if not highlight_bondable and _is_bondable(types):
+                        # neutralize highlight to LYP look for this layer
+                        shape_rgb = hex_to_rgb(layer.get("fill-color", "#FFFFFF"))
+                        line_rgb  = hex_to_rgb(layer.get("frame-color", "#000000"))
+                        tr = 0
 
                 entry = next((e for e in entries if e["layer_id"] == lid and e["datatype"] == dt), None)
                 if not entry:
@@ -504,16 +571,17 @@ def load_gds_layers():
             property_panel.update_properties(selected_layers, unique_colors, layer_objects)
             FreeCADGui.activeDocument().activeView().viewIsometric()
             FreeCADGui.SendMsgToActiveView("ViewFit")
-            return doc, layer_objects, selected_layers, unique_colors, gds_path, lyp_path
+            # NOTE: return options as 7th element
+            return doc, layer_objects, selected_layers, unique_colors, gds_path, lyp_path, options
 
         else:
             QtWidgets.QMessageBox.information(None, "Cancelled", "Layer selection cancelled.")
-            return None, None, None, None, None, None
+            return None, None, None, None, None, None, None
 
     except Exception as e:
         FreeCAD.Console.PrintError(f"An error in GDSCommand: {str(e)}\n")
         QtWidgets.QMessageBox.critical(None, "Error", f"Failed to process files: {str(e)}")
-        return None, None, None, None, None, None
+        return None, None, None, None, None, None, None
 
 
 # --------------------------
@@ -523,14 +591,14 @@ class GDSCommand:
     def GetResources(self):
         return {
             'MenuText': 'Load GDSII',
-            'ToolTip': 'Load a GDSII file fast, show technology info and apply material styles',
+            'ToolTip': 'Load a GDSII file fast, show technology info; KLayout-view option included',
             'Pixmap': ''
         }
 
     def Activated(self):
-        doc, layer_objects, selected_layers, unique_colors, _, _ = load_gds_layers()
-        if doc and layer_objects:
-            QtWidgets.QMessageBox.information(None, "Success", "GDSII file loaded with fast preview & material highlighting.")
+        out = load_gds_layers()
+        if out and out[0]:
+            QtWidgets.QMessageBox.information(None, "Success", "GDSII file loaded (preview).")
 
     def IsActive(self):
         return True
