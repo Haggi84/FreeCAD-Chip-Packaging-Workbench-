@@ -216,7 +216,7 @@ class PropertyPanel(QtWidgets.QDockWidget):
             # New/clean document for preview update
             doc = FreeCAD.ActiveDocument or FreeCAD.newDocument("GDSII_Document")
 
-            # Group changes into one undo step (and avoid multiple recomputes in some builds)
+            # Group changes into one undo step (und vermeidet zig Recomputes)
             try:
                 doc.openTransaction("Update Layer Preview")
             except Exception:
@@ -281,6 +281,12 @@ class PropertyPanel(QtWidgets.QDockWidget):
 # Layer selection dialog
 # ---------------------------
 class LayerSelector(QtWidgets.QDialog):
+    """
+    Layer selection dialog with quick actions:
+      - 'Import all layers' checkbox
+      - Select All / Clear / Invert buttons
+      - Ctrl+A shortcut to select all
+    """
     def __init__(self, layers, selected_layers=None, parent=None):
         super(LayerSelector, self).__init__(parent)
         self.setWindowTitle("Select Layers")
@@ -288,33 +294,88 @@ class LayerSelector(QtWidgets.QDialog):
         self.selected_layers = []
         self.selected_layers_prev = selected_layers or []
 
-        layout = QtWidgets.QVBoxLayout()
+        main = QtWidgets.QVBoxLayout(self)
 
+        # Quick options
+        opt_row = QtWidgets.QHBoxLayout()
+        self.chk_all = QtWidgets.QCheckBox("Import all layers")
+        self.chk_all.toggled.connect(self._toggle_all_mode)
+        opt_row.addWidget(self.chk_all)
+        opt_row.addStretch(1)
+
+        self.btn_sel_all = QtWidgets.QPushButton("Select All")
+        self.btn_sel_all.clicked.connect(self._select_all)
+        self.btn_clear = QtWidgets.QPushButton("Clear")
+        self.btn_clear.clicked.connect(self._clear_all)
+        self.btn_invert = QtWidgets.QPushButton("Invert")
+        self.btn_invert.clicked.connect(self._invert)
+        for b in (self.btn_sel_all, self.btn_clear, self.btn_invert):
+            opt_row.addWidget(b)
+
+        main.addLayout(opt_row)
+
+        # List
         self.layer_list = QtWidgets.QListWidget()
+        self.layer_list.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        # Ctrl+A shortcut
+        QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+A"), self.layer_list, activated=self._select_all)
+
         for layer in self.layers:
             layer_name = layer.get("name", "Unknown Layer")
             layer_id = layer.get("layer_id", 0)
             datatype = layer.get("datatype", 0)
             item = QtWidgets.QListWidgetItem(f"{layer_name} ({layer_id}/{datatype})")
             item.setData(QtCore.Qt.UserRole, layer)
-            item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
+            item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsEnabled)
+            # pre-select old choices
             item.setCheckState(QtCore.Qt.Checked if layer in self.selected_layers_prev else QtCore.Qt.Unchecked)
             self.layer_list.addItem(item)
-        layout.addWidget(self.layer_list)
+        main.addWidget(self.layer_list)
 
+        # Buttons
         button_box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
+        main.addWidget(button_box)
 
-        self.setLayout(layout)
+        self.setLayout(main)
+        self._toggle_all_mode(False)
 
-    def accept(self):
-        self.selected_layers = []
+    # --- quick actions ---
+    def _toggle_all_mode(self, enabled):
+        self.layer_list.setDisabled(enabled)
+        self.btn_sel_all.setDisabled(enabled)
+        self.btn_clear.setDisabled(enabled)
+        self.btn_invert.setDisabled(enabled)
+        if enabled:
+            # visually mark all as checked without disabling check states permanently
+            for i in range(self.layer_list.count()):
+                self.layer_list.item(i).setCheckState(QtCore.Qt.Checked)
+
+    def _select_all(self):
         for i in range(self.layer_list.count()):
-            item = self.layer_list.item(i)
-            if item.checkState() == QtCore.Qt.Checked:
-                self.selected_layers.append(item.data(QtCore.Qt.UserRole))
+            self.layer_list.item(i).setCheckState(QtCore.Qt.Checked)
+
+    def _clear_all(self):
+        for i in range(self.layer_list.count()):
+            self.layer_list.item(i).setCheckState(QtCore.Qt.Unchecked)
+
+    def _invert(self):
+        for i in range(self.layer_list.count()):
+            it = self.layer_list.item(i)
+            it.setCheckState(QtCore.Qt.Unchecked if it.checkState() == QtCore.Qt.Checked else QtCore.Qt.Checked)
+
+    # --- accept ---
+    def accept(self):
+        if self.chk_all.isChecked():
+            # take all layers directly
+            self.selected_layers = list(self.layers)
+        else:
+            self.selected_layers = []
+            for i in range(self.layer_list.count()):
+                item = self.layer_list.item(i)
+                if item.checkState() == QtCore.Qt.Checked:
+                    self.selected_layers.append(item.data(QtCore.Qt.UserRole))
         if not self.selected_layers:
             QtWidgets.QMessageBox.warning(self, "Warning", "No layers selected.")
             return
@@ -380,7 +441,7 @@ def load_gds_layers():
         property_panel.filtered_layers = filtered_layers
         property_panel.update_properties([], unique_colors, {})
 
-        # Layer selection
+        # Layer selection (now with 'Import all layers')
         dialog = LayerSelector(filtered_layers)
         if dialog.exec_():
             selected_layers = dialog.selected_layers
