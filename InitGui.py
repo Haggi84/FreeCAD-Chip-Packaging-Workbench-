@@ -8,6 +8,7 @@ try:
     import LeadframeCommand
     import HousingCommand
     import LayeronLeadframe
+    import WirebondCommand
     FreeCAD.Console.PrintMessage("✔ Commands loaded successfully\n")
 except Exception as e:
     FreeCAD.Console.PrintError(f"❌ Failed to load commands: {str(e)}\n")
@@ -15,11 +16,11 @@ except Exception as e:
 class MyWorkbench(FreeCADGui.Workbench):
     MenuText = "GDSII Workbench"
     ToolTip = "FreeCAD GDSII Workbench"
-    Icon = "Std_New"  # Optional: Add path to your icon
+    Icon = "/home/sg26/.local/share/FreeCAD/Mod/DI-PASSIONATE-FreeCAD/resources/icons/my_icon.svg"  # Optional: Add path to your icon
 
     def Initialize(self):
         try:
-            self.appendToolbar("GDSII Tools", ["GDSCommand", "LeadframeCommand", "HousingCommand", "LayeronLeadframe"])
+            self.appendToolbar("GDSII Tools", ["GDSCommand", "LeadframeCommand", "HousingCommand", "LayeronLeadframe", "WirebondCommand"])
             FreeCAD.Console.PrintMessage("✔ Toolbar initialized\n")
         except Exception as e:
             FreeCAD.Console.PrintError(f"❌ Toolbar initialization failed: {str(e)}\n")
