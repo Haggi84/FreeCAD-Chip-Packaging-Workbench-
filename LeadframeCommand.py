@@ -1,183 +1,6 @@
-import FreeCADGui
-from PySide2 import QtWidgets, QtCore
-import FreeCAD, Part, Sketcher
+from PySide2 import QtWidgets
+import FreeCAD, Part, Sketcher, FreeCADGui
 from FreeCAD import Base
-
-class LeadframeConfigurator(QtWidgets.QDialog):
-    def __init__(self, parent=None):
-        super(LeadframeConfigurator, self).__init__(parent)
-        self.setWindowTitle("Leadframe Configuration")
-        self.setMinimumWidth(400)
-
-        # Layout
-        layout = QtWidgets.QFormLayout()
-
-        # Leadframe Type Dropdown
-        self.frame_type = QtWidgets.QComboBox()
-        self.frame_type.addItems(["QFN (Quad Flat No-lead)", "QFP (Quad Flat Package)", "BGA (Ball Grid Array)"])
-        layout.addRow("Leadframe Type:", self.frame_type)
-
-        # Frame Dimensions
-        self.frame_length = QtWidgets.QDoubleSpinBox()
-        self.frame_length.setRange(1.0, 1000.0)
-        self.frame_length.setSingleStep(0.5)
-        self.frame_length.setSuffix(" mm")
-        self.frame_length.setValue(5.0)
-        layout.addRow("Length:", self.frame_length)
-
-        self.frame_width = QtWidgets.QDoubleSpinBox()
-        self.frame_width.setRange(1.0, 1000.0)
-        self.frame_width.setSingleStep(0.5)
-        self.frame_width.setSuffix(" mm")
-        self.frame_width.setValue(5.0)
-        layout.addRow("Width:", self.frame_width)
-
-        self.frame_thickness = QtWidgets.QDoubleSpinBox()
-        self.frame_thickness.setRange(0.05, 5.0)
-        self.frame_thickness.setSingleStep(0.05)
-        self.frame_thickness.setSuffix(" mm")
-        self.frame_thickness.setValue(0.2)
-        layout.addRow("Thickness:", self.frame_thickness)
-
-        # (QFN/QFP) Parameters
-        self.qfn_qfp = QtWidgets.QWidget()
-        qfn_qfp_layout = QtWidgets.QFormLayout()
-        
-        # Lead Counts
-        # Left side
-        self.left_lead_count = QtWidgets.QSpinBox()
-        self.left_lead_count.setRange(0, 80)
-        self.left_lead_count.setValue(4)
-        qfn_qfp_layout.addRow("Left Lead Count:", self.left_lead_count)
-
-        # Right side
-        self.right_lead_count = QtWidgets.QSpinBox()
-        self.right_lead_count.setRange(0, 80)
-        self.right_lead_count.setValue(4)
-        qfn_qfp_layout.addRow("Right Lead Count:", self.right_lead_count)
-
-        # Top side
-        self.top_lead_count = QtWidgets.QSpinBox()
-        self.top_lead_count.setRange(0, 80)
-        self.top_lead_count.setValue(4)
-        qfn_qfp_layout.addRow("Top Lead Count:", self.top_lead_count)
-
-        # Bottom side
-        self.bottom_lead_count = QtWidgets.QSpinBox()
-        self.bottom_lead_count.setRange(0, 80)
-        self.bottom_lead_count.setValue(4)
-        qfn_qfp_layout.addRow("Bottom Lead Count:", self.bottom_lead_count)
-
-        # Lead Parameters (QFN/QFP)
-        self.lead_width = QtWidgets.QDoubleSpinBox()
-        self.lead_width.setRange(0.1, 5.0)
-        self.lead_width.setSingleStep(0.1)
-        self.lead_width.setSuffix(" mm")
-        self.lead_width.setValue(0.4)
-        qfn_qfp_layout.addRow("Lead Width:", self.lead_width)
-
-        self.lead_pitch = QtWidgets.QDoubleSpinBox()
-        self.lead_pitch.setRange(0.1, 10.0)
-        self.lead_pitch.setSingleStep(0.1)
-        self.lead_pitch.setSuffix(" mm")
-        self.lead_pitch.setValue(1.0)
-        qfn_qfp_layout.addRow("Lead Pitch:", self.lead_pitch)
-
-        self.lead_length = QtWidgets.QDoubleSpinBox()
-        self.lead_length.setRange(0.5, 10.0)
-        self.lead_length.setSingleStep(0.5)
-        self.lead_length.setSuffix(" mm")
-        self.lead_length.setValue(1.0)
-        qfn_qfp_layout.addRow("Lead Length:", self.lead_length)
-
-        # QGN Pad Thickness
-        self.qfn_pad_thickness = QtWidgets.QDoubleSpinBox()
-        self.qfn_pad_thickness.setRange(0.01, 2.0)
-        self.qfn_pad_thickness.setSingleStep(0.01)
-        self.qfn_pad_thickness.setSuffix(" mm")
-        self.qfn_pad_thickness.setValue(0.05)
-        qfn_qfp_layout.addRow("QFN Pad Thickness:", self.qfn_pad_thickness)
-
-        self.qfn_qfp.setLayout(qfn_qfp_layout)
-        layout.addRow(self.qfn_qfp)
-
-        # BGA Parameters
-        self.bga = QtWidgets.QWidget()
-        bga_layout = QtWidgets.QFormLayout()
-
-        self.bga_ball_diameter = QtWidgets.QDoubleSpinBox()
-        self.bga_ball_diameter.setRange(0.1, 2.0)
-        self.bga_ball_diameter.setSingleStep(0.1)
-        self.bga_ball_diameter.setSuffix(" mm")
-        self.bga_ball_diameter.setValue(0.5)
-        bga_layout.addRow("BGA Ball Diameter:", self.bga_ball_diameter)
-
-        self.bga_ball_pitch = QtWidgets.QDoubleSpinBox()
-        self.bga_ball_pitch.setRange(0.1, 5.0)
-        self.bga_ball_pitch.setSingleStep(0.1)
-        self.bga_ball_pitch.setSuffix(" mm")
-        self.bga_ball_pitch.setValue(1.0)
-        bga_layout.addRow("BGA Ball Pitch:", self.bga_ball_pitch)
-
-        self.bga.setLayout(bga_layout)
-        layout.addRow(self.bga)
-
-        # Material Selection
-        self.material_combo = QtWidgets.QComboBox()
-        self.material_combo.addItems(["Copper", "Alloy 42", "Silver"])
-        layout.addRow("Material:", self.material_combo)
-
-        # OK/Cancel Buttons
-        button_box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
-        button_box.accepted.connect(self.accept)
-        button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
-
-        self.setLayout(layout)
-
-        # Connect frame type change to update visibility
-        self.frame_type.currentIndexChanged.connect(self.update_parameter_visibility)
-
-        # Initial visibility setup
-        self.update_parameter_visibility()
-
-    def update_parameter_visibility(self):
-        """
-        Update the visibility of parameters based on the selected frame type.
-        """
-        frame_type = self.frame_type.currentText()
-        self.qfn_qfp.setVisible(frame_type in ["QFN (Quad Flat No-lead)", "QFP (Quad Flat Package)"])
-        self.bga.setVisible(frame_type == "BGA (Ball Grid Array)")
-
-    def get_config(self):
-        """
-        Return only relevant configuration parameters based on the selected frame type.
-        """
-        frame_type = self.frame_type.currentText()
-        config = {
-            "frame_type": frame_type,
-            "frame_length": self.frame_length.value(),
-            "frame_width": self.frame_width.value(),
-            "frame_thickness": self.frame_thickness.value(),
-            "material": self.material_combo.currentText()
-        }
-        if frame_type in ["QFN (Quad Flat No-lead)", "QFP (Quad Flat Package)"]:
-            config.update({
-                "left_lead_count": self.left_lead_count.value(),
-                "right_lead_count": self.right_lead_count.value(),
-                "top_lead_count": self.top_lead_count.value(),
-                "bottom_lead_count": self.bottom_lead_count.value(),
-                "lead_width": self.lead_width.value(),
-                "lead_pitch": self.lead_pitch.value(),
-                "lead_length": self.lead_length.value(),
-                "qfn_pad_thickness": self.qfn_pad_thickness.value()
-            })
-        elif frame_type == "BGA (Ball Grid Array)":
-            config.update({
-                "bga_ball_diameter": self.bga_ball_diameter.value(),
-                "bga_ball_pitch": self.bga_ball_pitch.value()
-            })
-        return config
 
 def create_leadframe(config, doc=None, gds_objects=None):
     """Create a leadframe based on the provided configuration.
@@ -185,11 +8,11 @@ def create_leadframe(config, doc=None, gds_objects=None):
     Args:
         config (dict): A dictionary containing leadframe parameters.
     """
+    doc = FreeCAD.activeDocument()
     if not doc:
         doc = FreeCAD.newDocument("Leadframe")
 
     frame_type = config["frame_type"]
-    FreeCAD.Console.PrintMessage(f"Creating leadframe of type: {frame_type}\n")
     frame_length = config["frame_length"]
     frame_width = config["frame_width"]
     frame_thickness = config["frame_thickness"]
@@ -392,6 +215,8 @@ def create_leadframe(config, doc=None, gds_objects=None):
     return doc
 
 def configure_leadframe():
+    from All_Class import LeadframeConfigurator
+    
     """
     Open the leadframe configuration dialog and create a leadframe based on user input.
 
@@ -402,12 +227,13 @@ def configure_leadframe():
         return dialog.get_config()
     return None
 
+
 class LeadframeCommand:
     def GetResources(self):
         return {
-            'MenuText': 'Leadframe Configurator',
-            'ToolTip': 'Configure and generate a leadframe geometry',
-            'Pixmap': ''
+            "MenuText": "Leadframe Configurator",
+            "ToolTip": "Configure and generate a leadframe geometry",
+            "Pixmap": "/home/sg26/.local/share/FreeCAD/Mod/DI-PASSIONATE-FreeCAD/resources/icons/Leadframe Configurator.png"
         }
 
     def Activated(self):
