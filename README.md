@@ -35,28 +35,43 @@ It is suggested to use VSCode. You can download it from the following page:
 
 https://code.visualstudio.com/
 
-Once you cloned the repository in the ```../FreeCAD/Mod/``` folder, you have to set up the project by opening the project and add a new folder ```.vscode``` here:
+Once you cloned the repository in the ```../FreeCAD/Mod/``` folder, you have to set up the project:
 
-<img width="300" height="115" alt="grafik" src="https://github.com/user-attachments/assets/4ddb10b0-dc88-4461-9dc9-37e0b32c6d1f" />
+1. Open the project in VSCode.
+2. Create a folder named ```.vscode``` in the project root.
 
-create a .json file with the name:
+   <img width="300" height="115" alt="grafik" src="https://github.com/user-attachments/assets/4ddb10b0-dc88-4461-9dc9-37e0b32c6d1f" />
 
-**settings.json** 
+3. Inside ```.vscode```, create a file named **settings.json**.
+4. Add the configuration appropriate for your system and save the file.
 
-Insert this code (for Windows systems; you might adjust if you're using a Linux based system) and save the file.
+**Windows example**
 
-```
+```json
 {
     "python.analysis.extraPaths": [
         "C:/Program Files/FreeCAD 1.0/bin",
-        "C:/users/%USER%/appdata/roaming/python/python311/site-packages",
+        "C:/Users/%USER%/AppData/Roaming/Python/Python311/site-packages",
         "C:/Program Files/FreeCAD 1.0/bin/Lib/site-packages"
     ]
 }
 ```
 
-https://lucid.app/lucidspark/ebb96ac9-c6d3-408a-9ead-51c1aa83efa1/edit?invitationId=inv_3ef9b6cf-fcc6-4717-8b34-9a1598ceaaf7
-_**note:** you have to replace ```%USER%``` with the corresponding directory of your system_
+Replace `%USER%` with your Windows user name and change `1.0` to the FreeCAD version you installed (e.g., `0.21`).
+
+**Linux example**
+
+```json
+{
+    "python.analysis.extraPaths": [
+        "/usr/lib/freecad/bin",
+        "/home/<username>/.local/lib/python3.11/site-packages",
+        "/usr/lib/freecad/lib/site-packages"
+    ]
+}
+```
+
+Replace `<username>` with your Linux user name and adjust the FreeCAD paths and version numbers to match your installation.
 
 
 
