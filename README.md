@@ -25,9 +25,13 @@ A possible result for the software could look like some configuration module tha
 
 ## Setup
 
-To run the AddIn just clone the repository via the command:
+To run the AddIn, clone the repository into the `../FreeCAD/Mod/` folder:
 
-```git clone %PATHTOREPOSITORY%``` in the ```../FreeCAD/Mod/``` folder
+```bash
+git clone <repository-url>
+```
+
+After cloning, restart FreeCAD and verify that the AddIn appears under the Mod directory.
 
 ## Developer settings
 
