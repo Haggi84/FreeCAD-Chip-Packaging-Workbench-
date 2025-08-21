@@ -231,6 +231,8 @@ class LayeronLeadframe:
                 QtWidgets.QMessageBox.warning(None, "Warning", "No shapes found for the selected layers (final pass).")
                 return
 
+            entry_map = {(e["layer_id"], e["datatype"]): e for e in entries}
+
             layer_objects = {}
             for layer in selected_layers:
                 lid = layer.get("layer_id", 0)
@@ -258,7 +260,7 @@ class LayeronLeadframe:
                         line_rgb  = hex_to_rgb(layer.get("frame-color", "#000000"))
                         tr = 0
 
-                entry = next((e for e in entries if e["layer_id"] == lid and e["datatype"] == dt), None)
+                entry = entry_map.get((lid, dt))
                 if not entry:
                     continue
 

@@ -250,6 +250,9 @@ class PropertyPanel(QtWidgets.QDockWidget):
                 QtWidgets.QMessageBox.warning(None, "Warning", "No shapes found for the selected layers.")
                 return
 
+            # build quick lookup to avoid repeated linear searches
+            entry_map = {(e["layer_id"], e["datatype"]): e for e in entries}
+
             # Clear existing objects
             for obj in list(doc.Objects):
                 doc.removeObject(obj.Name)
@@ -285,7 +288,7 @@ class PropertyPanel(QtWidgets.QDockWidget):
                         line_rgb  = hex_to_rgb(layer.get("frame-color", "#000000"))
                         tr = 0
 
-                entry = next((e for e in entries if e["layer_id"] == lid and e["datatype"] == dt), None)
+                entry = entry_map.get((lid, dt))
                 if not entry:
                     continue
                 obj = doc.addObject("Part::Feature", f"Layer_{lname}_{lid}_{dt}")
@@ -521,6 +524,8 @@ def load_gds_layers():
                 QtWidgets.QMessageBox.warning(None, "Warning", "No shapes found for the selected layers.")
                 return None, None, None, None, None, None, None
 
+            entry_map = {(e["layer_id"], e["datatype"]): e for e in entries}
+
             layer_objects = {}
             for layer in selected_layers:
                 lid = layer.get("layer_id", 0)
@@ -550,7 +555,7 @@ def load_gds_layers():
                         line_rgb  = hex_to_rgb(layer.get("frame-color", "#000000"))
                         tr = 0
 
-                entry = next((e for e in entries if e["layer_id"] == lid and e["datatype"] == dt), None)
+                entry = entry_map.get((lid, dt))
                 if not entry:
                     continue
 
