@@ -465,7 +465,6 @@ def bbox_from_entries(entries):
         ymax = max(ymax, bb.YMax)
     return xmin, ymin, xmax, ymax
 
-
 # -----------------------------------
 # Wire Bonding Configuration Support
 # ...................................
