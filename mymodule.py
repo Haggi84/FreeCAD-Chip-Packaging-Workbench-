@@ -6,6 +6,68 @@ import FreeCAD
 from FreeCAD import Part
 
 
+# --- add this helper near the top of mymodule.py (after imports) ---
+
+def _polygons_by_spec_compat(cell):
+    """
+    Return dict {(layer, datatype): [ndarray Nx2, ...]} for a gdstk Cell.
+    Tries multiple gdstk API signatures; falls back to manual flatten + paths.
+    """
+    # 1) Newer gdstk: keyword args by_spec/include_paths
+    try:
+        res = cell.get_polygons(by_spec=True, include_paths=True)
+        if isinstance(res, dict):
+            return { (int(k[0]), int(k[1])): v for k, v in res.items() }
+    except TypeError:
+        pass
+    except Exception:
+        pass
+
+    # 2) Older gdstk: positional args (by_spec, depth, include_paths)
+    try:
+        res = cell.get_polygons(True, None, True)
+        if isinstance(res, dict):
+            return { (int(k[0]), int(k[1])): v for k, v in res.items() }
+    except TypeError:
+        pass
+    except Exception:
+        pass
+
+    # 3) Oldest fallback: copy, flatten, then harvest polygons + paths ourselves
+    try:
+        tmp = cell.copy(name=f"{cell.name}_tmp_flat")
+    except Exception:
+        tmp = cell
+    try:
+        tmp.flatten()  # apply SREF/AREF transforms
+    except Exception:
+        pass
+
+    out = {}
+    # polygons
+    for p in getattr(tmp, "polygons", []) or []:
+        try:
+            key = (int(getattr(p, "layer", 0)), int(getattr(p, "datatype", 0)))
+            out.setdefault(key, []).append(p.points)
+        except Exception:
+            continue
+    # paths -> polygons
+    for path in getattr(tmp, "paths", []) or []:
+        try:
+            arrs = path.to_polygons()
+        except Exception:
+            arrs = []
+        try:
+            lyr = int(getattr(path, "layer", 0))
+            dt  = int(getattr(path, "datatype", 0))
+        except Exception:
+            lyr, dt = 0, 0
+        for arr in arrs:
+            out.setdefault((lyr, dt), []).append(arr)
+
+    return out
+
+
 # -------------------------------
 # KLayout LYP parsing (colors)
 # -------------------------------
@@ -227,19 +289,25 @@ def build_stack_mm(selected_layers, ihp_map, ild_um: float = ILD_SPACING_UM):
 # ------------------------------------------------
 # GDS inspection & geometry creation helpers
 # ------------------------------------------------
+# --- replace your get_gds_layer(...) with this ---
+
 def get_gds_layer(gds_path):
     """
-    Analyze GDS and return set of (layer_id, datatype) that contain polygons.
+    Analyze GDS and return set of (layer_id, datatype) that contain geometry.
+    Uses top-level flattening and includes PATHs; works across gdstk versions.
     """
     try:
         lib = gdstk.read_gds(gds_path)
-        layer_set = set()
-        for cell in lib.cells:
-            for polygon in cell.polygons:
-                layer_set.add((polygon.layer, polygon.datatype))
-        return layer_set
+        specs = set()
+        tops = lib.top_level() or list(lib.cells)
+        for top in tops:
+            poly_dict = _polygons_by_spec_compat(top)
+            for (layer, datatype), polys in (poly_dict or {}).items():
+                if polys:
+                    specs.add((int(layer), int(datatype)))
+        return specs
     except Exception as e:
-        FreeCAD.Console.PrintError(f"Error reading GDSII file {gds_path}: {str(e)}\n")
+        FreeCAD.Console.PrintError(f"Error reading GDSII file {gds_path}: {e}\n")
         return set()
 
 
@@ -301,6 +369,8 @@ def _simplify_poly(points, eps):
     return out if len(out) >= 3 else points
 
 
+# --- replace your load_gds_fast(...) with this ---
+
 def load_gds_fast(
     gds_path,
     selected_layers,
@@ -311,89 +381,80 @@ def load_gds_fast(
     min_area_mm2=0.0,
     decimate_tol_mm=0.0,
     skip_fill_datatype=True,
-    stack_mm=None  # NEW: dict (layer,dt)-> {'t_mm','z0_mm'} for 3D stacking
+    stack_mm=None  # (layer,dt)->{'t_mm','z0_mm'}
 ):
     """
-    Faster GDS loader:
-    - builds ONE compound Part shape per selected (layer,datatype)
-    - optional 2D preview (wires only) or 3D with per-layer thickness/offset
-    - filters tiny polygons and optional FILL (datatype 22) by default
-
-    Returns: list of dicts (one entry per selected layer/DT), each:
-        {
-          'shape': Part.Shape,
-          'layer_id': int,
-          'datatype': int,
-          'frame_hex': '#rrggbb',
-          'fill_hex':  '#rrggbb',
-        }
+    Versions-sicherer GDS-Loader mit korrekter Platzierung:
+    - Flatten aus Top-Cells (SREF/AREF angewendet)
+    - PATHS werden in Polygone umgewandelt
+    - Optional 2D (Wires) oder 3D-Extrusion mit Z-Stack
     """
     try:
         lib = gdstk.read_gds(gds_path)
         if transform is None:
             transform = {}
 
-        # base scale: mm per user unit
+        # mm per user unit
         s = transform.get("scale", None)
         if s is None:
             s = (lib.unit * 1000.0) if hasattr(lib, "unit") and lib.unit else 0.001
 
-        rot_deg = float(transform.get("rot_deg", 0.0))
+        rot_deg  = float(transform.get("rot_deg", 0.0))
         mirror_y = bool(transform.get("mirror_y", False))
-        tx = float(transform.get("tx", 0.0))
-        ty = float(transform.get("ty", 0.0))
+        tx       = float(transform.get("tx", 0.0))
+        ty       = float(transform.get("ty", 0.0))
 
-        # default thickness if no stack provided (thin preview)
         default_t_mm = float(transform.get("z_thickness", 0.03)) if not preview_2d else 0.0
 
-        wanted = {(l.get("layer_id", 0), l.get("datatype", 0)) for l in selected_layers}
+        wanted   = {(l.get("layer_id", 0), l.get("datatype", 0)) for l in selected_layers}
         by_layer = {key: [] for key in wanted}
 
-        # collect wires/faces per layer
-        for cell in lib.cells:
-            for poly in cell.polygons:
-                key = (poly.layer, poly.datatype)
+        tops = lib.top_level() or list(lib.cells)
+        for top in tops:
+            poly_dict = _polygons_by_spec_compat(top)  # <-- robust per-version API
+            if not poly_dict:
+                continue
+
+            for (layer_id, datatype), poly_list in poly_dict.items():
+                key = (int(layer_id), int(datatype))
                 if key not in wanted:
                     continue
-                if skip_fill_datatype and poly.datatype == 22:
-                    # many PDKs: datatype 22 == FILL
+                if skip_fill_datatype and key[1] == 22:
                     continue
 
-                pts2d = [_transform_point(p, s, rot_deg, mirror_y, tx, ty) for p in poly.points]
-                if decimate_tol_mm > 0.0:
-                    pts2d = _simplify_poly(pts2d, decimate_tol_mm)
-                if len(pts2d) < 3:
-                    continue
-                if min_area_mm2 > 0.0 and _polygon_area_mm2(pts2d) < min_area_mm2:
-                    continue
-
-                # build wire/face
-                wire = Part.makePolygon([(x, y, 0.0) for (x, y) in (pts2d + [pts2d[0]])])
-                if preview_2d:
-                    by_layer[key].append(wire)
-                else:
-                    try:
-                        face = Part.Face(wire)
-                    except Exception:
+                for arr in poly_list:
+                    pts2d = [_transform_point((float(x), float(y)), s, rot_deg, mirror_y, tx, ty)
+                             for (x, y) in arr.tolist()]
+                    if decimate_tol_mm > 0.0:
+                        pts2d = _simplify_poly(pts2d, decimate_tol_mm)
+                    if len(pts2d) < 3:
                         continue
-                    # pick thickness & offset for this layer
-                    if stack_mm and key in stack_mm:
-                        t_mm = float(stack_mm[key]["t_mm"])
-                        z0 = float(stack_mm[key]["z0_mm"])
-                    else:
-                        t_mm = default_t_mm
-                        z0 = 0.0
-                    shp = face.extrude(FreeCAD.Vector(0, 0, t_mm))
-                    # translate to its bottom Z
-                    if z0 != 0.0:
-                        shp.translate(FreeCAD.Vector(0, 0, z0))
-                    by_layer[key].append(shp)
+                    if min_area_mm2 > 0.0 and _polygon_area_mm2(pts2d) < min_area_mm2:
+                        continue
 
-        # one compound per layer
+                    wire = Part.makePolygon([(x, y, 0.0) for (x, y) in (pts2d + [pts2d[0]])])
+                    if preview_2d:
+                        by_layer[key].append(wire)
+                    else:
+                        try:
+                            face = Part.Face(wire)
+                        except Exception:
+                            continue
+                        if stack_mm and key in stack_mm:
+                            t_mm = float(stack_mm[key]["t_mm"])
+                            z0   = float(stack_mm[key]["z0_mm"])
+                        else:
+                            t_mm = default_t_mm
+                            z0   = 0.0
+                        shp = face.extrude(FreeCAD.Vector(0, 0, t_mm))
+                        if z0:
+                            shp.translate(FreeCAD.Vector(0, 0, z0))
+                        by_layer[key].append(shp)
+
         results = []
         for layer in selected_layers:
             lid = layer.get("layer_id", 0)
-            dt = layer.get("datatype", 0)
+            dt  = layer.get("datatype", 0)
             parts = by_layer.get((lid, dt), [])
             if not parts:
                 continue
@@ -403,9 +464,10 @@ def load_gds_fast(
                 "layer_id": lid,
                 "datatype": dt,
                 "frame_hex": layer.get("frame-color", "#000000"),
-                "fill_hex": layer.get("fill-color", "#FFFFFF"),
+                "fill_hex":  layer.get("fill-color", "#FFFFFF"),
             })
         return results
+
     except Exception as e:
         FreeCAD.Console.PrintError(f"Error loading GDS (fast) {gds_path}: {e}\n")
         return []
