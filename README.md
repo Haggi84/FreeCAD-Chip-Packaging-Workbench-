@@ -33,6 +33,10 @@ git clone <repository-url>
 
 After cloning, restart FreeCAD and verify that the AddIn appears under the Mod directory.
 
+
+In addition you need the IHP-PDK that can be downloaded here:
+https://github.com/IHP-GmbH/IHP-Open-PDK
+
 ## Developer settings
 
 It is suggested to use VSCode. You can download it from the following page:
