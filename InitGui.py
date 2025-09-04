@@ -1,6 +1,6 @@
-import FreeCADGui
-import FreeCAD
-import os
+from PySide2 import QtWidgets, QtCore
+import FreeCAD, Part, Sketcher, FreeCADGui, os
+from FreeCAD import Base
 
 # Versuche alle Befehle zu registrieren
 try:
@@ -14,9 +14,21 @@ except Exception as e:
     FreeCAD.Console.PrintError(f"❌ Failed to load commands: {str(e)}\n")
 
 class MyWorkbench(FreeCADGui.Workbench):
+    # def GetResources(self):
+    #     icon_path = os.path.join(os.path.dirname(__file__),"resources", "icons", "Workbench_logo.png")
+    #     return {
+    #         "MenuText": "GDSII Workbench",
+    #         "ToolTip": "FreeCAD GDSII Workbench",
+    #         "Pixmap": icon_path
+    #     }
+    #icon_path = os.path.join(os.path.dirname(__file__),"resources", "icons", "my_icon.svg")
+    MODULE_PATH = os.path.join(FreeCAD.getHomePath(), "Mod", "DI-PASSIONATE-FreeCAD")
+    ICON_PATH = os.path.join(MODULE_PATH, "resources", "icons", "my_icon.svg")
+    #ICON_PATH = os.path.join(os.path.dirname(__path__[0]), "resources", "icons", "my_icon.svg")
     MenuText = "GDSII Workbench"
     ToolTip = "FreeCAD GDSII Workbench"
-    Icon = "/home/sg26/.local/share/FreeCAD/Mod/DI-PASSIONATE-FreeCAD/resources/icons/my_icon.svg"  # Optional: Add path to your icon
+    #Icon = icon_path
+    Icon = ICON_PATH  #"C:/Program Files/FreeCAD 1.0/Mod/DI-PASSIONATE-FreeCAD/resources/icons/my_icon.svg" #"icon_path  # Optional: Add path to your icon
 
     def Initialize(self):
         try:

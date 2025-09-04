@@ -236,10 +236,11 @@ def create_layer_on_leadframe():
 
 class LayeronLeadframe:
     def GetResources(self):
+        icon_path = os.path.join(os.path.dirname(__file__),"resources", "icons", "Layer on Leadframe.png")
         return {
             "MenuText": "Layer on Leadframe",
             "ToolTip": "Configure layers on leadframe",
-            "Pixmap": "/home/sg26/.local/share/FreeCAD/Mod/DI-PASSIONATE-FreeCAD/resources/icons/Layer on Leadframe.png"
+            "Pixmap": icon_path
         }
     
     def Activated(self):

@@ -172,10 +172,11 @@ def load_gds_layers():
 # --------------------------
 class GDSCommand:
     def GetResources(self):
+        icon_path = os.path.join(os.path.dirname(__file__),"resources", "icons", "Load GDS.png")
         return {
             "MenuText": "Load GDSII",
             "ToolTip": "Load a GDSII file fast, show technology info and apply material styles",
-            "Pixmap": "/home/sg26/.local/share/FreeCAD/Mod/DI-PASSIONATE-FreeCAD/resources/icons/Load GDS.png"
+            "Pixmap": icon_path
         }
 
     def Activated(self):
