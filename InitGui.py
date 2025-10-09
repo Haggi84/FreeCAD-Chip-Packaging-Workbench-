@@ -9,30 +9,38 @@ try:
     import HousingCommand
     import LayeronLeadframe
     import WirebondCommand
+    import HelpGuideCommand
+
     FreeCAD.Console.PrintMessage("✔ Commands loaded successfully\n")
 except Exception as e:
     FreeCAD.Console.PrintError(f"❌ Failed to load commands: {str(e)}\n")
 
 class MyWorkbench(FreeCADGui.Workbench):
-    # def GetResources(self):
-    #     icon_path = os.path.join(os.path.dirname(__file__),"resources", "icons", "Workbench_logo.png")
-    #     return {
-    #         "MenuText": "GDSII Workbench",
-    #         "ToolTip": "FreeCAD GDSII Workbench",
-    #         "Pixmap": icon_path
-    #     }
-    #icon_path = os.path.join(os.path.dirname(__file__),"resources", "icons", "my_icon.svg")
-    MODULE_PATH = os.path.join(FreeCAD.getHomePath(), "Mod", "DI-PASSIONATE-FreeCAD")
-    ICON_PATH = os.path.join(MODULE_PATH, "resources", "icons", "my_icon.svg")
+    """
+    def GetResources(self):
+
+        icon_path = os.path.join(os.path.dirname(__file__),"resources", "icons", "Workbench_logo.png")
+        return {
+            "MenuText": "GDSII Workbench",
+            "ToolTip": "FreeCAD GDSII Workbench",
+            "Pixmap": icon_path
+        }
+    """
+    base_path = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() \
+                else os.path.join(FreeCAD.getUserAppDataDir(), "Mod", "DI-PASSIONATE-FreeCAD")
+
+    icon_path = os.path.join(base_path, "resources", "icons", "my_icon.svg")
+    #MODULE_PATH = os.path.join(FreeCAD.getHomePath(), "Mod", "DI-PASSIONATE-FreeCAD")
+    #ICON_PATH = os.path.join(MODULE_PATH, "resources", "icons", "my_icon.svg")
     #ICON_PATH = os.path.join(os.path.dirname(__path__[0]), "resources", "icons", "my_icon.svg")
     MenuText = "GDSII Workbench"
     ToolTip = "FreeCAD GDSII Workbench"
-    #Icon = icon_path
-    Icon = ICON_PATH  #"C:/Program Files/FreeCAD 1.0/Mod/DI-PASSIONATE-FreeCAD/resources/icons/my_icon.svg" #"icon_path  # Optional: Add path to your icon
+    Icon = icon_path
+    #Icon = ICON_PATH  #"C:/Program Files/FreeCAD 1.0/Mod/DI-PASSIONATE-FreeCAD/resources/icons/my_icon.svg" #"icon_path  # Optional: Add path to your icon
 
     def Initialize(self):
         try:
-            self.appendToolbar("GDSII Tools", ["GDSCommand", "LeadframeCommand", "HousingCommand", "LayeronLeadframe", "WirebondCommand"])
+            self.appendToolbar("GDSII Tools", ["GDSCommand", "LeadframeCommand", "HousingCommand", "LayeronLeadframe", "WirebondCommand", "HelpGuideCommand"])
             FreeCAD.Console.PrintMessage("✔ Toolbar initialized\n")
         except Exception as e:
             FreeCAD.Console.PrintError(f"❌ Toolbar initialization failed: {str(e)}\n")
@@ -41,4 +49,4 @@ class MyWorkbench(FreeCADGui.Workbench):
         return "Gui::PythonWorkbench"
 
 FreeCADGui.addWorkbench(MyWorkbench())
-FreeCAD.Console.PrintMessage("🔧 GDSII Workbench registration attempted\n")
+FreeCAD.Console.PrintMessage("✔ GDSII Workbench registration attempted\n")
