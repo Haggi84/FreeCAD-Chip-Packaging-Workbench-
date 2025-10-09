@@ -1,0 +1,100 @@
+<h2>Tool Reference</h2>
+
+<h3>● GDSCommand - Load GDSII</h3>
+<p><strong>Purpose:</strong> Import GDSII files with layer selection and styling</p>
+<p><strong>Inputs:</strong> GDS file, LYP file, optional MAP file</p>
+<p><strong>Outputs:</strong> 2D/3D geometry with material colors</p>
+<p><strong>Features:</strong>
+<ul>
+<li>Interactive layer selection</li>
+<li>KLayout color matching</li>
+<li>Material-based styling</li>
+<li>Property panel integration</li>
+</ul>
+</p>
+
+<h3>● LeadframeCommand - Leadframe Configurator</h3>
+<p><strong>Purpose:</strong> Create semiconductor package leadframes</p>
+<p><strong>Supported Types:</strong> QFN, QFP, BGA</p>
+<p><strong>Parameters:</strong>
+<ul>
+<li>Frame dimensions (length, width, thickness)</li>
+<li>Lead counts (all sides)</li>
+<li>Lead geometry (width, pitch, length)</li>
+<li>Material selection</li>
+</ul>
+</p>
+
+<h3>● HousingCommand - Housing Configurator</h3>
+<p><strong>Purpose:</strong> Generate transparent IC packages</p>
+<p><strong>Features:</strong>
+<ul>
+<li>Customizable wall thickness</li>
+<li>Transparent lid options</li>
+<li>Alignment posts</li>
+<li>Material and transparency controls</li>
+</ul>
+<p><strong>Dependencies:</strong> Requires leadframe configuration</p>
+
+<h3>● LayeronLeadframe - Layer on Leadframe</h3>
+<p><strong>Purpose:</strong> Stack semiconductor layers on leadframes</p>
+<p><strong>Features:</strong>
+<ul>
+<li>Auto-fitting with margin control</li>
+<li>Rotation and mirroring</li>
+<li>Z-stacking based on technology</li>
+<li>Combined GDS + leadframe workflow</li>
+</ul>
+</p>
+
+<h3>● WirebondCommand - Manual 2D Wire Bonding</h3>
+<p><strong>Purpose:</strong> Create manual wire bonds between die and package</p>
+<p><strong>Workflow:</strong> Die pad selection → Bond finger selection</p>
+<p><strong>Features:</strong>
+<ul>
+<li>Object-based selection (no random clicks)</li>
+<li>Straight and arc wire styles</li>
+<li>Visual feedback with colored markers</li>
+<li>Automatic object identification</li>
+<li>Finish/Cancel session commands</li>
+</ul>
+</p>
+
+<h3>● Property Panel</h3>
+<p><strong>Location:</strong> Right dock widget</p>
+<p><strong>Tabs:</strong>
+<ul>
+<li><strong>Layer Properties</strong> - Raw LYP properties</li>
+<li><strong>Color Summary</strong> - Color usage statistics</li>
+<li><strong>Technology</strong> - IHP mapping information</li>
+</ul>
+</p>
+<p><strong>Features:</strong>
+<ul>
+<li>Real-time layer information</li>
+<li>Modification without re-import</li>
+<li>Color and visibility controls</li>
+<li>Technology layer mapping</li>
+</ul>
+</p>
+
+<h3>● FinishWireBondingCommand</h3>
+<p><strong>Purpose:</strong> Complete wire bonding session</p>
+<p><strong>Features:</strong>
+<ul>
+<li>Generates detailed bonding report</li>
+<li>Removes selection observer</li>
+<li>Shows bond count summary</li>
+<li>Cleans up temporary data</li>
+</ul>
+</p>
+
+<h3>● CancelWireBondingCommand</h3>
+<p><strong>Purpose:</strong> Cancel current wire bonding session</p>
+<p><strong>Features:</strong>
+<ul>
+<li>Stops selection listening</li>
+<li>Clears temporary data</li>
+<li>Returns to normal mode</li>
+</ul>
+</p>
