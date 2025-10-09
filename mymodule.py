@@ -4,11 +4,12 @@ import gdstk
 import FreeCAD
 import Part
 import csv
-from FreeCAD import Vector
+from FreeCAD import Vector, Base
 
 # -------------------------------
 # KLayout LYP parsing (colors)
 # -------------------------------
+
 def parse_lyp(lyp_path, layer_map=None):
     """
     Parse a KLayout LYP file and return:
@@ -63,6 +64,7 @@ def parse_lyp(lyp_path, layer_map=None):
 # ---------------------------------------
 # IHP .map parsing (technology mapping)
 # ---------------------------------------
+
 def parse_map(map_path):
     """
     Parse IHP *.map file and return dict keyed by (gds_layer, gds_datatype) -> {
@@ -109,6 +111,7 @@ def parse_map(map_path):
 # ------------------------------------------------
 # Thickness & stacking helpers (simple defaults)
 # ------------------------------------------------
+
 # Default metal/via thicknesses [µm] – adjust to your PDK as needed.
 THICKNESS_UM = {
     # routing metals
@@ -148,7 +151,6 @@ def thickness_um_for_edi(edi_name: str) -> float:
     if "VIA" in n:
         return 0.5
     return 0.2
-
 
 def stack_rank_for_edi(edi_name: str) -> int:
     """
@@ -221,6 +223,7 @@ def build_stack_mm(selected_layers, ihp_map, ild_um: float = ILD_SPACING_UM):
 # ------------------------------------------------
 # GDS inspection & geometry creation helpers
 # ------------------------------------------------
+
 def get_gds_layer(gds_path):
     """
     Analyze GDS and return set of (layer_id, datatype) that contain polygons.
@@ -260,7 +263,6 @@ def derive_base_scale_mm(gds_path):
         FreeCAD.Console.PrintError(f"Failed to derive base scale from {gds_path}: {e}\n")
         return 0.001
 
-
 def _transform_point(p, s, rot_deg, mirror_y, tx, ty):
     """Apply scale (to mm) -> optional mirror(Y) -> rotation -> translation."""
     x, y = p[0] * s, p[1] * s
@@ -271,7 +273,6 @@ def _transform_point(p, s, rot_deg, mirror_y, tx, ty):
     yr = x * math.sin(r) + y * math.cos(r)
     return xr + tx, yr + ty
 
-
 def _polygon_area_mm2(pts):
     """Signed area in squared model units (mm^2 once 'pts' are scaled)."""
     a = 0.0
@@ -280,7 +281,6 @@ def _polygon_area_mm2(pts):
         x2, y2 = pts[(i + 1) % len(pts)]
         a += x1 * y2 - x2 * y1
     return abs(a) * 0.5
-
 
 def _simplify_poly(points, eps):
     """Drop almost-collinear or too-close points. eps in mm."""
@@ -417,7 +417,6 @@ def is_bondable(types: set) -> bool:
     T = {t.upper() for t in types}
     return any(t in T for t in ("PIN", "LEFPIN", "BUMP", "PAD"))
 
-
 def style_for_material(edi_name: str, edi_types: set):
     """
     Return a simple material style tuple:
@@ -468,71 +467,43 @@ def bbox_from_entries(entries):
 # -----------------------------------
 # Wire Bonding Configuration Support
 # ...................................
-def create_bond_wire(start_point, end_point, loop_height=0.5, diameter=0.025, net="Unknown"):
-    """Create a 3D bond wire as a BSpline curve with circular cross-section."""
-    doc = FreeCAD.activeDocument()
-    mid_point = Vector(
-        (start_point.x + end_point.x) / 2,
-        (start_point.y + end_point.y) / 2,
-        max(start_point.z, end_point.z) + loop_height
+
+def create_2d_bond_wire_arc(start_point, end_point, arc_height=2.0, wire_thickness=0.5):
+    """Create a 2D arc bond wire."""
+    # Calculate arc control points
+    mid_x = (start_point.x + end_point.x) / 2
+    mid_y = (start_point.y + end_point.y) / 2
+    
+    # Create arc through three points
+    p1 = Base.Vector(start_point.x, start_point.y, 0)
+    p2 = Base.Vector(mid_x, mid_y, arc_height)
+    p3 = Base.Vector(end_point.x, end_point.y, 0)
+    
+    arc = Part.Arc(p1, p2, p3)
+    return arc.toShape()
+
+def create_2d_bond_wire_straight(start_point, end_point, wire_thickness=0.5):
+    """Create a straight 2D bond wire."""
+    return Part.makeLine(
+        Base.Vector(start_point.x, start_point.y, 0),
+        Base.Vector(end_point.x, end_point.y, 0)
     )
-    spline = Part.BSplineCurve()
-    spline.interpolate([start_point, mid_point, end_point])
-    edge = spline.toShape()
-    wire_shape = Part.makeCircle(diameter / 2, end_point).toShape()
-    bond_wire = wire_shape.extrude(edge)
-    wire_obj = doc.addObject("Part::Feature", f"BondWire_{len(doc.Objects)}")
-    wire_obj.Shape = bond_wire
-    wire_obj.ViewObject.ShapeColor = (0.90, 0.75, 0.20)  # Gold color
-    wire_obj.ViewObject.LineColor = (0.25, 0.20, 0.10)
-    wire_obj.addProperty("App::PropertyString", "Net", "Wirebond", "Net name")
-    wire_obj.Net = net
-    return wire_obj
 
-def check_design_rules(wires, bond_fingers, config):
-    """Check wire bonding design rules."""
-    violations = []
-    min_spacing = config["min_wire_spacing"]
-    min_length = config["min_wire_length"]
-    max_length = config["max_wire_length"]
-    margin = config["bond_finger_margin"]
+def get_2d_distance(point1, point2):
+    """Calculate 2D distance (ignoring Z)."""
+    return ((point1.x - point2.x)**2 + (point1.y - point2.y)**2)**0.5
 
-    # Wire-to-wire spacing
-    for i, wire1 in enumerate(wires):
-        for j, wire2 in enumerate(wires[i+1:]):
-            dist = wire1.Shape.distToShape(wire2.Shape)[0]
-            if dist < min_spacing:
-                violations.append(f"Wires {i} and {j} too close: {dist:.3f} mm < {min_spacing} mm")
-
-    # Wire length
-    for i, wire in enumerate(wires):
-        length = wire.Shape.Length
-        if length < min_length:
-            violations.append(f"Wire {i} too short: {length:.3f} mm < {min_length} mm")
-        if length > max_length:
-            violations.append(f"Wire {i} too long: {length:.3f} mm > {max_length} mm")
-
-    # Bond finger margin
-    for i, wire in enumerate(wires):
-        end_point = wire.Shape.Edges[0].Vertexes[-1].Point
-        for finger in bond_fingers:
-            if finger.Shape.Faces:
-                face = finger.Shape.Faces[0]
-                dist = face.distToShape(Part.makePoint(end_point))[0]
-                if dist < margin:
-                    violations.append(f"Wire {i} too close to bond finger edge: {dist:.3f} mm < {margin} mm")
-
-    return violations
-
-def generate_wire_bonding_table(wires, bond_pads, bond_fingers, filename="wire_bonding_table.csv"):
-    """Generate a CSV wire bonding table."""
-    doc = FreeCAD.activeDocument()
-    with open(filename, 'w', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow(["Wire ID", "Die Pad", "Bond Finger", "Length (mm)", "Net"])
-        for i, wire in enumerate(wires):
-            die_pad = next((pad.Label for pad in bond_pads if wire.Shape.Edges[0].Vertexes[0].Point.distanceToPoint(pad.Shape.CenterOfMass) < 0.001), "Unknown")
-            bond_finger = next((finger.Label for finger in bond_fingers if wire.Shape.Edges[0].Vertexes[-1].Point.distanceToPoint(finger.Shape.CenterOfMass) < 0.001), "Unknown")
-            length = wire.Shape.Length
-            net = getattr(wire, "Net", "Net" + str(i))  # Fallback net name
-            writer.writerow([i, die_pad, bond_finger, f"{length:.3f}", net])
+def export_2d_wirebonds_to_dxf(wire_objects, filename):
+    """Export 2D wire bonds to DXF file."""
+    try:
+        import Import
+        # Create a compound of all wire bonds
+        shapes = [obj.Shape for obj in wire_objects]
+        compound = Part.Compound(shapes)
+        
+        # Export to DXF
+        compound.exportDxf(filename)
+        return True
+    except Exception as e:
+        FreeCAD.Console.PrintError(f"Failed to export DXF: {str(e)}\n")
+        return False
