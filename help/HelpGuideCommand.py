@@ -1,6 +1,12 @@
 from PySide2 import QtWidgets, QtCore, QtGui
 import FreeCAD, FreeCADGui
-import os
+import os, sys
+
+
+# Add root to path
+root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, root_path)
+from Get_Path import get_icon, get_html
 
 class HelpGuideDialog(QtWidgets.QDialog):
     """Dialog to display the workbench help guide."""
@@ -20,9 +26,6 @@ class HelpGuideDialog(QtWidgets.QDialog):
         
         # Tab widget for different sections
         self.tab_widget = QtWidgets.QTabWidget()
-        
-        # Get HTML directory path
-        self.html_dir = os.path.join(os.path.dirname(__file__), "resources", "html")
         
         # Create tabs
         self.create_tab("■ Overview", "overview.html")
@@ -54,18 +57,34 @@ class HelpGuideDialog(QtWidgets.QDialog):
         self.tab_widget.addTab(tab, tab_name)
     
     def load_html_content(self, html_file):
-        """Load HTML content from file with fallback."""
-        file_path = os.path.join(self.html_dir, html_file)
+        """
+        Load HTML content from file using get_html() function.
+        This is the simplified version that uses get_html().
+        """
+        # Get file path using get_html() function
+        file_path = get_html(html_file)
         
         try:
-            if os.path.exists(file_path):
+            if file_path:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     return f.read()
             else:
-                return f"<h2>Content Not Found</h2><p>HTML file '{html_file}' not found at:<br>{file_path}</p>"
+                # File not found - show error message
+                return f"""
+                <h2>Content Not Found</h2>
+                <p>HTML file '<strong>{html_file}</strong>' not found in resources/html/ folder.</p>
+                <p>Expected location: resources/html/{html_file}</p>
+                <p>Please ensure the HTML files are properly installed.</p>
+                """
                 
         except Exception as e:
-            return f"<h2>Error Loading Content</h2><p>Could not load '{html_file}':<br>{str(e)}</p>"
+            # Error reading file - show error message
+            return f"""
+            <h2>Error Loading Content</h2>
+            <p>Could not load '<strong>{html_file}</strong>'</p>
+            <p>Error: {str(e)}</p>
+            """
+
 
 class HelpGuideCommand:
     """Command to show the help guide dialog."""
@@ -74,7 +93,7 @@ class HelpGuideCommand:
         return {
             "MenuText": "Help Guide",
             "ToolTip": "Show comprehensive help guide for DI-PASSIONATE workbench",
-            "Pixmap": os.path.join(os.path.dirname(__file__), "resources", "icons", "Help_Guide.png")
+            "Pixmap": get_icon("Help_Guide.png")
         }
 
     def Activated(self):

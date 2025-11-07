@@ -3,8 +3,7 @@ import math
 import gdstk
 import FreeCAD
 import Part
-import csv
-from FreeCAD import Vector, Base
+from FreeCAD import Base
 
 # -------------------------------
 # KLayout LYP parsing (colors)
@@ -463,47 +462,3 @@ def bbox_from_entries(entries):
         xmax = max(xmax, bb.XMax)
         ymax = max(ymax, bb.YMax)
     return xmin, ymin, xmax, ymax
-
-# -----------------------------------
-# Wire Bonding Configuration Support
-# ...................................
-
-def create_2d_bond_wire_arc(start_point, end_point, arc_height=2.0, wire_thickness=0.5):
-    """Create a 2D arc bond wire."""
-    # Calculate arc control points
-    mid_x = (start_point.x + end_point.x) / 2
-    mid_y = (start_point.y + end_point.y) / 2
-    
-    # Create arc through three points
-    p1 = Base.Vector(start_point.x, start_point.y, 0)
-    p2 = Base.Vector(mid_x, mid_y, arc_height)
-    p3 = Base.Vector(end_point.x, end_point.y, 0)
-    
-    arc = Part.Arc(p1, p2, p3)
-    return arc.toShape()
-
-def create_2d_bond_wire_straight(start_point, end_point, wire_thickness=0.5):
-    """Create a straight 2D bond wire."""
-    return Part.makeLine(
-        Base.Vector(start_point.x, start_point.y, 0),
-        Base.Vector(end_point.x, end_point.y, 0)
-    )
-
-def get_2d_distance(point1, point2):
-    """Calculate 2D distance (ignoring Z)."""
-    return ((point1.x - point2.x)**2 + (point1.y - point2.y)**2)**0.5
-
-def export_2d_wirebonds_to_dxf(wire_objects, filename):
-    """Export 2D wire bonds to DXF file."""
-    try:
-        import Import
-        # Create a compound of all wire bonds
-        shapes = [obj.Shape for obj in wire_objects]
-        compound = Part.Compound(shapes)
-        
-        # Export to DXF
-        compound.exportDxf(filename)
-        return True
-    except Exception as e:
-        FreeCAD.Console.PrintError(f"Failed to export DXF: {str(e)}\n")
-        return False

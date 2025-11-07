@@ -1,16 +1,21 @@
 from PySide2 import QtWidgets, QtCore
-import os
+import os, sys
 import FreeCAD, FreeCADGui
-from PropertyPanel import PropertyPanel
-import mymodule
-from Color import hex_to_rgb
+
+root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, root_path)
+
+from gds.PropertyPanel import PropertyPanel
+from core import Core_Functionality
+from core.Color import hex_to_rgb
+from Get_Path import get_icon
 
 # ----------------------------------------
 # Main flow: pick files, preview document
 # ----------------------------------------
 
 def load_gds_layers():
-    from All_Class import LayerSelector
+    from ui.LayerSelector import LayerSelector
 
     """
     Interactively pick GDS + LYP (+ optional MAP), select visible layers present
@@ -33,15 +38,15 @@ def load_gds_layers():
         if not map_path:
             FreeCAD.Console.PrintWarning("No MAP file selected, proceeding without layer mapping.\n")
             map_path = None
-        ihp_map = mymodule.parse_map(map_path) if map_path else {}
+        ihp_map = Core_Functionality.parse_map(map_path) if map_path else {}
 
-        layers_with_colors = mymodule.parse_lyp(lyp_path)
+        layers_with_colors = Core_Functionality.parse_lyp(lyp_path)
         if not layers_with_colors:
             QtWidgets.QMessageBox.critical(None, "Error", "No layers found in the LYP file.")
             return None, None, None, None, None, None, None
 
         layers, unique_colors = layers_with_colors
-        gds_layers = mymodule.get_gds_layer(gds_path)
+        gds_layers = Core_Functionality.get_gds_layer(gds_path)
         if not gds_layers:
             QtWidgets.QMessageBox.warning(None, "Warning", "No layers found in the GDS file.")
             return None, None, None, None, None, None, None
@@ -92,7 +97,7 @@ def load_gds_layers():
             except Exception:
                 pass
 
-            shapes = mymodule.load_gds(
+            shapes = Core_Functionality.load_gds(
                 gds_path,
                 selected_layers,
                 transform=None,
@@ -121,13 +126,13 @@ def load_gds_layers():
                     shape_rgb = hex_to_rgb(layer.get("fill-color", "#FFFFFF"))
                     line_rgb  = hex_to_rgb(layer.get("frame-color", "#000000"))
                     tr = 0
-                    if highlight_bondable and mymodule.is_bondable(types):
+                    if highlight_bondable and Core_Functionality.is_bondable(types):
                         shape_rgb = (0.90, 0.75, 0.20)
                         line_rgb  = (0.25, 0.20, 0.10)
                         tr = 0
                 else:
-                    _, shape_rgb, line_rgb, tr = mymodule.style_for_material(map_entry["edi_name"] if map_entry else "", types)
-                    if not highlight_bondable and mymodule.is_bondable(types):
+                    _, shape_rgb, line_rgb, tr = Core_Functionality.style_for_material(map_entry["edi_name"] if map_entry else "", types)
+                    if not highlight_bondable and Core_Functionality.is_bondable(types):
                         # neutralize highlight to LYP look for this layer
                         shape_rgb = hex_to_rgb(layer.get("fill-color", "#FFFFFF"))
                         line_rgb  = hex_to_rgb(layer.get("frame-color", "#000000"))
@@ -172,11 +177,10 @@ def load_gds_layers():
 # --------------------------
 class GDSCommand:
     def GetResources(self):
-        icon_path = os.path.join(os.path.dirname(__file__),"resources", "icons", "Load GDS.png")
         return {
             "MenuText": "Load GDSII",
             "ToolTip": "Load a GDSII file fast, show technology info and apply material styles",
-            "Pixmap": icon_path
+            "Pixmap": get_icon("Load GDS.png")
         }
 
     def Activated(self):

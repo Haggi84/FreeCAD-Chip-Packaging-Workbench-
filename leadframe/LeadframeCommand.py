@@ -1,6 +1,10 @@
 from PySide2 import QtWidgets
-import FreeCAD, Part, Sketcher, FreeCADGui, os
+import FreeCAD, Part, Sketcher, FreeCADGui, os, sys
 from FreeCAD import Base
+
+root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, root_path)
+from Get_Path import get_icon
 
 def create_leadframe(config, doc=None, gds_objects=None):
     """Create a leadframe based on the provided configuration.
@@ -215,7 +219,7 @@ def create_leadframe(config, doc=None, gds_objects=None):
     return doc
 
 def configure_leadframe():
-    from All_Class import LeadframeConfigurator
+    from leadframe.LeadframeConfigurator import LeadframeConfigurator
     
     """
     Open the leadframe configuration dialog and create a leadframe based on user input.
@@ -230,11 +234,10 @@ def configure_leadframe():
 
 class LeadframeCommand:
     def GetResources(self):
-        icon_path = os.path.join(os.path.dirname(__file__),"resources", "icons", "Leadframe_Configurator.png")
         return {
             "MenuText": "Leadframe Configurator",
             "ToolTip": "Configure and generate a leadframe geometry",
-            "Pixmap": icon_path
+            "Pixmap": get_icon("Leadframe_Configurator.png")
         }
 
     def Activated(self):

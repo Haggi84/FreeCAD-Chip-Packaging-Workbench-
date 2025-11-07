@@ -1,10 +1,15 @@
 from PySide2 import QtWidgets, QtCore
-import os
+import os, sys
 import FreeCAD, FreeCADGui
-import mymodule, LeadframeCommand
-from GDSCommand import load_gds_layers
-from Color import hex_to_rgb
-from PropertyPanel import PropertyPanel
+
+root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, root_path)
+
+from core import Core_Functionality
+from leadframe.LeadframeCommand import create_leadframe, configure_leadframe
+from gds.GDSCommand import load_gds_layers
+from core.Color import hex_to_rgb
+from Get_Path import get_icon
 
 def configuration(doc, gds_path, selected_layers, options, ihp_map, config, opts):
     # First pass — measure bbox at base scale
@@ -20,7 +25,7 @@ def configuration(doc, gds_path, selected_layers, options, ihp_map, config, opts
         frame_length = config["frame_length"]
         frame_width  = config["frame_width"]
             
-        tmp_entries = mymodule.load_gds(
+        tmp_entries = Core_Functionality.load_gds(
             gds_path, selected_layers, first_transform,
             preview_2d=False, compound_per_layer=True,
             min_area_mm2=0.0004, decimate_tol_mm=0.002, skip_fill_datatype=True
@@ -29,7 +34,7 @@ def configuration(doc, gds_path, selected_layers, options, ihp_map, config, opts
             QtWidgets.QMessageBox.warning(None, "Warning", "No shapes produced during measurement pass.")
             return
 
-        bb = mymodule.bbox_from_entries(tmp_entries)
+        bb = Core_Functionality.bbox_from_entries(tmp_entries)
         if not bb:
             QtWidgets.QMessageBox.warning(None, "Warning", "Failed to compute bounding box for GDS shapes.")
             return
@@ -38,7 +43,7 @@ def configuration(doc, gds_path, selected_layers, options, ihp_map, config, opts
         die_h = max(0.0, ymax - ymin)
 
         # Auto-fit scale
-        base_scale = mymodule.derive_base_scale_mm(gds_path)
+        base_scale = Core_Functionality.derive_base_scale_mm(gds_path)
         final_scale = base_scale
         if opts["auto_fit"] and die_w > 0 and die_h > 0:
             margin = max(0.0, opts["margin_pct"]) / 100.0
@@ -63,7 +68,7 @@ def configuration(doc, gds_path, selected_layers, options, ihp_map, config, opts
         }
 
         # Build per-layer stack in mm (bottom Z + thickness)
-        stack = mymodule.build_stack_mm(selected_layers, ihp_map, ild_um=mymodule.ILD_SPACING_UM)
+        stack = Core_Functionality.build_stack_mm(selected_layers, ihp_map, ild_um=Core_Functionality.ILD_SPACING_UM)
 
         # 3D Import parameters derived from options
         match_klayout = bool(options.get("match_klayout", True))
@@ -73,7 +78,7 @@ def configuration(doc, gds_path, selected_layers, options, ihp_map, config, opts
         decimate = 0.0 if match_klayout else 0.002
 
 
-        shapes = mymodule.load_gds(
+        shapes = Core_Functionality.load_gds(
             gds_path,
             selected_layers,
             transform=final_transform,
@@ -103,13 +108,13 @@ def configuration(doc, gds_path, selected_layers, options, ihp_map, config, opts
                 shape_rgb = hex_to_rgb(layer.get("fill-color", "#FFFFFF"))
                 line_rgb  = hex_to_rgb(layer.get("frame-color", "#000000"))
                 tr = 0
-                if highlight_bondable and mymodule.is_bondable(types):
+                if highlight_bondable and Core_Functionality.is_bondable(types):
                     shape_rgb = (0.90, 0.75, 0.20)
                     line_rgb  = (0.25, 0.20, 0.10)
                     tr = 0
             else:
-                _, shape_rgb, line_rgb, tr = mymodule.style_for_material(edi_name, types)
-                if not highlight_bondable and mymodule.is_bondable(types):
+                _, shape_rgb, line_rgb, tr = Core_Functionality.style_for_material(edi_name, types)
+                if not highlight_bondable and Core_Functionality.is_bondable(types):
                     # neutralize highlight
                     shape_rgb = hex_to_rgb(layer.get("fill-color", "#FFFFFF"))
                     line_rgb  = hex_to_rgb(layer.get("frame-color", "#000000"))
@@ -127,17 +132,18 @@ def configuration(doc, gds_path, selected_layers, options, ihp_map, config, opts
 
             if not hasattr(obj, "Bondable"):
                 obj.addProperty("App::PropertyBool", "Bondable", "Technology", "Can be connected to the leadframe")
-            obj.Bondable = mymodule.is_bondable(types) if highlight_bondable else False
+            obj.Bondable = Core_Functionality.is_bondable(types) if highlight_bondable else False
 
             layer_objects.setdefault((layer_id,datatype), []).append(obj)
 
         # Create the leadframe geometry in the same doc
-        LeadframeCommand.create_leadframe(config, doc, layer_objects)
+        create_leadframe(config, doc, layer_objects)
 
         return doc, layer_objects
 
 def create_layer_on_leadframe():
-    from All_Class import LayeronLeadframeConfigurator, ExtendedPropertyPanel
+    from ui.LayeronLeadframeConfigurator import LayeronLeadframeConfigurator
+    from ui.ExtendedPropertyPanel import ExtendedPropertyPanel
 
     try:
         # Pick + preview (fast 2D) -> returns options as 7th item
@@ -158,12 +164,12 @@ def create_layer_on_leadframe():
             return
         
         # Load GDS Layers
-        layers, _ = mymodule.parse_lyp(lyp_path)
+        layers, _ = Core_Functionality.parse_lyp(lyp_path)
         if not layers:
             QtWidgets.QMessageBox.warning(None, "Warning", "No layers found in the LYP file.")
             return
 
-        gds_layers = mymodule.get_gds_layer(gds_path)
+        gds_layers = Core_Functionality.get_gds_layer(gds_path)
         if not gds_layers:
             QtWidgets.QMessageBox.warning(None, "Warning", "No layers found in the GDS file.")
             return
@@ -175,10 +181,10 @@ def create_layer_on_leadframe():
 
         # IHP mapping (try default next to this module)
         default_map = os.path.join(os.path.dirname(__file__), "sg13g2.map")
-        ihp_map = mymodule.parse_map(default_map) if os.path.exists(default_map) else {}
+        ihp_map = Core_Functionality.parse_map(default_map) if os.path.exists(default_map) else {}
 
         # Leadframe configuration
-        config = LeadframeCommand.configure_leadframe()
+        config = configure_leadframe()
         if not config:
             FreeCAD.Console.PrintError("❌ Leadframe configuration cancelled.\n")
             return
@@ -217,7 +223,7 @@ def create_layer_on_leadframe():
         
         doc, layer_objects = result
 
-        property_panel.update_properties(property_panel.selected_layers, mymodule.parse_lyp(lyp_path)[1], layer_objects)
+        property_panel.update_properties(property_panel.selected_layers, Core_Functionality.parse_lyp(lyp_path)[1], layer_objects)
 
         try:
             doc.commitTransaction()
@@ -236,11 +242,10 @@ def create_layer_on_leadframe():
 
 class LayeronLeadframe:
     def GetResources(self):
-        icon_path = os.path.join(os.path.dirname(__file__),"resources", "icons", "Layer on Leadframe.png")
         return {
             "MenuText": "Layer on Leadframe",
             "ToolTip": "Configure layers on leadframe",
-            "Pixmap": icon_path
+            "Pixmap": get_icon("Layer on Leadframe.png")
         }
     
     def Activated(self):

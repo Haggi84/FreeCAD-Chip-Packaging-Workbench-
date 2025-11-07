@@ -1,7 +1,12 @@
 from PySide2 import QtWidgets
-import FreeCAD, Part, Sketcher, FreeCADGui, os
+import FreeCAD, Part, Sketcher, FreeCADGui, os, sys
 from FreeCAD import Base
-from All_Class import TransparentHousingConfigurator
+
+root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, root_path)
+
+from housing.HousingConfigurator import TransparentHousingConfigurator
+from Get_Path import get_icon
 
 def create_housing(config):
     doc = FreeCAD.activeDocument()
@@ -174,11 +179,10 @@ def create_housing(config):
 
 class HousingCommand:
     def GetResources(self):
-        icon_path = os.path.join(os.path.dirname(__file__),"resources", "icons", "Housing_Configurator.png")
         return {
             "MenuText": "Housing Configurator",
             "ToolTip": "Configure and generate a transparent housing for a leadframe",
-            "Pixmap": icon_path
+            "Pixmap": get_icon("Housing_Configurator.png")
         }
 
     def Activated(self):

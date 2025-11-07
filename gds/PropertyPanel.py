@@ -1,9 +1,12 @@
 from PySide2 import QtWidgets, QtGui, QtCore
-import Part
+import Part, os, sys
 import FreeCAD, FreeCADGui
-import mymodule
-from mymodule import style_for_material, is_bondable, parse_lyp
-from Color import hex_to_rgb, hex_to_qcolor
+
+root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, root_path)
+
+from core.Core_Functionality import style_for_material, is_bondable, parse_lyp
+from core.Color import hex_to_rgb, hex_to_qcolor
 
 # -----------------------------------
 # Dock panel for properties & tech
@@ -171,8 +174,9 @@ class PropertyPanel(QtWidgets.QDockWidget):
         self.show()
 
     def modify_layer_selection(self):
-        from All_Class import LayerSelector
-        
+        from ui.LayerSelector import LayerSelector
+        from core import Core_Functionality
+
         """Reopen the layer selection dialog to modify selected layers."""
         if not self.gds_path or not self.lyp_path or not self.filtered_layers:
             QtWidgets.QMessageBox.critical(None, "Error", "Cannot modify layers: Missing file paths or layer data.")
@@ -206,7 +210,7 @@ class PropertyPanel(QtWidgets.QDockWidget):
 
 
             layer_objects = {}
-            shapes = mymodule.load_gds(
+            shapes = Core_Functionality.load_gds(
                 self.gds_path,
                 selected_layers,
                 transform=None,

@@ -1,17 +1,38 @@
-import FreeCAD, FreeCADGui, os
+import FreeCAD, FreeCADGui, os, sys
 from PySide2 import QtWidgets
-from All_Class import WirebondConfigurator, manual_bonder  # Import from All_Class
+
+root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, root_path)
+
+from wirebond.WirebondConfigurator import WirebondConfigurator
+from wirebond.ManualWireBonding import manual_bonder  # Global instance
+from wirebond.Wirebon_Confi_Support import check_wirebond_prerequisites
+from Get_Path import get_icon
 
 class WirebondCommand:
     def GetResources(self):
-        icon_path = os.path.join(os.path.dirname(__file__), "resources", "icons", "Wire_bonding.png")
         return {
             "MenuText": "Manual 2D Wire Bonding",
             "ToolTip": "Manually create 2D wire bonds by selecting points",
-            "Pixmap": icon_path
+            "Pixmap": get_icon("Wire_bonding.png")
         }
 
     def Activated(self):
+        # Check prerequisites
+        can_bond, message = check_wirebond_prerequisites()
+        
+        if not can_bond:
+            QtWidgets.QMessageBox.warning(
+                None, 
+                "Wire Bonding Not Available", 
+                f"{message}\n\n"
+                "Wire bonding requires:\n"
+                "• GDS layers with bondable pads (use 'Load GDSII')\n"
+                "• A leadframe (use 'Leadframe Configurator' or 'Layer on Leadframe')"
+            )
+            return
+        
+
         # Show configuration dialog
         dialog = WirebondConfigurator()
         if dialog.exec_():
@@ -42,7 +63,12 @@ class WirebondCommand:
             QtWidgets.QMessageBox.information(None, "Cancelled", "Wire bonding configuration cancelled.")
 
     def IsActive(self):
-        return True
+        """
+        Command is only active if prerequisites are met.
+        This grays out the button when conditions aren't met.
+        """
+        can_bond, _ = check_wirebond_prerequisites()
+        return can_bond
 
 class FinishWireBondingCommand:
     def GetResources(self):
