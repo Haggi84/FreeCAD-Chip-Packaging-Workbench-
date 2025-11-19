@@ -388,17 +388,29 @@ def load_gds(gds_path,
                 return (a * x + b * y, c * x + d * y)
 
             def _reference_linear(ref):
-                mag = float(getattr(ref, "magnification", 1.0) or 1.0)
-                rot = float(getattr(ref, "rotation", 0.0) or 0.0)
+                mag_attr = getattr(ref, "magnification", None)
+                if mag_attr is None:
+                    mag_attr = getattr(ref, "mag", 1.0)
+                mag = float(mag_attr or 1.0)
+                rot_attr = getattr(ref, "rotation", None)
+                if rot_attr is None:
+                    rot_attr = getattr(ref, "angle", 0.0)
+                rot = float(rot_attr or 0.0)
                 rot_rad = math.radians(rot)
                 cos_r = math.cos(rot_rad)
                 sin_r = math.sin(rot_rad)
-                if getattr(ref, "x_reflection", False):
+                reflect = getattr(ref, "x_reflection", None)
+                if reflect is None:
+                    reflect = getattr(ref, "reflection", False)
+                if reflect:
                     lin = (cos_r, sin_r, sin_r, -cos_r)
                 else:
                     lin = (cos_r, -sin_r, sin_r, cos_r)
                 lin = tuple(mag * v for v in lin)
-                origin = getattr(ref, "origin", (0.0, 0.0)) or (0.0, 0.0)
+                origin = getattr(ref, "origin", None)
+                if origin is None:
+                    origin = getattr(ref, "translation", (0.0, 0.0))
+                origin = origin or (0.0, 0.0)
                 try:
                     tx = float(origin[0])
                     ty = float(origin[1])
@@ -460,6 +472,8 @@ def load_gds(gds_path,
                     _transform_and_store(getattr(cur_cell, "robustpaths", None), matrix, offset)
                     for ref in getattr(cur_cell, "references", []) or []:
                         target = getattr(ref, "cell", None)
+                        if target is None:
+                            target = getattr(ref, "ref_cell", None)
                         if target is None:
                             continue
                         lin, base_offset = _reference_linear(ref)
@@ -528,9 +542,11 @@ def load_gds(gds_path,
             # some gdstk versions cannot group by spec; fall back to a manual flatten
             try:
                 return _manual_poly_map(cell)
-            except Exception:
+            except Exception as manual_error:
                 if last_error:
-                    raise last_error
+                    raise RuntimeError(
+                        f"Manual polygon fallback failed after get_polygons error '{last_error}': {manual_error}"
+                    ) from manual_error
                 raise
 
         def iter_polygons():
