@@ -350,9 +350,39 @@ def load_gds(gds_path,
         # collect wires/faces per layer (respecting hierarchy transforms)
         top_cells = lib.top_level() or list(lib.cells)
 
+        def _poly_map(cell):
+            """Return polygons grouped by (layer, datatype) for a cell."""
+            attempts = [
+                ((), {"by_spec": True, "include_paths": True, "depth": None}),
+                ((), {"by_spec": True, "include_paths": True}),
+                ((), {"by_spec": True, "depth": None}),
+                ((), {"by_spec": True}),
+                ((True, True, None), {}),
+                ((True, True), {}),
+                ((True,), {}),
+            ]
+            last_error = None
+            for args, kwargs in attempts:
+                try:
+                    result = cell.get_polygons(*args, **kwargs)
+                except TypeError as exc:
+                    last_error = exc
+                    continue
+                if isinstance(result, dict):
+                    return result
+            if last_error:
+                raise last_error
+            raise RuntimeError("Unable to query polygons by spec for cell")
+
         def iter_polygons():
             for cell in top_cells:
-                poly_map = cell.get_polygons(by_spec=True, include_paths=True, depth=None)
+                try:
+                    poly_map = _poly_map(cell)
+                except Exception as exc:
+                    FreeCAD.Console.PrintWarning(
+                        f"Unable to read polygons for cell {cell.name}: {exc}\n"
+                    )
+                    continue
                 for (layer, datatype), polys in poly_map.items():
                     for pts in polys:
                         yield layer, datatype, pts
