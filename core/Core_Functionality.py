@@ -347,45 +347,53 @@ def load_gds(gds_path,
         wanted = {(l.get("layer_id", 0), l.get("datatype", 0)) for l in selected_layers}
         by_layer = {key: [] for key in wanted}
 
-        # collect wires/faces per layer
-        for cell in lib.cells:
-            for poly in cell.polygons:
-                key = (poly.layer, poly.datatype)
-                if key not in wanted:
-                    continue
-                if skip_fill_datatype and poly.datatype == 22:
-                    # many PDKs: datatype 22 == FILL
-                    continue
+        # collect wires/faces per layer (respecting hierarchy transforms)
+        top_cells = lib.top_level() or list(lib.cells)
 
-                pts2d = [_transform_point(p, s, rot_deg, mirror_y, tx, ty) for p in poly.points]
-                if decimate_tol_mm > 0.0:
-                    pts2d = _simplify_poly(pts2d, decimate_tol_mm)
-                if len(pts2d) < 3:
-                    continue
-                if min_area_mm2 > 0.0 and _polygon_area_mm2(pts2d) < min_area_mm2:
-                    continue
+        def iter_polygons():
+            for cell in top_cells:
+                poly_map = cell.get_polygons(by_spec=True, include_paths=True, depth=None)
+                for (layer, datatype), polys in poly_map.items():
+                    for pts in polys:
+                        yield layer, datatype, pts
 
-                # build wire/face
-                wire = Part.makePolygon([(x, y, 0.0) for (x, y) in (pts2d + [pts2d[0]])])
-                if preview_2d:
-                    by_layer[key].append(wire)
+        for layer_id, datatype, points in iter_polygons():
+            key = (layer_id, datatype)
+            if key not in wanted:
+                continue
+            if skip_fill_datatype and datatype == 22:
+                # many PDKs: datatype 22 == FILL
+                continue
+
+            pts2d = [_transform_point((float(p[0]), float(p[1])), s, rot_deg, mirror_y, tx, ty) for p in points]
+            if decimate_tol_mm > 0.0:
+                pts2d = _simplify_poly(pts2d, decimate_tol_mm)
+            if len(pts2d) < 3:
+                continue
+            if min_area_mm2 > 0.0 and _polygon_area_mm2(pts2d) < min_area_mm2:
+                continue
+
+            # build wire/face
+            wire = Part.makePolygon([(x, y, 0.0) for (x, y) in (pts2d + [pts2d[0]])])
+            if preview_2d:
+                by_layer[key].append(wire)
+            else:
+                try:
+                    face = Part.Face(wire)
+                except Exception:
+                    continue
+                # pick thickness & offset for this layer
+                if stack_mm and key in stack_mm:
+                    t_mm = float(stack_mm[key]["t_mm"])
+                    z0 = float(stack_mm[key]["z0_mm"])
                 else:
-                    try:
-                        face = Part.Face(wire)
-                    except Exception:
-                        continue
-                    # pick thickness & offset for this layer
-                    if stack_mm and key in stack_mm:
-                        t_mm = float(stack_mm[key]["t_mm"])
-                        z0 = float(stack_mm[key]["z0_mm"])
-                    else:
-                        t_mm = default_t_mm
-                        z0 = 0.0
-                    shp = face.extrude(FreeCAD.Vector(0, 0, t_mm))
-                    # translate to its bottom Z
-                    if z0 != 0.0:
-                        shp.translate(FreeCAD.Vector(0, 0, z0))
-                    by_layer[key].append(shp)
+                    t_mm = default_t_mm
+                    z0 = 0.0
+                shp = face.extrude(FreeCAD.Vector(0, 0, t_mm))
+                # translate to its bottom Z
+                if z0 != 0.0:
+                    shp.translate(FreeCAD.Vector(0, 0, z0))
+                by_layer[key].append(shp)
 
         # one compound per layer
         results = []
