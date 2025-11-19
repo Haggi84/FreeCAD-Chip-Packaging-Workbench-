@@ -419,18 +419,41 @@ def load_gds(gds_path,
                 return lin, (tx, ty)
 
             def _path_polygons(item):
+                def _coerce(payload):
+                    if payload is None:
+                        return []
+                    if hasattr(payload, "points"):
+                        return [payload.points]
+                    if hasattr(payload, "polygons"):
+                        return _coerce(getattr(payload, "polygons"))
+                    if isinstance(payload, (list, tuple, set)):
+                        acc = []
+                        for entry in payload:
+                            acc.extend(_coerce(entry))
+                        return acc
+                    try:
+                        seq = list(payload)
+                    except TypeError:
+                        return []
+                    if not seq:
+                        return []
+                    first = seq[0]
+                    if hasattr(first, "__len__") and len(first) >= 2:
+                        return [seq]
+                    return []
+
                 if hasattr(item, "to_polygons"):
                     try:
-                        return item.to_polygons()
+                        return _coerce(item.to_polygons())
                     except TypeError:
                         try:
-                            return item.to_polygons(True)
+                            return _coerce(item.to_polygons(True))
                         except Exception:
                             return []
                     except Exception:
                         return []
                 if hasattr(item, "points"):
-                    return [item.points]
+                    return _coerce(item.points)
                 return []
 
             identity = (1.0, 0.0, 0.0, 1.0)
