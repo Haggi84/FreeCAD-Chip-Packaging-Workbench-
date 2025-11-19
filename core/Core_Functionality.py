@@ -350,6 +350,86 @@ def load_gds(gds_path,
         # collect wires/faces per layer (respecting hierarchy transforms)
         top_cells = lib.top_level() or list(lib.cells)
 
+        def _manual_poly_map(cell):
+            """Fallback that flattens a cell copy and groups polygons manually."""
+
+            def _to_points(seq):
+                pts = []
+                for p in seq:
+                    try:
+                        x, y = float(p[0]), float(p[1])
+                    except Exception:
+                        continue
+                    pts.append((x, y))
+                return pts
+
+            def _first_attr(obj, primary, plural):
+                if hasattr(obj, primary):
+                    return getattr(obj, primary)
+                if hasattr(obj, plural):
+                    values = getattr(obj, plural)
+                    if values:
+                        return values[0]
+                return 0
+
+            try:
+                flat = gdstk.Cell(f"__flat__{cell.name}")
+                flat.add(gdstk.Reference(cell))
+            except Exception:
+                flat = None
+            if flat is not None:
+                try:
+                    flat.flatten(True)
+                except TypeError:
+                    flat.flatten()
+                except Exception:
+                    pass
+            else:
+                flat = cell
+
+            poly_map = {}
+
+            def _append(layer, datatype, points):
+                if not points:
+                    return
+                key = (int(layer or 0), int(datatype or 0))
+                poly_map.setdefault(key, []).append(points)
+
+            polygon_carriers = (
+                getattr(flat, "polygons", None),
+                getattr(flat, "paths", None),
+                getattr(flat, "flexpaths", None),
+                getattr(flat, "robustpaths", None),
+            )
+            for carrier in polygon_carriers:
+                if not carrier:
+                    continue
+                for item in carrier:
+                    polys = []
+                    if hasattr(item, "to_polygons"):
+                        try:
+                            polys = item.to_polygons()
+                        except TypeError:
+                            try:
+                                polys = item.to_polygons(True)
+                            except Exception:
+                                polys = []
+                        except Exception:
+                            polys = []
+                    elif hasattr(item, "points"):
+                        polys = [item.points]
+                    for pts in polys:
+                        pts_list = _to_points(pts)
+                        if not pts_list:
+                            continue
+                        layer = _first_attr(item, "layer", "layers")
+                        datatype = _first_attr(item, "datatype", "datatypes")
+                        _append(layer, datatype, pts_list)
+
+            if poly_map:
+                return poly_map
+            raise RuntimeError("Manual polygon grouping produced no geometry")
+
         def _poly_map(cell):
             """Return polygons grouped by (layer, datatype) for a cell."""
             attempts = [
@@ -370,9 +450,13 @@ def load_gds(gds_path,
                     continue
                 if isinstance(result, dict):
                     return result
-            if last_error:
-                raise last_error
-            raise RuntimeError("Unable to query polygons by spec for cell")
+            # some gdstk versions cannot group by spec; fall back to a manual flatten
+            try:
+                return _manual_poly_map(cell)
+            except Exception:
+                if last_error:
+                    raise last_error
+                raise
 
         def iter_polygons():
             for cell in top_cells:
