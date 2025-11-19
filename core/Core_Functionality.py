@@ -351,7 +351,7 @@ def load_gds(gds_path,
         top_cells = lib.top_level() or list(lib.cells)
 
         def _manual_poly_map(cell):
-            """Fallback that flattens a cell copy and groups polygons manually."""
+            """Fallback that walks the hierarchy manually and groups polygons."""
 
             def _to_points(seq):
                 pts = []
@@ -372,21 +372,57 @@ def load_gds(gds_path,
                         return values[0]
                 return 0
 
-            try:
-                flat = gdstk.Cell(f"__flat__{cell.name}")
-                flat.add(gdstk.Reference(cell))
-            except Exception:
-                flat = None
-            if flat is not None:
-                try:
-                    flat.flatten(True)
-                except TypeError:
-                    flat.flatten()
-                except Exception:
-                    pass
-            else:
-                flat = cell
+            def _matrix_mul(m1, m2):
+                a, b, c, d = m1
+                e, f, g, h = m2
+                return (
+                    a * e + b * g,
+                    a * f + b * h,
+                    c * e + d * g,
+                    c * f + d * h,
+                )
 
+            def _apply_matrix(m, pt):
+                a, b, c, d = m
+                x, y = pt
+                return (a * x + b * y, c * x + d * y)
+
+            def _reference_linear(ref):
+                mag = float(getattr(ref, "magnification", 1.0) or 1.0)
+                rot = float(getattr(ref, "rotation", 0.0) or 0.0)
+                rot_rad = math.radians(rot)
+                cos_r = math.cos(rot_rad)
+                sin_r = math.sin(rot_rad)
+                if getattr(ref, "x_reflection", False):
+                    lin = (cos_r, sin_r, sin_r, -cos_r)
+                else:
+                    lin = (cos_r, -sin_r, sin_r, cos_r)
+                lin = tuple(mag * v for v in lin)
+                origin = getattr(ref, "origin", (0.0, 0.0)) or (0.0, 0.0)
+                try:
+                    tx = float(origin[0])
+                    ty = float(origin[1])
+                except Exception:
+                    tx = ty = 0.0
+                return lin, (tx, ty)
+
+            def _path_polygons(item):
+                if hasattr(item, "to_polygons"):
+                    try:
+                        return item.to_polygons()
+                    except TypeError:
+                        try:
+                            return item.to_polygons(True)
+                        except Exception:
+                            return []
+                    except Exception:
+                        return []
+                if hasattr(item, "points"):
+                    return [item.points]
+                return []
+
+            identity = (1.0, 0.0, 0.0, 1.0)
+            stack = set()
             poly_map = {}
 
             def _append(layer, datatype, points):
@@ -395,36 +431,75 @@ def load_gds(gds_path,
                 key = (int(layer or 0), int(datatype or 0))
                 poly_map.setdefault(key, []).append(points)
 
-            polygon_carriers = (
-                getattr(flat, "polygons", None),
-                getattr(flat, "paths", None),
-                getattr(flat, "flexpaths", None),
-                getattr(flat, "robustpaths", None),
-            )
-            for carrier in polygon_carriers:
+            def _transform_and_store(carrier, matrix, offset):
                 if not carrier:
-                    continue
+                    return
                 for item in carrier:
-                    polys = []
-                    if hasattr(item, "to_polygons"):
-                        try:
-                            polys = item.to_polygons()
-                        except TypeError:
-                            try:
-                                polys = item.to_polygons(True)
-                            except Exception:
-                                polys = []
-                        except Exception:
-                            polys = []
-                    elif hasattr(item, "points"):
-                        polys = [item.points]
+                    polys = _path_polygons(item)
+                    layer = _first_attr(item, "layer", "layers")
+                    datatype = _first_attr(item, "datatype", "datatypes")
                     for pts in polys:
-                        pts_list = _to_points(pts)
-                        if not pts_list:
+                        raw = _to_points(pts)
+                        if not raw:
                             continue
-                        layer = _first_attr(item, "layer", "layers")
-                        datatype = _first_attr(item, "datatype", "datatypes")
-                        _append(layer, datatype, pts_list)
+                        transformed = []
+                        for (x, y) in raw:
+                            xr, yr = _apply_matrix(matrix, (x, y))
+                            transformed.append((xr + offset[0], yr + offset[1]))
+                        _append(layer, datatype, transformed)
+
+            def _walk(cur_cell, matrix, offset):
+                cell_id = id(cur_cell)
+                if cell_id in stack:
+                    return
+                stack.add(cell_id)
+                try:
+                    _transform_and_store(getattr(cur_cell, "polygons", None), matrix, offset)
+                    _transform_and_store(getattr(cur_cell, "paths", None), matrix, offset)
+                    _transform_and_store(getattr(cur_cell, "flexpaths", None), matrix, offset)
+                    _transform_and_store(getattr(cur_cell, "robustpaths", None), matrix, offset)
+                    for ref in getattr(cur_cell, "references", []) or []:
+                        target = getattr(ref, "cell", None)
+                        if target is None:
+                            continue
+                        lin, base_offset = _reference_linear(ref)
+                        shifts = None
+                        repetition = getattr(ref, "repetition", None)
+                        if repetition is not None:
+                            try:
+                                offsets = repetition.offsets()
+                            except TypeError:
+                                offsets = getattr(repetition, "offsets", None)
+                            try:
+                                shifts = [(float(dx), float(dy)) for (dx, dy) in offsets] if offsets is not None else None
+                            except Exception:
+                                shifts = None
+                        if not shifts:
+                            cols = int(getattr(ref, "columns", 1) or 1)
+                            rows = int(getattr(ref, "rows", 1) or 1)
+                            spacing = getattr(ref, "spacing", (0.0, 0.0)) or (0.0, 0.0)
+                            try:
+                                sx = float(spacing[0])
+                            except Exception:
+                                sx = 0.0
+                            try:
+                                sy = float(spacing[1])
+                            except Exception:
+                                sy = 0.0
+                            cols = max(1, cols)
+                            rows = max(1, rows)
+                            shifts = [(ci * sx, ri * sy) for ci in range(cols) for ri in range(rows)]
+                        composed_matrix = _matrix_mul(matrix, lin)
+                        for shift in shifts:
+                            shift_vec = _apply_matrix(lin, shift)
+                            child_offset = (base_offset[0] + shift_vec[0], base_offset[1] + shift_vec[1])
+                            shift_world = _apply_matrix(matrix, child_offset)
+                            new_offset = (offset[0] + shift_world[0], offset[1] + shift_world[1])
+                            _walk(target, composed_matrix, new_offset)
+                finally:
+                    stack.remove(cell_id)
+
+            _walk(cell, identity, (0.0, 0.0))
 
             if poly_map:
                 return poly_map
