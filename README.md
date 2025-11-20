@@ -7,6 +7,7 @@ Following features are currently planned:
 
 - Importing a full visualization for GDSII files. E.g. directly generated out of the software KLayout (https://www.klayout.de/)
 - An editor and/or a library for importing leadframe structures for chips
+- an library that allows to gather leadframes from an online library
 - functionality to place chips and chiplets inside an housing
 - plan bonding wires
 - assign materials
