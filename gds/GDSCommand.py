@@ -97,16 +97,48 @@ def load_gds_layers():
             except Exception:
                 pass
 
-            shapes = Core_Functionality.load_gds(
-                gds_path,
-                selected_layers,
-                transform=None,
-                preview_2d=True,
-                compound_per_layer=True,
-                min_area_mm2=min_area,
-                decimate_tol_mm=decimate,
-                skip_fill_datatype=skip_fill
-            )
+            progress_dialog = QtWidgets.QProgressDialog("Importing GDS layers...", "Cancel", 0, 0, FreeCADGui.getMainWindow())
+            progress_dialog.setWindowModality(QtCore.Qt.ApplicationModal)
+            progress_dialog.setMinimumDuration(0)
+            progress_dialog.setAutoClose(False)
+            progress_dialog.setWindowTitle("GDS Import")
+            progress_dialog.show()
+            # Force the dialog to paint before the long-running import starts so
+            # users always see progress feedback.
+            QtWidgets.QApplication.processEvents()
+
+            cancelled = False
+
+            def progress_callback(current, total, message=""):
+                nonlocal cancelled
+                total = max(int(total), 1)
+                progress_dialog.setMaximum(total)
+                progress_dialog.setValue(int(current))
+                progress_dialog.setLabelText(message or "Importing GDS layers...")
+                QtWidgets.QApplication.processEvents()
+                if progress_dialog.wasCanceled():
+                    cancelled = True
+                    return False
+                return True
+
+            try:
+                shapes = Core_Functionality.load_gds(
+                    gds_path,
+                    selected_layers,
+                    transform=None,
+                    preview_2d=True,
+                    compound_per_layer=True,
+                    min_area_mm2=min_area,
+                    decimate_tol_mm=decimate,
+                    skip_fill_datatype=skip_fill,
+                    progress_callback=progress_callback
+                )
+            finally:
+                progress_dialog.close()
+
+            if cancelled:
+                QtWidgets.QMessageBox.information(None, "Cancelled", "GDS layer import cancelled.")
+                return None, None, None, None, None, None, None
             if not shapes:
                 QtWidgets.QMessageBox.warning(None, "Warning", "No shapes found for the selected layers.")
                 return None, None, None, None, None, None, None
