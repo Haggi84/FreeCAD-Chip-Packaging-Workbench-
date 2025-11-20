@@ -141,6 +141,9 @@ class ManualWireBonding:
     
     def is_bond_finger(self, obj, obj_name, obj_label):
         """Check if object is a bond finger (customize these conditions)."""
+        if hasattr(obj, "IsContactPoint") and getattr(obj, "IsContactPoint", False):
+            return True
+
         # Add your specific conditions for identifying bond fingers
         finger_keywords = ['finger', 'bond', 'lead', 'terminal', 'pin', 'leadframe']
         
@@ -187,6 +190,12 @@ class ManualWireBonding:
     
     def get_bond_finger_connection_point(self, bond_finger, sub):
         """Get the connection point on a bond finger."""
+        if hasattr(bond_finger, "IsContactPoint") and getattr(bond_finger, "IsContactPoint", False):
+            try:
+                return bond_finger.ContactPoint
+            except Exception:
+                pass
+
         try:
             if sub and "Vertex" in sub:
                 # Use selected vertex
