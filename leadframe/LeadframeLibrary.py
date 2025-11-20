@@ -235,7 +235,7 @@ class LeadframeLibraryCommand:
         return {
             "MenuText": "Leadframe Online Library",
             "ToolTip": "Browse MirrorSemi leadframes, preview, and import them",
-            "Pixmap": get_icon("Leadframe_Configurator.png"),
+            "Pixmap": get_icon("Leadframe_Library.svg"),
         }
 
     def Activated(self):
