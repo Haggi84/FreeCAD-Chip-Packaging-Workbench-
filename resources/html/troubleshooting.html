@@ -1,0 +1,104 @@
+<h2>Troubleshooting Guide</h2>
+
+<h3>⚠ Common Issues and Solutions</h3>
+
+<h4>● No Layers Found During Import</h4>
+<p><strong>Possible Causes:</strong></p>
+<ul>
+<li>GDS and LYP files don't match</li>
+<li>LYP file has all layers hidden</li>
+<li>Files are corrupted or incomplete</li>
+<li>Wrong file format selected</li>
+</ul>
+<p><strong>Solutions:</strong></p>
+<ul>
+<li>Verify GDS and LYP files are from same project</li>
+<li>Check LYP file in KLayout - ensure layers are visible</li>
+<li>Try importing without LYP file first</li>
+<li>Use "Import All Layers" to see if any layers appear</li>
+        </ul>
+        
+        <h4>● GDS Import Fails</h4>
+        <p><strong>Possible Causes:</strong></p>
+        <ul>
+        <li>File path contains special characters</li>
+        <li>Insufficient memory for large files</li>
+        <li>GDS file contains no polygons</li>
+        <li>File permissions issue</li>
+        </ul>
+        <p><strong>Solutions:</strong></p>
+        <ul>
+        <li>Move files to simple path (no spaces/special chars)</li>
+        <li>Close other applications to free memory</li>
+        <li>Verify GDS file in KLayout first</li>
+        <li>Check file permissions and try different directory</li>
+        </ul>
+        
+        <h4>● Display/Visual Issues</h4>
+        <p><strong>Possible Causes:</strong></p>
+        <ul>
+        <li>Graphics driver compatibility</li>
+        <li>Transparency settings conflict</li>
+        <li>Color mode mismatch</li>
+        <li>Large file performance issues</li>
+        </ul>
+        <p><strong>Solutions:</strong></p>
+        <ul>
+        <li>Update graphics drivers</li>
+        <li>Try different color modes (KLayout vs Material)</li>
+        <li>Disable transparency for complex layouts</li>
+        <li>Use 2D preview mode for large designs</li>
+        </ul>
+        
+        <h4>● Wire Bonding Not Working</h4>
+        <p><strong>Possible Causes:</strong></p>
+        <ul>
+        <li>No valid die pad objects selected</li>
+        <li>No valid bond finger objects available</li>
+        <li>Selection mode confusion</li>
+        <li>Session not properly started</li>
+        </ul>
+        <p><strong>Solutions:</strong></p>
+        <ul>
+        <li>Ensure objects contain keywords: 'die', 'pad', 'metal' for die pads</li>
+        <li>Ensure objects contain keywords: 'lead', 'finger', 'terminal' for bond fingers</li>
+        <li>Check console messages for selection feedback</li>
+        <li>Restart wire bonding session if needed</li>
+        </ul>
+        
+        <h3>► Performance Tips</h3>
+        <ul>
+        <li><strong>Use "Import All Layers"</strong> for quick previews, then refine selection</li>
+        <li><strong>Enable decimation</strong> for very complex layouts with many polygons</li>
+        <li><strong>Use 2D preview mode</strong> when working with large GDS files</li>
+        <li><strong>Close property panel</strong> when not actively modifying layers</li>
+        <li><strong>Import only needed layers</strong> rather than entire GDS file</li>
+        <li><strong>Use material styling</strong> instead of KLayout matching for better performance</li>
+        </ul>
+        
+        <h3>► Debugging Steps</h3>
+        <ol>
+        <li><strong>Check Python Console</strong> for error messages and warnings</li>
+        <li><strong>Verify file compatibility</strong> by opening in KLayout first</li>
+        <li><strong>Test with simple files</strong> to isolate the issue</li>
+        <li><strong>Check FreeCAD version</strong> compatibility</li>
+        <li><strong>Look for workbench updates</strong> that might fix known issues</li>
+        </ol>
+        
+        <h3>► Getting Help</h3>
+        <p>If issues persist:</p>
+        <ul>
+        <li>Check the Python Console for detailed error messages</li>
+        <li>Verify your GDS and LYP files work in KLayout</li>
+        <li>Ensure you have the latest version of the workbench</li>
+        
+        <p><li>Contact the development team with:
+            <ul>
+            <li>FreeCAD version information</li>
+            <li>Error messages from Python Console</li>
+            <li>Sample files that reproduce the issue</li>
+            <li>Steps to reproduce the problem</li>
+            </ul>
+        </li>
+        </p>
+        </ul>

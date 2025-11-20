@@ -1,0 +1,687 @@
+import xml.etree.ElementTree as ET
+import math
+import gdstk
+<<<<<<< HEAD:mymodule.py
+import FreeCAD, Part
+from FreeCAD import Base
+
+ILD_SPACING_UM = 10.0
+
+def _as_iter(obj):
+    if obj is None:
+        return []
+    if isinstance(obj, (list, tuple)):
+        return obj
+    return [obj]
+
+def _iter_xy(seq):
+    """Yield (x,y) pairs from either a numpy Nx2 array, a list of pairs, or a gdstk.Polygon."""
+    pts = getattr(seq, 'points', seq)
+    try:
+        for p in pts:
+            try:
+                x = float(p[0]); y = float(p[1])
+            except Exception:
+                continue
+            yield x, y
+    except TypeError:
+        return
+
+=======
+import FreeCAD
+import Part
+from FreeCAD import Base
+
+# -------------------------------
+# KLayout LYP parsing (colors)
+# -------------------------------
+
+>>>>>>> Refactoring_Layout:core/Core_Functionality.py
+def parse_lyp(lyp_path, layer_map=None):
+    try:
+        tree = ET.parse(lyp_path)
+        root = tree.getroot()
+        layers = []
+        unique_colors = set()
+        for prop in root.findall('.//properties'):
+            d = {c.tag: (c.text if c.text else None) for c in prop}
+            source = d.get('source')
+            visible = d.get('visible', 'false') == 'true'
+            if not (visible and source):
+                continue
+            try:
+                lid, dt = map(int, source.split('/'))
+            except Exception:
+                FreeCAD.Console.PrintWarning(f"Invalid source in LYP: {source}\n"); continue
+            d['layer_id'] = lid; d['datatype'] = dt
+            layers.append(d)
+            unique_colors.add((d.get('frame-color', '#000000'), d.get('fill-color', '#FFFFFF')))
+        return layers, unique_colors
+    except FileNotFoundError:
+        FreeCAD.Console.PrintError(f"LYP not found: {lyp_path}\n"); return [], set()
+    except ET.ParseError as e:
+        FreeCAD.Console.PrintError(f"LYP parse error: {e}\n"); return [], set()
+    except Exception as e:
+<<<<<<< HEAD:mymodule.py
+        FreeCAD.Console.PrintError(f"LYP error: {e}\n"); return [], set()
+=======
+        FreeCAD.Console.PrintError(f"An error occurred while parsing LYP file {lyp_path}: {str(e)}\n")
+        return ([], set())
+    
+# ---------------------------------------
+# IHP .map parsing (technology mapping)
+# ---------------------------------------
+>>>>>>> Refactoring_Layout:core/Core_Functionality.py
+
+def parse_map(map_path):
+    tech = {}
+    if not map_path:
+        return tech
+    try:
+        with open(map_path, 'r', encoding='utf-8', errors='ignore') as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith('#'): continue
+                low = line.lower()
+                if any(k in low for k in ('====','copyright','license','edi stream','version')): continue
+                parts = [p for p in line.replace(',', ' ').split() if p]
+                if len(parts) < 3: continue
+                try:
+                    lid = int(parts[0]); dt = int(parts[1])
+                except Exception:
+                    continue
+                edi = parts[2]
+                types = set(p.upper() for p in parts[3:])
+                key = (lid, dt)
+                rec = tech.setdefault(key, {'edi_name': edi, 'edi_types': set()})
+                rec['edi_name'] = edi
+                rec['edi_types'].update(types)
+    except FileNotFoundError:
+        FreeCAD.Console.PrintWarning(f"MAP not found: {map_path}\n"); return {}
+    except Exception as e:
+        FreeCAD.Console.PrintError(f"MAP error: {e}\n"); return {}
+    return tech
+
+<<<<<<< HEAD:mymodule.py
+parse_ihp_map = parse_map
+=======
+# ------------------------------------------------
+# Thickness & stacking helpers (simple defaults)
+# ------------------------------------------------
+
+# Default metal/via thicknesses [µm] – adjust to your PDK as needed.
+THICKNESS_UM = {
+    # routing metals
+    "METAL1": 0.9, "METAL2": 0.9, "METAL3": 0.9, "METAL4": 1.2, "METAL5": 2.0,
+    # top metals
+    "TOPMETAL1": 2.0, "TOPMETAL2": 3.0,
+    # vias
+    "VIA1": 0.5, "VIA2": 0.5, "VIA3": 0.5, "VIA4": 0.5, "TOPVIA1": 1.0, "TOPVIA2": 1.0,
+    # components / comp (use a tiny plate for visibility)
+    "COMP": 0.2,
+}
+>>>>>>> Refactoring_Layout:core/Core_Functionality.py
+
+def _mm_per_db_unit(lib: gdstk.Library) -> float:
+    unit_m = getattr(lib, 'unit', 1e-6)
+    return unit_m * 1000.0
+
+<<<<<<< HEAD:mymodule.py
+def derive_base_scale_mm(gds_path: str) -> float:
+=======
+
+def _norm(s):
+    return (s or "").upper()
+
+
+def thickness_um_for_edi(edi_name: str) -> float:
+    """
+    Returns thickness in µm for an EDI layer name (best-effort).
+    """
+    n = _norm(edi_name).replace("/", "_")
+    # direct hit
+    if n in THICKNESS_UM:
+        return THICKNESS_UM[n]
+    # pattern-based
+    for key in list(THICKNESS_UM.keys()):
+        if n.startswith(key):
+            return THICKNESS_UM[key]
+    # try to pull trailing number (e.g., Metal5, TopMetal2)
+    if "METAL" in n:
+        # fallback for any metal
+        return 1.0
+    if "VIA" in n:
+        return 0.5
+    return 0.2
+
+def stack_rank_for_edi(edi_name: str) -> int:
+    """
+    Compute a sort key for vertical order. Higher rank = closer to the top.
+    TopMetal2 > TopMetal1 > Metal5 > ... > Metal1 > COMP > Vias (around their metals)
+    """
+    n = _norm(edi_name)
+    if n.startswith("TOPMETAL"):
+        # TopMetal2 -> 700, TopMetal1 -> 600
+        try:
+            num = int(''.join([c for c in n if c.isdigit()]) or "0")
+        except Exception:
+            num = 0
+        return 600 + 100 * num
+    if n.startswith("METAL"):
+        try:
+            num = int(''.join([c for c in n if c.isdigit()]) or "1")
+        except Exception:
+            num = 1
+        return 100 * num  # Metal5=500, Metal1=100
+    if n.startswith("COMP"):
+        return 50
+    if n.startswith("TOPVIA"):
+        return 650  # around top metals
+    if n.startswith("VIA"):
+        # place near its upper metal (roughly)
+        try:
+            num = int(''.join([c for c in n if c.isdigit()]) or "1")
+        except Exception:
+            num = 1
+        return 100 * num + 10
+    return 0
+
+def build_stack_mm(selected_layers, ihp_map, ild_um: float = ILD_SPACING_UM):
+    """
+    Build a per-layer stacking dictionary:
+        key (layer_id, datatype) -> {'t_mm': float, 'z0_mm': float}
+
+    z0_mm is the *bottom* Z of that layer; thickness is t_mm.
+    Order is computed from edi_name (best-effort).
+    """
+    # Collect ranks & thickness
+    entries = []
+    for L in selected_layers:
+        lid = L.get("layer_id", 0)
+        dt = L.get("datatype", 0)
+        m = ihp_map.get((lid, dt), None)
+        edi = m["edi_name"] if m else L.get("name", "Metal1")
+        rank = stack_rank_for_edi(edi)
+        t_um = thickness_um_for_edi(edi)
+        entries.append(((lid, dt), edi, rank, t_um))
+
+    # Sort by rank ascending (bottom to top)
+    entries.sort(key=lambda e: e[2])
+
+    z_current_um = 0.0
+    out = {}
+    for idx, (key, edi, rank, t_um) in enumerate(entries):
+        # Place at current Z, then add thickness + dielectric (except above top of stack)
+        out[key] = {"t_mm": t_um / 1000.0, "z0_mm": z_current_um / 1000.0}
+        z_current_um += t_um
+        # add ILD spacing before next layer if that next one is a higher rank "metal-ish"
+        if idx < len(entries) - 1:
+            out_next = entries[idx + 1]
+            if "METAL" in _norm(out_next[1]):
+                z_current_um += ild_um
+
+    return out
+
+# ------------------------------------------------
+# GDS inspection & geometry creation helpers
+# ------------------------------------------------
+
+def get_gds_layer(gds_path):
+    """
+    Analyze GDS and return set of (layer_id, datatype) that contain polygons.
+    """
+>>>>>>> Refactoring_Layout:core/Core_Functionality.py
+    try:
+        lib = gdstk.read_gds(gds_path)
+        return _mm_per_db_unit(lib)
+    except Exception:
+        return 0.001
+
+<<<<<<< HEAD:mymodule.py
+def get_gds_layer(gds_path: str):
+    try:
+        lib = gdstk.read_gds(gds_path)
+        seen = set()
+        for cell in _as_iter(getattr(lib, 'cells', [])):
+            for poly in _as_iter(getattr(cell, 'polygons', [])):
+                L = getattr(poly, 'layer', 0); D = getattr(poly, 'datatype', 0)
+                seen.add((L, D))
+            for path in _as_iter(getattr(cell, 'paths', [])):
+                if hasattr(path, 'layers') and getattr(path, 'layers'):
+                    dts = getattr(path, 'datatypes', None)
+                    for i, L in enumerate(path.layers):
+                        D = dts[i] if (dts and i < len(dts)) else 0
+                        seen.add((L, D))
+                else:
+                    L = getattr(path, 'layer', 0); D = getattr(path, 'datatype', 0)
+                    seen.add((L, D))
+        return seen
+=======
+def _transform_point(p, s, rot_deg, mirror_y, tx, ty):
+    """Apply scale (to mm) -> optional mirror(Y) -> rotation -> translation."""
+    x, y = p[0] * s, p[1] * s
+    if mirror_y:
+        y = -y
+    r = math.radians(rot_deg)
+    xr = x * math.cos(r) - y * math.sin(r)
+    yr = x * math.sin(r) + y * math.cos(r)
+    return xr + tx, yr + ty
+
+def _polygon_area_mm2(pts):
+    """Signed area in squared model units (mm^2 once 'pts' are scaled)."""
+    a = 0.0
+    for i in range(len(pts)):
+        x1, y1 = pts[i]
+        x2, y2 = pts[(i + 1) % len(pts)]
+        a += x1 * y2 - x2 * y1
+    return abs(a) * 0.5
+
+def _simplify_poly(points, eps):
+    """Drop almost-collinear or too-close points. eps in mm."""
+    if len(points) <= 3 or eps <= 0:
+        return points
+    out = [points[0]]
+    for i in range(1, len(points) - 1):
+        x0, y0 = out[-1]
+        x1, y1 = points[i]
+        x2, y2 = points[i + 1]
+        # distance to previous point
+        if (x1 - x0) ** 2 + (y1 - y0) ** 2 < eps * eps:
+            continue
+        # collinearity check via cross-product magnitude
+        cross = abs((x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0))
+        if cross < eps:
+            continue
+        out.append((x1, y1))
+    out.append(points[-1])
+    return out if len(out) >= 3 else points
+
+def load_gds(gds_path,
+             selected_layers,
+             transform=None,
+             preview_2d=False,
+             compound_per_layer=True,
+             min_area_mm2=0.0,
+             decimate_tol_mm=0.0,
+             skip_fill_datatype=True,
+             stack_mm=None, # NEW: dict(layer_name, layer_datatype) -> {'t_mm', 'z0_mm'} for 3D stacking
+             progress_callback=None
+             ):
+    """
+    GDS loader:
+    - builds ONE compound Part shape per selected (layer,datatype)
+    - optional 2D preview (wires only) or 3D with per-layer thickness/offset
+    - filters tiny polygons and optional FILL (datatype 22) by default
+
+    Returns: list of dicts (one entry per selected layer/DT), each:
+        {
+          'shape': Part.Shape,
+          'layer_id': int,
+          'datatype': int,
+          'frame_hex': '#rrggbb',
+          'fill_hex':  '#rrggbb',
+        }
+    """
+    try:
+        lib = gdstk.read_gds(gds_path)
+        if transform is None:
+            transform = {}
+
+        # base scale: mm per user unit
+        s = transform.get("scale", None)
+        if s is None:
+            s = (lib.unit * 1000.0) if hasattr(lib, "unit") and lib.unit else 0.001
+
+        rot_deg = float(transform.get("rot_deg", 0.0))
+        mirror_y = bool(transform.get("mirror_y", False))
+        tx = float(transform.get("tx", 0.0))
+        ty = float(transform.get("ty", 0.0))
+
+        # default thickness if no stack provided (thin preview)
+        default_t_mm = float(transform.get("z_thickness", 3)) if not preview_2d else 0.0
+
+        wanted = {(l.get("layer_id", 0), l.get("datatype", 0)) for l in selected_layers}
+        by_layer = {key: [] for key in wanted}
+
+        top_cells = lib.top_level() or lib.cells
+
+        def _points_array(obj):
+            """
+            Normalize polygon-like objects to a plain point array.
+
+            Some gdstk versions return Polygon objects instead of numpy arrays
+            both from get_polygons and from path flattening helpers. Handling
+            it in one place keeps downstream loops simple.
+            """
+
+            return obj.points if hasattr(obj, "points") else obj
+
+        def _polygons_from_cell(cell, depth=None, include_paths=True):
+            """
+            Return {(layer, datatype): [points, ...]} for a cell, flattening references.
+
+            Tries the newer get_polygons(by_spec=...) signature first, and falls back
+            to copying + flattening for older gdstk versions that don't support the
+            by_spec keyword.
+            """
+            try:
+                poly_map = cell.get_polygons(by_spec=True, include_paths=include_paths, depth=depth)
+                # Normalize polygon payloads to raw point arrays in case the
+                # gdstk version returns Polygon objects instead of numpy arrays.
+                if isinstance(poly_map, dict):
+                    norm = {}
+                    for key, polys in poly_map.items():
+                        norm[key] = [p.points if hasattr(p, "points") else p for p in polys]
+                    return norm
+                # Some versions without by_spec support return a flat list.
+                if isinstance(poly_map, (list, tuple)):
+                    norm = {}
+                    for poly in poly_map:
+                        pts = poly.points if hasattr(poly, "points") else poly
+                        lyr = getattr(poly, "layer", 0)
+                        dtype = getattr(poly, "datatype", 0)
+                        norm.setdefault((lyr, dtype), []).append(pts)
+                    return norm
+                return poly_map
+            except TypeError:
+                pass
+
+            clone = cell.copy(name=f"{cell.name}_flat_tmp")
+            try:
+                clone.flatten(depth=depth)
+            except TypeError:
+                try:
+                    # Older gdstk versions don't accept the depth keyword; try positional
+                    clone.flatten(depth)
+                except TypeError:
+                    # Oldest versions ignore depth entirely
+                    clone.flatten()
+
+            poly_map = {}
+            for poly in getattr(clone, "polygons", []):
+                pts = poly.points if hasattr(poly, "points") else poly
+                poly_map.setdefault((poly.layer, poly.datatype), []).append(pts)
+            if include_paths:
+                for path in getattr(clone, "paths", []):
+                    polys = [_points_array(p) for p in path.to_polygons()]
+                    layers_attr = getattr(path, "layers", None)
+                    dtypes_attr = getattr(path, "datatypes", None)
+
+                    # Normalize to list lengths matching polygon count
+                    def _expand(attr, fallback_name):
+                        if attr is None:
+                            val = getattr(path, fallback_name, 0)
+                            return [val] * len(polys)
+                        if not isinstance(attr, (list, tuple)):
+                            return [attr] * len(polys)
+                        if len(attr) >= len(polys):
+                            return list(attr[:len(polys)])
+                        if attr:
+                            return list(attr) + [attr[-1]] * (len(polys) - len(attr))
+                        return [0] * len(polys)
+
+                    layers = _expand(layers_attr, "layer")
+                    dtypes = _expand(dtypes_attr, "datatype")
+
+                    for pts, lyr, dtype in zip(polys, layers, dtypes):
+                        poly_map.setdefault((lyr, dtype), []).append(pts)
+            return poly_map
+
+        def iter_polygons():
+            for cell in top_cells:
+                poly_map = _polygons_from_cell(cell, depth=None, include_paths=True)
+                for (layer, datatype), polys in poly_map.items():
+                    for pts in polys:
+                        yield layer, datatype, pts
+
+        polygons = list(iter_polygons())
+
+        # optional progress tracking based on fully-instantiated polygons
+        progress_total = None
+        if progress_callback:
+            progress_total = 0
+            for layer, datatype, _ in polygons:
+                key = (layer, datatype)
+                if key not in wanted:
+                    continue
+                if skip_fill_datatype and datatype == 22:
+                    continue
+                progress_total += 1
+            progress_total = max(progress_total, 1)
+            progress_callback(0, progress_total, "Importing GDS layers...")
+
+        # collect wires/faces per layer
+        progress_count = 0
+        for layer, datatype, poly_pts in polygons:
+            poly_pts = _points_array(poly_pts)
+            key = (layer, datatype)
+            if key not in wanted:
+                continue
+            if skip_fill_datatype and datatype == 22:
+                # many PDKs: datatype 22 == FILL
+                continue
+
+            pts2d = [_transform_point(p, s, rot_deg, mirror_y, tx, ty) for p in poly_pts]
+            if decimate_tol_mm > 0.0:
+                pts2d = _simplify_poly(pts2d, decimate_tol_mm)
+            if len(pts2d) < 3:
+                continue
+            if min_area_mm2 > 0.0 and _polygon_area_mm2(pts2d) < min_area_mm2:
+                continue
+
+            progress_count += 1
+            if progress_callback:
+                message = f"Importing layer {layer}/{datatype} ({progress_count}/{progress_total})"
+                if progress_callback(progress_count, progress_total, message) is False:
+                    return []
+
+            # build wire/face
+            wire = Part.makePolygon([(x, y, 0.0) for (x, y) in (pts2d + [pts2d[0]])])
+            if preview_2d:
+                by_layer[key].append(wire)
+            else:
+                try:
+                    face = Part.Face(wire)
+                except Exception:
+                    continue
+                # pick thickness & offset for this layer
+                if stack_mm and key in stack_mm:
+                    t_mm = float(stack_mm[key]["t_mm"])
+                    z0 = float(stack_mm[key]["z0_mm"])
+                else:
+                    t_mm = default_t_mm
+                    z0 = 0.0
+                shp = face.extrude(FreeCAD.Vector(0, 0, t_mm))
+                # translate to its bottom Z
+                if z0 != 0.0:
+                    shp.translate(FreeCAD.Vector(0, 0, z0))
+                by_layer[key].append(shp)
+
+        # one compound per layer
+        results = []
+        for layer in selected_layers:
+            lid = layer.get("layer_id", 0)
+            dt = layer.get("datatype", 0)
+            parts = by_layer.get((lid, dt), [])
+            if not parts:
+                continue
+            compound = Part.makeCompound(parts) if compound_per_layer and len(parts) > 1 else parts[0]
+            results.append({
+                "shape": compound,
+                "layer_id": lid,
+                "datatype": dt,
+                "frame_hex": layer.get("frame-color", "#000000"),
+                "fill_hex": layer.get("fill-color", "#FFFFFF"),
+            })
+
+        if progress_callback and progress_total is not None:
+            progress_callback(progress_total, progress_total, "Finalizing GDS shapes...")
+        return results
+
+>>>>>>> Refactoring_Layout:core/Core_Functionality.py
+    except Exception as e:
+        FreeCAD.Console.PrintError(f"Failed to read GDS layers: {e}\n"); return set()
+
+def is_bondable(types):
+    if not types: return False
+    T = {t.upper() for t in types}
+<<<<<<< HEAD:mymodule.py
+    return any(t in T for t in ("PIN","LEFPIN","BUMP","PAD"))
+=======
+    return any(t in T for t in ("PIN", "LEFPIN", "BUMP", "PAD"))
+>>>>>>> Refactoring_Layout:core/Core_Functionality.py
+
+def style_for_material(edi_name: str, edi_types: set):
+    en = (edi_name or '').upper()
+    et = {t.upper() for t in (edi_types or set())}
+    if is_bondable(et):
+        return ("Bondable metal", (0.90,0.75,0.20), (0.25,0.20,0.10), 0)
+    if "VIA" in et and "FILL" not in et:
+        return ("Via metal", (0.35,0.35,0.35), (0.08,0.08,0.08), 0)
+    if "FILL" in et:
+        return ("Metal fill / dielectric", (0.70,0.85,1.0), (0.25,0.35,0.45), 70)
+    if en.startswith("TOPMETAL") or en.startswith("METAL") or "METAL" in et:
+        return ("Routing metal", (0.60,0.60,0.60), (0.12,0.12,0.12), 0)
+    if en.startswith("COMP") or en.startswith("DIEAREA") or "DIE" in et:
+        return ("Component/Die", (0.80,0.90,0.95), (0.25,0.35,0.45), 60)
+    return ("Generic", (0.75,0.75,0.75), (0.10,0.10,0.10), 0)
+
+def build_stack_mm(selected_layers, ihp_map, ild_um: float = ILD_SPACING_UM):
+    order = sorted(selected_layers, key=lambda L: (L.get('layer_id',0), L.get('datatype',0)))
+    z=0.0; out={}
+    for L in order:
+        lid=L.get('layer_id',0); dt=L.get('datatype',0)
+        entry = ihp_map.get((lid,dt), {})
+        types = entry.get('edi_types', set())
+        name  = (entry.get('edi_name') or L.get('name','')).upper()
+        if 'FILL' in types: th=0.01
+        elif 'VIA' in types: th=0.02
+        elif any(s in types for s in ('PIN','BUMP','PAD')) or 'METAL' in name: th=0.03
+        else: th=0.02
+        out[(lid,dt)] = (z, th)
+        z += th + (ild_um/1000.0)
+    return out
+
+def _apply_transform_xy(x, y, scale, rot_deg, mirror_y, tx, ty):
+    x*=scale; y*=scale
+    if mirror_y: y=-y
+    if rot_deg:
+        r = math.radians(rot_deg)
+        x, y = (x*math.cos(r)-y*math.sin(r), x*math.sin(r)+y*math.cos(r))
+    return x+tx, y+ty
+
+def _polygon_to_face(points2d):
+    pts = [Base.Vector(px, py, 0) for (px,py) in points2d]
+    if not pts:
+        return None
+    if pts[0].x != pts[-1].x or pts[0].y != pts[-1].y:
+        pts.append(Base.Vector(pts[0].x, pts[0].y, 0))
+    wire = Part.makePolygon(pts)
+    try:
+        return Part.Face(wire)
+    except Exception:
+        return wire
+
+def bbox_from_entries(entries):
+<<<<<<< HEAD:mymodule.py
+    bb=None
+    for e in entries or []:
+        try: b=e['shape'].BoundBox
+        except Exception: continue
+        if bb is None: bb=[b.XMin,b.YMin,b.XMax,b.YMax]
+        else: bb=[min(bb[0],b.XMin),min(bb[1],b.YMin),max(bb[2],b.XMax),max(bb[3],b.YMax)]
+    return tuple(bb) if bb else None
+
+def load_gds(gds_path, selected_layers, transform=None, preview_2d=True,
+             compound_per_layer=True, min_area_mm2=0.0, decimate_tol_mm=0.0,
+             skip_fill_datatype=False, stack_mm=None):
+    try:
+        lib = gdstk.read_gds(gds_path)
+    except Exception as e:
+        FreeCAD.Console.PrintError(f"Failed to read GDS: {e}\n"); return []
+
+    mm_per_db = _mm_per_db_unit(lib)
+    selected = {(L.get('layer_id',0), L.get('datatype',0)) for L in (selected_layers or [])}
+
+    tr = transform or {}
+    scale = tr.get('scale', 1.0) or 1.0
+    rot_deg = tr.get('rot_deg', 0.0)
+    mirror_y = bool(tr.get('mirror_y', False))
+    tx = tr.get('tx', 0.0); ty = tr.get('ty', 0.0)
+    z_thickness = float(tr.get('z_thickness', 0.03))
+
+    per_key = {}
+
+    for cell in _as_iter(getattr(lib, 'cells', [])):
+        for poly in _as_iter(getattr(cell, 'polygons', [])):
+            key = (getattr(poly, 'layer', 0), getattr(poly, 'datatype', 0))
+            if selected and key not in selected: continue
+            if skip_fill_datatype and key[1] != 0: continue
+            pts_mm = []
+            for (x, y) in _iter_xy(poly.points):
+                xm = x * mm_per_db; ym = y * mm_per_db
+                X, Y = _apply_transform_xy(xm, ym, scale, rot_deg, mirror_y, tx, ty)
+                pts_mm.append((X, Y))
+            face = _polygon_to_face(pts_mm)
+            if face is None: continue
+            if not preview_2d:
+                z0, th = (stack_mm.get(key) if (stack_mm and key in stack_mm) else (0.0, z_thickness))
+                try:
+                    solid = face.extrude(Base.Vector(0,0,th)); solid.translate(Base.Vector(0,0,z0)); shape = solid
+                except Exception:
+                    shape = face
+            else:
+                shape = face
+            per_key.setdefault(key, []).append(shape)
+
+        for path in _as_iter(getattr(cell, 'paths', [])):
+            if hasattr(path, 'layers') and getattr(path, 'layers'):
+                L = path.layers[0]; D = path.datatypes[0] if getattr(path,'datatypes', None) else 0
+            else:
+                L = getattr(path, 'layer', 0); D = getattr(path, 'datatype', 0)
+            key = (L, D)
+            if selected and key not in selected: continue
+            if skip_fill_datatype and key[1] != 0: continue
+            try:
+                polys = path.to_polygons()
+            except Exception:
+                polys = []
+            for raw in _as_iter(polys):
+                pts_mm = []
+                for (x, y) in _iter_xy(raw):
+                    xm = x * mm_per_db; ym = y * mm_per_db
+                    X, Y = _apply_transform_xy(xm, ym, scale, rot_deg, mirror_y, tx, ty)
+                    pts_mm.append((X, Y))
+                face = _polygon_to_face(pts_mm)
+                if face is None: continue
+                if not preview_2d:
+                    z0, th = (stack_mm.get(key) if (stack_mm and key in stack_mm) else (0.0, z_thickness))
+                    try:
+                        solid = face.extrude(Base.Vector(0,0,th)); solid.translate(Base.Vector(0,0,z0)); shape = solid
+                    except Exception:
+                        shape = face
+                else:
+                    shape = face
+                per_key.setdefault(key, []).append(shape)
+
+    entries = []
+    for (lid, dt), shapes in per_key.items():
+        try:
+            compound = Part.makeCompound(shapes) if (compound_per_layer and len(shapes) > 1) else shapes[0]
+        except Exception:
+            compound = shapes[0]
+        entries.append({"layer_id": lid, "datatype": dt, "shape": compound})
+    return entries
+=======
+    if not entries:
+        return None
+    xmin = ymin = float("inf")
+    xmax = ymax = float("-inf")
+    for entry in entries:
+        bb = entry["shape"].BoundBox
+        xmin = min(xmin, bb.XMin)
+        ymin = min(ymin, bb.YMin)
+        xmax = max(xmax, bb.XMax)
+        ymax = max(ymax, bb.YMax)
+    return xmin, ymin, xmax, ymax
+>>>>>>> Refactoring_Layout:core/Core_Functionality.py

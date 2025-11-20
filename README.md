@@ -63,8 +63,18 @@ Once you cloned the repository in the ```../FreeCAD/Mod/``` folder, you have to 
         "C:/Program Files/FreeCAD 1.0/bin/Lib/site-packages"
     ]
 }
+
+For Ubuntu Linux systems;
+
+{
+    "python.analysis.extraPaths": [
+    "/home/%USER%/usr/lib",
+    "/home/%USER%/usr/lib/python3.11/site-packages"
+    ]
+}
 ```
 
+<<<<<<< HEAD
 Replace `%USER%` with your Windows user name and change `1.0` to the FreeCAD version you installed (e.g., `0.21`).
 
 **Linux example**
@@ -80,6 +90,10 @@ Replace `%USER%` with your Windows user name and change `1.0` to the FreeCAD ver
 ```
 
 Replace `<username>` with your Linux user name and adjust the FreeCAD paths and version numbers to match your installation.
+=======
+https://lucid.app/lucidspark/ebb96ac9-c6d3-408a-9ead-51c1aa83efa1/edit?invitationId=inv_3ef9b6cf-fcc6-4717-8b34-9a1598ceaaf7
+_**note:** you have to replace ```%USER%``` with the corresponding directory of your system_
+>>>>>>> Refactoring_Layout
 
 
 

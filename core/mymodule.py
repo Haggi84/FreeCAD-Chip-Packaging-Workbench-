@@ -1,3 +1,4 @@
+
 import xml.etree.ElementTree as ET
 import math
 import gdstk
@@ -6,6 +7,9 @@ from FreeCAD import Base
 
 ILD_SPACING_UM = 10.0
 
+# -----------------------
+# Helpers
+# -----------------------
 def _as_iter(obj):
     if obj is None:
         return []
@@ -26,6 +30,9 @@ def _iter_xy(seq):
     except TypeError:
         return
 
+# -----------------------
+# Parsers
+# -----------------------
 def parse_lyp(lyp_path, layer_map=None):
     try:
         tree = ET.parse(lyp_path)
@@ -84,8 +91,11 @@ def parse_map(map_path):
 
 parse_ihp_map = parse_map
 
+# -----------------------
+# Geometry & units
+# -----------------------
 def _mm_per_db_unit(lib: gdstk.Library) -> float:
-    unit_m = getattr(lib, 'unit', 1e-6)
+    unit_m = getattr(lib, 'unit', 1e-6)  # default gdslib unit
     return unit_m * 1000.0
 
 def derive_base_scale_mm(gds_path: str) -> float:
@@ -116,6 +126,9 @@ def get_gds_layer(gds_path: str):
     except Exception as e:
         FreeCAD.Console.PrintError(f"Failed to read GDS layers: {e}\n"); return set()
 
+# -----------------------
+# Styling helpers
+# -----------------------
 def is_bondable(types):
     if not types: return False
     T = {t.upper() for t in types}
@@ -152,6 +165,9 @@ def build_stack_mm(selected_layers, ihp_map, ild_um: float = ILD_SPACING_UM):
         z += th + (ild_um/1000.0)
     return out
 
+# -----------------------
+# Geometry building
+# -----------------------
 def _apply_transform_xy(x, y, scale, rot_deg, mirror_y, tx, ty):
     x*=scale; y*=scale
     if mirror_y: y=-y

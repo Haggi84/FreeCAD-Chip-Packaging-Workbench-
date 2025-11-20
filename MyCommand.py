@@ -1,5 +1,5 @@
 import FreeCADGui
-import mymodule 
+from core import Core_Functionality 
 
 class MyCommand:
     def GetResources(self):
@@ -8,7 +8,7 @@ class MyCommand:
                 'Pixmap': ''}
 
     def Activated(self):
-        mymodule.run()
+        Core_Functionality.run()
 
     def IsActive(self):
         return True

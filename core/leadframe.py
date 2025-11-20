@@ -1,8 +1,7 @@
-from PySide2 import QtWidgets
-import FreeCAD, Part, Sketcher, FreeCADGui, os
 from FreeCAD import Base
+import FreeCAD, Part, Sketcher, FreeCADGui
 
-def create_leadframe(config, doc=None, gds_objects=None):
+def build_leadframe(config, doc=None, gds_objects=None):
     """Create a leadframe based on the provided configuration.
 
     Args:
@@ -214,38 +213,3 @@ def create_leadframe(config, doc=None, gds_objects=None):
 
     return doc
 
-def configure_leadframe():
-    from All_Class import LeadframeConfigurator
-    
-    """
-    Open the leadframe configuration dialog and create a leadframe based on user input.
-
-    Returns: configuration
-    """
-    dialog = LeadframeConfigurator()
-    if dialog.exec_():
-        return dialog.get_config()
-    return None
-
-
-class LeadframeCommand:
-    def GetResources(self):
-        icon_path = os.path.join(os.path.dirname(__file__),"resources", "icons", "Leadframe_Configurator.png")
-        return {
-            "MenuText": "Leadframe Configurator",
-            "ToolTip": "Configure and generate a leadframe geometry",
-            "Pixmap": icon_path
-        }
-
-    def Activated(self):
-        config = configure_leadframe()
-        if config:
-            create_leadframe(config)
-            QtWidgets.QMessageBox.information(None, "Success", f"Leadframe created:\n{config}")
-        else:
-            QtWidgets.QMessageBox.information(None, "Cancelled", "Leadframe configuration cancelled.")
-
-    def IsActive(self):
-        return True
-
-FreeCADGui.addCommand('LeadframeCommand', LeadframeCommand())

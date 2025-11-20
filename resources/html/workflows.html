@@ -1,0 +1,96 @@
+<h2>Workflow Examples</h2>
+
+<h3>► Complete Semiconductor Package Design</h3>
+<ol>
+<li><strong>Import GDSII Layout</strong>
+    <ul>
+    <li>Use "Load GDSII" command</li>
+    <li>Select die layout file</li>
+    <li>Choose bondable layers (metals)</li>
+    <li>Apply material styling</li>
+    </ul>
+</li>
+<li><strong>Create Leadframe</strong>
+    <ul>
+    <li>Use "Leadframe Configurator"</li>
+    <li>Select QFN/QFP package type</li>
+    <li>Set dimensions to match die size</li>
+    <li>Configure lead count and pitch</li>
+    </ul>
+</li>
+<li><strong>Stack Die on Leadframe</strong>
+    <ul>
+    <li>Use "Layer on Leadframe" command</li>
+    <li>Enable auto-fit with margin</li>
+    <li>Set rotation if needed</li>
+    <li>Generate stacked assembly</li>
+    </ul>
+</li>
+<li><strong>Add Wire Bonds</strong>
+    <ul>
+    <li>Use "Manual 2D Wire Bonding"</li>
+    <li>Click die pads → bond fingers</li>
+    <li>Use arc wires for longer spans</li>
+    <li>Finish session to generate report</li>
+    </ul>
+</li>
+<li><strong>Create Housing</strong>
+    <ul>
+    <li>Use "Housing Configurator"</li>
+    <li>Set wall thickness and clearance</li>
+    <li>Configure transparent lid</li>
+    <li>Generate final package</li>
+    </ul>
+</li>
+</ol>
+
+<h3>► Modification Workflow</h3>
+<ol>
+<li><strong>Update Layer Selection</strong>
+    <ul>
+    <li>Open Property Panel (right dock)</li>
+    <li>Click "Modify" button</li>
+    <li>Select different layers</li>
+    <li>Apply changes without re-import</li>
+    </ul>
+</li>
+<li><strong>Change Leadframe Parameters</strong>
+    <ul>
+    <li>Use Property Panel modification</li>
+    <li>Update dimensions or lead count</li>
+    <li>Regenerate with new parameters</li>
+    </ul>
+</li>
+<li><strong>Adjust Wire Bonds</strong>
+    <ul>
+    <li>Delete existing bond wires</li>
+    <li>Restart wire bonding session</li>
+    <li>Create new bond connections</li>
+    </ul>
+</li>
+</ol>
+
+<h3>► Styling Workflow</h3>
+<ol>
+<li><strong>KLayout Color Matching</strong>
+    <ul>
+    <li>Import with "Match KLayout" enabled</li>
+    <li>Uses exact LYP file colors</li>
+    <li>Best for KLayout compatibility</li>
+    </ul>
+</li>
+<li><strong>Material-Based Styling</strong>
+    <ul>
+    <li>Import with material styling</li>
+    <li>Colors based on layer type</li>
+    <li>Metals = gold, oxides = blue, etc.</li>
+    </ul>
+</li>
+<li><strong>Bondable Highlighting</strong>
+    <ul>
+    <li>Enable "Highlight Bondable"</li>
+    <li>Bondable layers shown in gold</li>
+    <li>Quick identification for wire bonding</li>
+    </ul>
+</li>
+</ol>

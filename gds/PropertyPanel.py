@@ -1,7 +1,19 @@
+<<<<<<< HEAD:PropertyPanel.py
 from PySide2 import QtWidgets, QtCore, QtGui
 import FreeCAD, FreeCADGui
 import mymodule
 from Color import hex_to_rgb
+=======
+from PySide2 import QtWidgets, QtGui, QtCore
+import Part, os, sys
+import FreeCAD, FreeCADGui
+
+root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, root_path)
+
+from core.Core_Functionality import style_for_material, is_bondable, parse_lyp
+from core.Color import hex_to_rgb, hex_to_qcolor
+>>>>>>> Refactoring_Layout:gds/PropertyPanel.py
 
 class PropertyPanel(QtWidgets.QDockWidget):
     def __init__(self, parent=None):
@@ -58,7 +70,14 @@ class PropertyPanel(QtWidgets.QDockWidget):
         self._fill_tech_table(self.selected_layers, unique_colors, layer_objects)
 
     def modify_layer_selection(self):
+<<<<<<< HEAD:PropertyPanel.py
         from All_Class import LayerSelector
+=======
+        from ui.LayerSelector import LayerSelector
+        from core import Core_Functionality
+
+        """Reopen the layer selection dialog to modify selected layers."""
+>>>>>>> Refactoring_Layout:gds/PropertyPanel.py
         if not self.gds_path or not self.lyp_path or not self.filtered_layers:
             QtWidgets.QMessageBox.critical(None, "Error", "Missing file paths or layer metadata."); return
         dlg = LayerSelector(self.filtered_layers, self.selected_layers, options=self.options)
@@ -99,8 +118,91 @@ class PropertyPanel(QtWidgets.QDockWidget):
             obj.ViewObject.ShapeColor = shape_rgb; obj.ViewObject.LineColor = line_rgb; obj.ViewObject.Transparency = tr
             layer_objects.setdefault((lid,dt), []).append(obj)
 
+<<<<<<< HEAD:PropertyPanel.py
         try: doc.commitTransaction()
         except Exception: pass
         doc.recompute()
         self.update_properties(selected_layers, mymodule.parse_lyp(self.lyp_path)[1], layer_objects)
         FreeCADGui.activeDocument().activeView().viewIsometric(); FreeCADGui.SendMsgToActiveView("ViewFit")
+=======
+
+            layer_objects = {}
+            shapes = Core_Functionality.load_gds(
+                self.gds_path,
+                selected_layers,
+                transform=None,
+                preview_2d=True,
+                compound_per_layer=True,
+                min_area_mm2=min_area,
+                decimate_tol_mm=decimate,
+                skip_fill_datatype=skip_fill
+            )
+            if not shapes:
+                QtWidgets.QMessageBox.warning(None, "Warning", "No shapes found for the selected layers.")
+                return
+            
+            # Clear existing objects
+            try:
+                for obj in doc.Objects:
+                    doc.removeObject(obj.Name)
+
+            except Exception as e:
+                        FreeCAD.Console.PrintError(f"Error removing object {obj.Name}: {str(e)}\n")
+
+            use_klayout_colors = match_klayout
+            highlight_bondable = bool(options.get("highlight_bondable", True))
+            
+            for layer in selected_layers:
+                layer_id = layer.get("layer_id", 0)
+                datatype = layer.get("datatype", 0)
+                layer_name = layer.get("name", "Unnamed")
+                frame_color = layer.get("frame-color", "#000000")
+                fill_color = layer.get("fill-color", "#FFFFFF")
+                
+                map_entry = self.ihp_map.get((layer_id, datatype))
+                types = map_entry["edi_types"] if map_entry else set()
+
+                # decide colors
+                if use_klayout_colors:
+                    shape_rgb = hex_to_rgb(fill_color)
+                    line_rgb = hex_to_rgb(frame_color)
+                    tr = 0
+
+                    if highlight_bondable and is_bondable(types):
+                        shape_rgb = (0.95, 0.75, 0.20)
+                        line_rgb = (0.95, 0.75, 0.20)
+                        tr = 0
+
+                else:
+                    _, shape_rgb, line_rgb, tr = style_for_material(map_entry["edi_name"] if map_entry else "", types)
+
+                    if not highlight_bondable and is_bondable(types):
+                        # neutralize colors
+                        shape_rgb = hex_to_rgb(fill_color)
+                        line_rgb = hex_to_rgb(frame_color)
+                        tr = 0
+
+
+                shape = next((s for s in shapes if s["layer_id"] == layer_id and s["datatype"] == datatype), None)
+                if not shape:
+                    continue
+                
+                obj = doc.addObject("Part::Feature", f"Layer_{layer_name}_{layer_id}_{datatype}")
+                obj.Shape = shape["shape"]
+                obj.ViewObject.ShapeColor = shape_rgb
+                obj.ViewObject.LineColor = line_rgb
+                obj.ViewObject.Transparency = tr
+                layer_objects.setdefault((layer_id, datatype), []).append(obj)
+
+            try:
+                obj.commitTransaction()
+            except Exception:
+                pass
+
+            doc.recompute()
+            self.update_properties(selected_layers, parse_lyp(self.lyp_path)[1], layer_objects)
+            FreeCADGui.activeDocument().activeView().viewIsometric()
+            FreeCADGui.SendMsgToActiveView("ViewFit")
+
+            QtWidgets.QMessageBox.information(None, "Success", "Layer selection updated successfully.")
+>>>>>>> Refactoring_Layout:gds/PropertyPanel.py

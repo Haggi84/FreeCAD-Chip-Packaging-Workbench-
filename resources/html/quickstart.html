@@ -1,0 +1,72 @@
+<h2>Quick Start Guide</h2>
+
+<h3>1. Load GDSII Files</h3>
+<ol>
+<li>Click <strong>"Load GDSII"</strong> in the toolbar</li>
+<li>Select your <code>.gds</code> file</li>
+<li>Select matching <code>.lyp</code> file for colors</li>
+<li>Choose layers to import in the selection dialog</li>
+<li>Configure display options:
+    <ul>
+    <li><strong>Match KLayout</strong> - Use LYP colors</li>
+    <li><strong>Highlight Bondable</strong> - Gold coloring</li>
+    <li><strong>Import All Layers</strong> - Quick selection</li>
+    </ul>
+</li>
+</ol>
+
+<h3>2. Create Leadframe</h3>
+<ol>
+<li>Click <strong>"Leadframe Configurator"</strong></li>
+<li>Choose package type:
+    <ul>
+    <li><strong>QFN</strong> - Quad Flat No-lead</li>
+    <li><strong>QFP</strong> - Quad Flat Package</li>
+    <li><strong>BGA</strong> - Ball Grid Array</li>
+    </ul>
+</li>
+<li>Set dimensions and lead parameters</li>
+<li>Choose material</li>
+<li>Generate leadframe geometry</li>
+</ol>
+
+<h3>3. Stack Layers on Leadframe</h3>
+<ol>
+<li>Click <strong>"Layer on Leadframe"</strong></li>
+<li>Follow GDS import steps (select files and layers)</li>
+<li>Configure leadframe parameters</li>
+<li>Set transformation options:
+    <ul>
+    <li><strong>Auto-fit</strong> - Scale to fit opening</li>
+    <li><strong>Rotation</strong> - Arbitrary rotation</li>
+    <li><strong>Mirror</strong> - Flip top/bottom</li>
+    <li><strong>Offset</strong> - Precise positioning</li>
+    </ul>
+</li>
+<li>Generate stacked assembly</li>
+</ol>
+
+<h3>4. Create Housing</h3>
+<ol>
+<li>Click <strong>"Housing Configurator"</strong></li>
+<li>First configure leadframe using the button</li>
+<li>Set housing parameters:
+    <ul>
+    <li>Wall thickness and clearance</li>
+    <li>Housing height</li>
+    <li>Lid options and transparency</li>
+    <li>Material selection</li>
+    </ul>
+</li>
+<li>Generate transparent package</li>
+</ol>
+
+<h3>5. Manual Wire Bonding</h3>
+<ol>
+<li>Click <strong>"Manual 2D Wire Bonding"</strong></li>
+<li>Configure wire parameters in dialog</li>
+<li>Click on <span style="color: green;">die pads</span> (green markers appear)</li>
+<li>Click on <span style="color: blue;">bond fingers</span> (blue markers appear)</li>
+<li>Repeat for additional bonds</li>
+<li>Use <strong>"Finish Wire Bonding"</strong> command to complete</li>
+</ol>
