@@ -350,50 +350,6 @@ def load_gds(gds_path,
 
         top_cells = lib.top_level() or lib.cells
 
-        def _normalize_poly_map(poly_map):
-            """Ensure polygon map is {(layer, datatype): [points, ...]}.
-
-            Some gdstk versions return Polygon objects instead of raw point arrays
-            even when using ``by_spec=True``. Normalize everything to point lists
-            so later consumers can iterate safely.
-            """
-
-            normalized = {}
-
-            def _add_entry(key, poly_like):
-                if poly_like is None:
-                    return
-
-                # Prefer an explicit points attribute (gdstk.Polygon)
-                pts = getattr(poly_like, "points", None)
-                if pts is None:
-                    # Fall back to assuming this is already an iterable of points
-                    pts = poly_like
-
-                try:
-                    pts_iter = list(pts)
-                except TypeError:
-                    return
-
-                normalized.setdefault(key, []).append(pts_iter)
-
-            if isinstance(poly_map, dict):
-                for key, polys in poly_map.items():
-                    if isinstance(polys, (list, tuple)):
-                        for poly_like in polys:
-                            _add_entry(key, poly_like)
-                    else:
-                        _add_entry(key, polys)
-            elif isinstance(poly_map, (list, tuple)):
-                for poly_like in poly_map:
-                    try:
-                        key = (poly_like.layer, poly_like.datatype)
-                    except Exception:
-                        continue
-                    _add_entry(key, poly_like)
-
-            return normalized
-
         def _polygons_from_cell(cell, depth=None, include_paths=True):
             """
             Return {(layer, datatype): [points, ...]} for a cell, flattening references.
@@ -403,8 +359,7 @@ def load_gds(gds_path,
             by_spec keyword.
             """
             try:
-                poly_map = cell.get_polygons(by_spec=True, include_paths=include_paths, depth=depth)
-                return _normalize_poly_map(poly_map)
+                return cell.get_polygons(by_spec=True, include_paths=include_paths, depth=depth)
             except TypeError:
                 pass
 
@@ -424,11 +379,7 @@ def load_gds(gds_path,
                 poly_map.setdefault((poly.layer, poly.datatype), []).append(poly.points)
             if include_paths:
                 for path in getattr(clone, "paths", []):
-                    polys_raw = path.to_polygons()
-                    polys = []
-                    for poly_like in polys_raw:
-                        pts = getattr(poly_like, "points", None)
-                        polys.append(pts if pts is not None else poly_like)
+                    polys = path.to_polygons()
                     layers_attr = getattr(path, "layers", None)
                     dtypes_attr = getattr(path, "datatypes", None)
 
@@ -450,7 +401,7 @@ def load_gds(gds_path,
 
                     for pts, lyr, dtype in zip(polys, layers, dtypes):
                         poly_map.setdefault((lyr, dtype), []).append(pts)
-            return _normalize_poly_map(poly_map)
+            return poly_map
 
         def iter_polygons():
             for cell in top_cells:
