@@ -6,6 +6,7 @@ import FreeCAD, FreeCADGui
 try:
     from gds import GDSCommand
     from leadframe import LeadframeCommand
+    from leadframe import LeadframeLibraryCommand
     from housing import HousingCommand
     from leadframe import LayeronLeadframe
     from wirebond import WirebondCommand
@@ -33,7 +34,18 @@ class MyWorkbench(FreeCADGui.Workbench):
 
     def Initialize(self):
         try:
-            self.appendToolbar("GDSII Tools", ["GDSCommand", "LeadframeCommand", "HousingCommand", "LayeronLeadframe", "WirebondCommand", "HelpGuideCommand"])
+            self.appendToolbar(
+                "GDSII Tools",
+                [
+                    "GDSCommand",
+                    "LeadframeCommand",
+                    "LeadframeLibraryCommand",
+                    "HousingCommand",
+                    "LayeronLeadframe",
+                    "WirebondCommand",
+                    "HelpGuideCommand",
+                ],
+            )
             FreeCAD.Console.PrintMessage("✔ Toolbar initialized\n")
         except Exception as e:
             FreeCAD.Console.PrintError(f"❌ Toolbar initialization failed: {str(e)}\n")
