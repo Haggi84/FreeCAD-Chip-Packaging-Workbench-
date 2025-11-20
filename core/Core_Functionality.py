@@ -350,6 +350,17 @@ def load_gds(gds_path,
 
         top_cells = lib.top_level() or lib.cells
 
+        def _points_array(obj):
+            """
+            Normalize polygon-like objects to a plain point array.
+
+            Some gdstk versions return Polygon objects instead of numpy arrays
+            both from get_polygons and from path flattening helpers. Handling
+            it in one place keeps downstream loops simple.
+            """
+
+            return obj.points if hasattr(obj, "points") else obj
+
         def _polygons_from_cell(cell, depth=None, include_paths=True):
             """
             Return {(layer, datatype): [points, ...]} for a cell, flattening references.
@@ -359,7 +370,24 @@ def load_gds(gds_path,
             by_spec keyword.
             """
             try:
-                return cell.get_polygons(by_spec=True, include_paths=include_paths, depth=depth)
+                poly_map = cell.get_polygons(by_spec=True, include_paths=include_paths, depth=depth)
+                # Normalize polygon payloads to raw point arrays in case the
+                # gdstk version returns Polygon objects instead of numpy arrays.
+                if isinstance(poly_map, dict):
+                    norm = {}
+                    for key, polys in poly_map.items():
+                        norm[key] = [_points_array(p) for p in polys]
+                    return norm
+                # Some versions without by_spec support return a flat list.
+                if isinstance(poly_map, (list, tuple)):
+                    norm = {}
+                    for poly in poly_map:
+                        pts = _points_array(poly)
+                        lyr = getattr(poly, "layer", 0)
+                        dtype = getattr(poly, "datatype", 0)
+                        norm.setdefault((lyr, dtype), []).append(pts)
+                    return norm
+                return poly_map
             except TypeError:
                 pass
 
@@ -376,10 +404,11 @@ def load_gds(gds_path,
 
             poly_map = {}
             for poly in getattr(clone, "polygons", []):
-                poly_map.setdefault((poly.layer, poly.datatype), []).append(poly.points)
+                pts = _points_array(poly)
+                poly_map.setdefault((poly.layer, poly.datatype), []).append(pts)
             if include_paths:
                 for path in getattr(clone, "paths", []):
-                    polys = path.to_polygons()
+                    polys = [_points_array(p) for p in path.to_polygons()]
                     layers_attr = getattr(path, "layers", None)
                     dtypes_attr = getattr(path, "datatypes", None)
 
@@ -429,6 +458,7 @@ def load_gds(gds_path,
         # collect wires/faces per layer
         progress_count = 0
         for layer, datatype, poly_pts in polygons:
+            poly_pts = _points_array(poly_pts)
             key = (layer, datatype)
             if key not in wanted:
                 continue
