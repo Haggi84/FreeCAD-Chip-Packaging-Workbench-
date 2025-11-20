@@ -376,13 +376,13 @@ def load_gds(gds_path,
                 if isinstance(poly_map, dict):
                     norm = {}
                     for key, polys in poly_map.items():
-                        norm[key] = [_points_array(p) for p in polys]
+                        norm[key] = [p.points if hasattr(p, "points") else p for p in polys]
                     return norm
                 # Some versions without by_spec support return a flat list.
                 if isinstance(poly_map, (list, tuple)):
                     norm = {}
                     for poly in poly_map:
-                        pts = _points_array(poly)
+                        pts = poly.points if hasattr(poly, "points") else poly
                         lyr = getattr(poly, "layer", 0)
                         dtype = getattr(poly, "datatype", 0)
                         norm.setdefault((lyr, dtype), []).append(pts)
@@ -404,7 +404,7 @@ def load_gds(gds_path,
 
             poly_map = {}
             for poly in getattr(clone, "polygons", []):
-                pts = _points_array(poly)
+                pts = poly.points if hasattr(poly, "points") else poly
                 poly_map.setdefault((poly.layer, poly.datatype), []).append(pts)
             if include_paths:
                 for path in getattr(clone, "paths", []):
