@@ -359,7 +359,24 @@ def load_gds(gds_path,
             by_spec keyword.
             """
             try:
-                return cell.get_polygons(by_spec=True, include_paths=include_paths, depth=depth)
+                poly_map = cell.get_polygons(by_spec=True, include_paths=include_paths, depth=depth)
+                # Normalize polygon payloads to raw point arrays in case the
+                # gdstk version returns Polygon objects instead of numpy arrays.
+                if isinstance(poly_map, dict):
+                    norm = {}
+                    for key, polys in poly_map.items():
+                        norm[key] = [p.points if hasattr(p, "points") else p for p in polys]
+                    return norm
+                # Some versions without by_spec support return a flat list.
+                if isinstance(poly_map, (list, tuple)):
+                    norm = {}
+                    for poly in poly_map:
+                        pts = poly.points if hasattr(poly, "points") else poly
+                        lyr = getattr(poly, "layer", 0)
+                        dtype = getattr(poly, "datatype", 0)
+                        norm.setdefault((lyr, dtype), []).append(pts)
+                    return norm
+                return poly_map
             except TypeError:
                 pass
 
@@ -376,7 +393,8 @@ def load_gds(gds_path,
 
             poly_map = {}
             for poly in getattr(clone, "polygons", []):
-                poly_map.setdefault((poly.layer, poly.datatype), []).append(poly.points)
+                pts = poly.points if hasattr(poly, "points") else poly
+                poly_map.setdefault((poly.layer, poly.datatype), []).append(pts)
             if include_paths:
                 for path in getattr(clone, "paths", []):
                     polys = path.to_polygons()
