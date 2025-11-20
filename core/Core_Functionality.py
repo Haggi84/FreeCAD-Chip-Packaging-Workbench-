@@ -364,7 +364,15 @@ def load_gds(gds_path,
                 pass
 
             clone = cell.copy(name=f"{cell.name}_flat_tmp")
-            clone.flatten(depth=depth)
+            try:
+                clone.flatten(depth=depth)
+            except TypeError:
+                try:
+                    # Older gdstk versions don't accept the depth keyword; try positional
+                    clone.flatten(depth)
+                except TypeError:
+                    # Oldest versions ignore depth entirely
+                    clone.flatten()
 
             poly_map = {}
             for poly in getattr(clone, "polygons", []):
