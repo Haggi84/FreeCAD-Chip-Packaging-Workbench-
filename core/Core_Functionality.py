@@ -379,8 +379,28 @@ def load_gds(gds_path,
                 poly_map.setdefault((poly.layer, poly.datatype), []).append(poly.points)
             if include_paths:
                 for path in getattr(clone, "paths", []):
-                    for pts in path.to_polygons():
-                        poly_map.setdefault((path.layer, path.datatype), []).append(pts)
+                    polys = path.to_polygons()
+                    layers_attr = getattr(path, "layers", None)
+                    dtypes_attr = getattr(path, "datatypes", None)
+
+                    # Normalize to list lengths matching polygon count
+                    def _expand(attr, fallback_name):
+                        if attr is None:
+                            val = getattr(path, fallback_name, 0)
+                            return [val] * len(polys)
+                        if not isinstance(attr, (list, tuple)):
+                            return [attr] * len(polys)
+                        if len(attr) >= len(polys):
+                            return list(attr[:len(polys)])
+                        if attr:
+                            return list(attr) + [attr[-1]] * (len(polys) - len(attr))
+                        return [0] * len(polys)
+
+                    layers = _expand(layers_attr, "layer")
+                    dtypes = _expand(dtypes_attr, "datatype")
+
+                    for pts, lyr, dtype in zip(polys, layers, dtypes):
+                        poly_map.setdefault((lyr, dtype), []).append(pts)
             return poly_map
 
         def iter_polygons():
