@@ -350,18 +350,45 @@ def load_gds(gds_path,
 
         top_cells = lib.top_level() or lib.cells
 
+        def _polygons_from_cell(cell, depth=None, include_paths=True):
+            """
+            Return {(layer, datatype): [points, ...]} for a cell, flattening references.
+
+            Tries the newer get_polygons(by_spec=...) signature first, and falls back
+            to copying + flattening for older gdstk versions that don't support the
+            by_spec keyword.
+            """
+            try:
+                return cell.get_polygons(by_spec=True, include_paths=include_paths, depth=depth)
+            except TypeError:
+                pass
+
+            clone = cell.copy(name=f"{cell.name}_flat_tmp")
+            clone.flatten(depth=depth)
+
+            poly_map = {}
+            for poly in getattr(clone, "polygons", []):
+                poly_map.setdefault((poly.layer, poly.datatype), []).append(poly.points)
+            if include_paths:
+                for path in getattr(clone, "paths", []):
+                    for pts in path.to_polygons():
+                        poly_map.setdefault((path.layer, path.datatype), []).append(pts)
+            return poly_map
+
         def iter_polygons():
             for cell in top_cells:
-                poly_map = cell.get_polygons(by_spec=True, include_paths=True, depth=None)
+                poly_map = _polygons_from_cell(cell, depth=None, include_paths=True)
                 for (layer, datatype), polys in poly_map.items():
                     for pts in polys:
                         yield layer, datatype, pts
+
+        polygons = list(iter_polygons())
 
         # optional progress tracking based on fully-instantiated polygons
         progress_total = None
         if progress_callback:
             progress_total = 0
-            for layer, datatype, _ in iter_polygons():
+            for layer, datatype, _ in polygons:
                 key = (layer, datatype)
                 if key not in wanted:
                     continue
@@ -373,7 +400,7 @@ def load_gds(gds_path,
 
         # collect wires/faces per layer
         progress_count = 0
-        for layer, datatype, poly_pts in iter_polygons():
+        for layer, datatype, poly_pts in polygons:
             key = (layer, datatype)
             if key not in wanted:
                 continue
