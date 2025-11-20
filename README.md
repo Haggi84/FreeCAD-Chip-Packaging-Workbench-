@@ -13,6 +13,10 @@ Following features are currently planned:
 - assign materials
 - export of assemblies for e.g. thermal simulations
 
+### Leadframe online library
+
+Use the **Leadframe Online Library** button in the *GDSII Tools* toolbar to fetch leadframe packages directly from the MirrorSemi CAD page. The dialog lists downloadable packages, shows image previews when available, and can download and insert the selected package into the current FreeCAD document.
+
 Here are some general ideas (Mindmap):
 
 https://lucid.app/lucidspark/ebb96ac9-c6d3-408a-9ead-51c1aa83efa1/edit?invitationId=inv_3ef9b6cf-fcc6-4717-8b34-9a1598ceaaf7
