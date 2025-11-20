@@ -103,6 +103,9 @@ def load_gds_layers():
             progress_dialog.setAutoClose(False)
             progress_dialog.setWindowTitle("GDS Import")
             progress_dialog.show()
+            # Force the dialog to paint before the long-running import starts so
+            # users always see progress feedback.
+            QtWidgets.QApplication.processEvents()
 
             cancelled = False
 
