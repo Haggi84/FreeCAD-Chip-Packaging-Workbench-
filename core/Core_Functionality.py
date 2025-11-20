@@ -309,7 +309,8 @@ def load_gds(gds_path,
              min_area_mm2=0.0,
              decimate_tol_mm=0.0,
              skip_fill_datatype=True,
-             stack_mm=None # NEW: dict(layer_name, layer_datatype) -> {'t_mm', 'z0_mm'} for 3D stacking
+             stack_mm=None, # NEW: dict(layer_name, layer_datatype) -> {'t_mm', 'z0_mm'} for 3D stacking
+             progress_callback=None
              ):
     """
     GDS loader:
@@ -347,7 +348,23 @@ def load_gds(gds_path,
         wanted = {(l.get("layer_id", 0), l.get("datatype", 0)) for l in selected_layers}
         by_layer = {key: [] for key in wanted}
 
+        # optional progress tracking
+        progress_total = None
+        if progress_callback:
+            progress_total = 0
+            for cell in lib.cells:
+                for poly in cell.polygons:
+                    key = (poly.layer, poly.datatype)
+                    if key not in wanted:
+                        continue
+                    if skip_fill_datatype and poly.datatype == 22:
+                        continue
+                    progress_total += 1
+            progress_total = max(progress_total, 1)
+            progress_callback(0, progress_total, "Importing GDS layers...")
+
         # collect wires/faces per layer
+        progress_count = 0
         for cell in lib.cells:
             for poly in cell.polygons:
                 key = (poly.layer, poly.datatype)
@@ -364,6 +381,12 @@ def load_gds(gds_path,
                     continue
                 if min_area_mm2 > 0.0 and _polygon_area_mm2(pts2d) < min_area_mm2:
                     continue
+
+                progress_count += 1
+                if progress_callback:
+                    message = f"Importing layer {poly.layer}/{poly.datatype} ({progress_count}/{progress_total})"
+                    if progress_callback(progress_count, progress_total, message) is False:
+                        return []
 
                 # build wire/face
                 wire = Part.makePolygon([(x, y, 0.0) for (x, y) in (pts2d + [pts2d[0]])])
@@ -403,6 +426,9 @@ def load_gds(gds_path,
                 "frame_hex": layer.get("frame-color", "#000000"),
                 "fill_hex": layer.get("fill-color", "#FFFFFF"),
             })
+
+        if progress_callback and progress_total is not None:
+            progress_callback(progress_total, progress_total, "Finalizing GDS shapes...")
         return results
     
     except Exception as e:
