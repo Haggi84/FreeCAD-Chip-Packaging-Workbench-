@@ -15,7 +15,7 @@ Following features are currently planned:
 
 ### Leadframe online library
 
-Use the **Leadframe Online Library** button in the *GDSII Tools* toolbar to fetch leadframe packages directly from the MirrorSemi CAD page. The dialog lists downloadable packages with thumbnail previews, lets you filter the catalog by file type, and can download and insert the selected package into the current FreeCAD document.
+Use the **Leadframe Online Library** button in the *GDSII Tools* toolbar to fetch leadframe packages directly from the MirrorSemi CAD page. The dialog lists downloadable packages, shows image previews when available, and can download and insert the selected package into the current FreeCAD document.
 
 Here are some general ideas (Mindmap):
 

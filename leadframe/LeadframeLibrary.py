@@ -4,7 +4,7 @@ import os
 import re
 import tempfile
 import urllib.request
-from typing import Dict, List, Optional
+from typing import List, Optional
 from urllib.parse import urljoin
 
 import FreeCAD
@@ -15,12 +15,6 @@ from PySide2 import QtCore, QtGui, QtWidgets
 from Get_Path import get_icon
 
 DEFAULT_LIBRARY_URL = "https://www.mirrorsemi.com/CAD.html"
-DEFAULT_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36",  # noqa: E501
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://www.google.com/",
-}
 ACCEPTED_DOWNLOAD_EXTS = (
     ".stp",
     ".step",
@@ -49,43 +43,21 @@ class LeadframeEntry:
 
 
 def _find_images(html: str, base_url: str) -> List[str]:
-    image_matches = re.findall(r"<img[^>]+src=['\"]([^'\"]+)['\"]", html, flags=re.IGNORECASE)
+    image_matches = re.findall(r"<img[^>]+src=\"([^\"]+)\"", html, flags=re.IGNORECASE)
     return [urljoin(base_url, src) for src in image_matches]
-
-
-def _find_detail_preview(base_name: str, library_url: str) -> Optional[str]:
-    """Try to load the detail HTML page for a part and pull the first matching image."""
-
-    if not base_name:
-        return None
-    detail_url = urljoin(library_url, f"{base_name}.html")
-    request = urllib.request.Request(detail_url, headers=DEFAULT_HEADERS)
-    try:
-        with urllib.request.urlopen(request, timeout=10) as response:
-            html_bytes = response.read()
-    except Exception:
-        return None
-
-    html = html_bytes.decode("utf-8", errors="ignore")
-    for img in _find_images(html, detail_url):
-        if base_name.lower() in img.lower():
-            return img
-    images = _find_images(html, detail_url)
-    return images[0] if images else None
 
 
 def fetch_leadframe_entries(library_url: str = DEFAULT_LIBRARY_URL) -> List[LeadframeEntry]:
     """Fetch the MirrorSemi CAD page and collect downloadable leadframe entries."""
 
-    request = urllib.request.Request(library_url, headers=DEFAULT_HEADERS)
-    with urllib.request.urlopen(request, timeout=15) as response:
+    with urllib.request.urlopen(library_url, timeout=15) as response:
         html_bytes = response.read()
     html = html_bytes.decode("utf-8", errors="ignore")
 
     images = _find_images(html, library_url)
     entries: List[LeadframeEntry] = []
 
-    for match in re.finditer(r"href=['\"]([^'\"]+)['\"]", html, flags=re.IGNORECASE):
+    for match in re.finditer(r"href=\"([^\"]+)\"", html, flags=re.IGNORECASE):
         href = match.group(1)
         if not href:
             continue
@@ -100,8 +72,6 @@ def fetch_leadframe_entries(library_url: str = DEFAULT_LIBRARY_URL) -> List[Lead
             if base_name and base_name.lower() in img.lower():
                 preview_url = img
                 break
-        if not preview_url:
-            preview_url = _find_detail_preview(base_name, library_url)
         entries.append(LeadframeEntry(name=file_name, url=full_url, preview_url=preview_url))
 
     if not entries and images:
@@ -118,9 +88,7 @@ def _download_to_temp(entry: LeadframeEntry) -> str:
     target_dir = tempfile.mkdtemp(prefix="leadframe_download_")
     target_name = os.path.basename(entry.url.split("?")[0]) or entry.name
     target_path = os.path.join(target_dir, target_name)
-    request = urllib.request.Request(entry.url, headers=DEFAULT_HEADERS)
-    with urllib.request.urlopen(request, timeout=30) as response, open(target_path, "wb") as fh:
-        fh.write(response.read())
+    urllib.request.urlretrieve(entry.url, target_path)
     return target_path
 
 
@@ -144,16 +112,10 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
         self.resize(800, 500)
 
         self.entries: List[LeadframeEntry] = []
-        self.preview_cache: Dict[str, QtGui.QPixmap] = {}
-        self.current_preview: Optional[QtGui.QPixmap] = None
 
         self.list_widget = QtWidgets.QListWidget()
         self.list_widget.currentItemChanged.connect(self._handle_selection)
         self.list_widget.itemDoubleClicked.connect(self._import_selected)
-
-        filter_label = QtWidgets.QLabel("Filter by type:")
-        self.filter_combo = QtWidgets.QComboBox()
-        self.filter_combo.currentIndexChanged.connect(self._populate_list)
 
         self.preview_label = QtWidgets.QLabel("Select an entry to preview.")
         self.preview_label.setAlignment(QtCore.Qt.AlignCenter)
@@ -175,8 +137,6 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
         side_layout = QtWidgets.QVBoxLayout()
         side_layout.addWidget(self.preview_label)
         side_layout.addWidget(self.status_label)
-        side_layout.addWidget(filter_label)
-        side_layout.addWidget(self.filter_combo)
         side_layout.addStretch()
         side_layout.addWidget(import_button)
         side_layout.addWidget(refresh_button)
@@ -193,12 +153,16 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         try:
             self.entries = fetch_leadframe_entries()
-            self._populate_filter_options()
-            self._populate_list()
+            self.list_widget.clear()
+            for entry in self.entries:
+                item = QtWidgets.QListWidgetItem(entry.name)
+                item.setData(QtCore.Qt.UserRole, entry)
+                self.list_widget.addItem(item)
             if not self.entries:
                 self.status_label.setText("No downloadable leadframes were found on the library page.")
             else:
                 self.status_label.setText(f"Found {len(self.entries)} leadframe resources.")
+                self.list_widget.setCurrentRow(0)
         except Exception as exc:
             self.status_label.setText("Failed to fetch library data. Please check your internet connection or proxy settings.")
             QtWidgets.QMessageBox.critical(self, "Download failed", str(exc))
@@ -211,7 +175,6 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
         if not current:
             self.preview_label.setText("Select an entry to preview.")
             self.preview_label.setPixmap(QtGui.QPixmap())
-            self.current_preview = None
             return
         entry: LeadframeEntry = current.data(QtCore.Qt.UserRole)
         self._show_preview(entry)
@@ -223,23 +186,22 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
             self.preview_label.setPixmap(QtGui.QPixmap())
             return
         try:
-            pixmap = self._get_pixmap(preview_url)
-            if pixmap:
+            with urllib.request.urlopen(preview_url, timeout=10) as response:
+                data = response.read()
+            pixmap = QtGui.QPixmap()
+            if pixmap.loadFromData(data):
                 scaled = pixmap.scaled(
                     self.preview_label.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
                 )
                 self.preview_label.setPixmap(scaled)
-                self.current_preview = pixmap
                 self.preview_label.setText("")
                 self.status_label.setText(f"Preview loaded from {preview_url}")
             else:
                 self.preview_label.setText("Unable to load preview image.")
                 self.preview_label.setPixmap(QtGui.QPixmap())
-                self.current_preview = None
         except Exception as exc:
             self.preview_label.setText("Preview could not be downloaded.")
             self.preview_label.setPixmap(QtGui.QPixmap())
-            self.current_preview = None
             QtWidgets.QMessageBox.warning(self, "Preview error", str(exc))
 
     def _import_selected(self):
@@ -261,70 +223,6 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
             QtWidgets.QMessageBox.critical(self, "Import failed", str(exc))
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
-
-    def _entry_extension(self, entry: LeadframeEntry) -> str:
-        url_path = entry.url.split("?")[0]
-        ext = os.path.splitext(url_path)[1].lower()
-        if not ext:
-            ext = os.path.splitext(entry.name)[1].lower()
-        return ext
-
-    def _populate_filter_options(self):
-        extensions = sorted({self._entry_extension(entry) for entry in self.entries if self._entry_extension(entry)})
-        self.filter_combo.blockSignals(True)
-        self.filter_combo.clear()
-        self.filter_combo.addItem("All types", "")
-        for ext in extensions:
-            self.filter_combo.addItem(ext, ext)
-        self.filter_combo.blockSignals(False)
-        self.filter_combo.setCurrentIndex(0)
-
-    def _populate_list(self):
-        selected_ext = self.filter_combo.currentData()
-        self.list_widget.clear()
-        for entry in self.entries:
-            ext = self._entry_extension(entry)
-            if selected_ext and ext != selected_ext:
-                continue
-            item = QtWidgets.QListWidgetItem(entry.name)
-            item.setData(QtCore.Qt.UserRole, entry)
-            self._set_item_icon(item, entry)
-            self.list_widget.addItem(item)
-        if self.list_widget.count():
-            self.list_widget.setCurrentRow(0)
-            self._handle_selection(self.list_widget.currentItem(), None)
-
-    def _get_pixmap(self, url: str) -> Optional[QtGui.QPixmap]:
-        if url in self.preview_cache:
-            return self.preview_cache[url]
-        request = urllib.request.Request(url, headers=DEFAULT_HEADERS)
-        with urllib.request.urlopen(request, timeout=10) as response:
-            data = response.read()
-        pixmap = QtGui.QPixmap()
-        if pixmap.loadFromData(data):
-            self.preview_cache[url] = pixmap
-            return pixmap
-        return None
-
-    def _set_item_icon(self, item: QtWidgets.QListWidgetItem, entry: LeadframeEntry):
-        preview_url = entry.preview_url or entry.url
-        if not any(preview_url.lower().endswith(ext) for ext in IMAGE_EXTS):
-            return
-        try:
-            pixmap = self._get_pixmap(preview_url)
-        except Exception:
-            return
-        if pixmap:
-            icon_pixmap = pixmap.scaled(96, 96, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
-            item.setIcon(QtGui.QIcon(icon_pixmap))
-
-    def resizeEvent(self, event):  # noqa: N802 - Qt override
-        super().resizeEvent(event)
-        if self.current_preview:
-            scaled = self.current_preview.scaled(
-                self.preview_label.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
-            )
-            self.preview_label.setPixmap(scaled)
 
 
 def open_leadframe_library():
