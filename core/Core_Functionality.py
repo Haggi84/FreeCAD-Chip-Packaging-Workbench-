@@ -309,7 +309,8 @@ def load_gds(gds_path,
              min_area_mm2=0.0,
              decimate_tol_mm=0.0,
              skip_fill_datatype=True,
-             stack_mm=None # NEW: dict(layer_name, layer_datatype) -> {'t_mm', 'z0_mm'} for 3D stacking
+             stack_mm=None, # NEW: dict(layer_name, layer_datatype) -> {'t_mm', 'z0_mm'} for 3D stacking
+             progress_callback=None
              ):
     """
     GDS loader:
@@ -347,45 +348,109 @@ def load_gds(gds_path,
         wanted = {(l.get("layer_id", 0), l.get("datatype", 0)) for l in selected_layers}
         by_layer = {key: [] for key in wanted}
 
-        # collect wires/faces per layer
-        for cell in lib.cells:
-            for poly in cell.polygons:
-                key = (poly.layer, poly.datatype)
+        top_cells = lib.top_level() or lib.cells
+
+        def _polygons_from_cell(cell, depth=None, include_paths=True):
+            """
+            Return {(layer, datatype): [points, ...]} for a cell, flattening references.
+
+            Tries the newer get_polygons(by_spec=...) signature first, and falls back
+            to copying + flattening for older gdstk versions that don't support the
+            by_spec keyword.
+            """
+            try:
+                return cell.get_polygons(by_spec=True, include_paths=include_paths, depth=depth)
+            except TypeError:
+                pass
+
+            clone = cell.copy(name=f"{cell.name}_flat_tmp")
+            try:
+                clone.flatten(depth=depth)
+            except TypeError:
+                try:
+                    # Older gdstk versions don't accept the depth keyword; try positional
+                    clone.flatten(depth)
+                except TypeError:
+                    # Oldest versions ignore depth entirely
+                    clone.flatten()
+
+            poly_map = {}
+            for poly in getattr(clone, "polygons", []):
+                poly_map.setdefault((poly.layer, poly.datatype), []).append(poly.points)
+            if include_paths:
+                for path in getattr(clone, "paths", []):
+                    for pts in path.to_polygons():
+                        poly_map.setdefault((path.layer, path.datatype), []).append(pts)
+            return poly_map
+
+        def iter_polygons():
+            for cell in top_cells:
+                poly_map = _polygons_from_cell(cell, depth=None, include_paths=True)
+                for (layer, datatype), polys in poly_map.items():
+                    for pts in polys:
+                        yield layer, datatype, pts
+
+        polygons = list(iter_polygons())
+
+        # optional progress tracking based on fully-instantiated polygons
+        progress_total = None
+        if progress_callback:
+            progress_total = 0
+            for layer, datatype, _ in polygons:
+                key = (layer, datatype)
                 if key not in wanted:
                     continue
-                if skip_fill_datatype and poly.datatype == 22:
-                    # many PDKs: datatype 22 == FILL
+                if skip_fill_datatype and datatype == 22:
                     continue
+                progress_total += 1
+            progress_total = max(progress_total, 1)
+            progress_callback(0, progress_total, "Importing GDS layers...")
 
-                pts2d = [_transform_point(p, s, rot_deg, mirror_y, tx, ty) for p in poly.points]
-                if decimate_tol_mm > 0.0:
-                    pts2d = _simplify_poly(pts2d, decimate_tol_mm)
-                if len(pts2d) < 3:
-                    continue
-                if min_area_mm2 > 0.0 and _polygon_area_mm2(pts2d) < min_area_mm2:
-                    continue
+        # collect wires/faces per layer
+        progress_count = 0
+        for layer, datatype, poly_pts in polygons:
+            key = (layer, datatype)
+            if key not in wanted:
+                continue
+            if skip_fill_datatype and datatype == 22:
+                # many PDKs: datatype 22 == FILL
+                continue
 
-                # build wire/face
-                wire = Part.makePolygon([(x, y, 0.0) for (x, y) in (pts2d + [pts2d[0]])])
-                if preview_2d:
-                    by_layer[key].append(wire)
+            pts2d = [_transform_point(p, s, rot_deg, mirror_y, tx, ty) for p in poly_pts]
+            if decimate_tol_mm > 0.0:
+                pts2d = _simplify_poly(pts2d, decimate_tol_mm)
+            if len(pts2d) < 3:
+                continue
+            if min_area_mm2 > 0.0 and _polygon_area_mm2(pts2d) < min_area_mm2:
+                continue
+
+            progress_count += 1
+            if progress_callback:
+                message = f"Importing layer {layer}/{datatype} ({progress_count}/{progress_total})"
+                if progress_callback(progress_count, progress_total, message) is False:
+                    return []
+
+            # build wire/face
+            wire = Part.makePolygon([(x, y, 0.0) for (x, y) in (pts2d + [pts2d[0]])])
+            if preview_2d:
+                by_layer[key].append(wire)
+            else:
+                try:
+                    face = Part.Face(wire)
+                except Exception:
+                    continue
+                # pick thickness & offset for this layer
+                if stack_mm and key in stack_mm:
+                    t_mm = float(stack_mm[key]["t_mm"])
+                    z0 = float(stack_mm[key]["z0_mm"])
                 else:
-                    try:
-                        face = Part.Face(wire)
-                    except Exception:
-                        continue
-                    # pick thickness & offset for this layer
-                    if stack_mm and key in stack_mm:
-                        t_mm = float(stack_mm[key]["t_mm"])
-                        z0 = float(stack_mm[key]["z0_mm"])
-                    else:
-                        t_mm = default_t_mm
-                        z0 = 0.0
-                    shp = face.extrude(FreeCAD.Vector(0, 0, t_mm))
-                    # translate to its bottom Z
-                    if z0 != 0.0:
-                        shp.translate(FreeCAD.Vector(0, 0, z0))
-                    by_layer[key].append(shp)
+                    t_mm = default_t_mm
+                    z0 = 0.0
+                shp = face.extrude(FreeCAD.Vector(0, 0, t_mm))
+                # translate to its bottom Z
+                if z0 != 0.0:
+                    shp.translate(FreeCAD.Vector(0, 0, z0))
+                by_layer[key].append(shp)
 
         # one compound per layer
         results = []
@@ -403,8 +468,11 @@ def load_gds(gds_path,
                 "frame_hex": layer.get("frame-color", "#000000"),
                 "fill_hex": layer.get("fill-color", "#FFFFFF"),
             })
+
+        if progress_callback and progress_total is not None:
+            progress_callback(progress_total, progress_total, "Finalizing GDS shapes...")
         return results
-    
+
     except Exception as e:
         FreeCAD.Console.PrintError(f"Error loading GDS file {gds_path}: {str(e)}\n")
         return []
