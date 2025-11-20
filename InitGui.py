@@ -42,6 +42,7 @@ class MyWorkbench(FreeCADGui.Workbench):
                     "LeadframeLibraryCommand",
                     "HousingCommand",
                     "LayeronLeadframe",
+                    "DefineContactPointsCommand",
                     "WirebondCommand",
                     "HelpGuideCommand",
                 ],
