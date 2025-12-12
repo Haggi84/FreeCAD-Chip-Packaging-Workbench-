@@ -1,9 +1,3 @@
-<<<<<<< HEAD:LayeronLeadframe.py
-from PySide2 import QtWidgets
-import os, FreeCAD, FreeCADGui, importlib
-import mymodule, LeadframeCommand
-from Color import hex_to_rgb
-=======
 from PySide2 import QtWidgets, QtCore
 import os, sys
 import FreeCAD, FreeCADGui
@@ -16,54 +10,18 @@ from leadframe.LeadframeCommand import create_leadframe, configure_leadframe
 from gds.GDSCommand import load_gds_layers
 from core.Color import hex_to_rgb
 from Get_Path import get_icon
->>>>>>> Refactoring_Layout:leadframe/LayeronLeadframe.py
 
-# ---- Lazy helpers (avoid circular imports) ----
-def _safe_get_loader():
-    try:
-        G = importlib.import_module('GDSCommand')
-        return getattr(G, 'load_gds_layers', None)
-    except Exception as e:
-        FreeCAD.Console.PrintError(f"Import error (GDSCommand): {e}\n"); return None
+def configuration(doc, gds_path, selected_layers, options, ihp_map, config, opts):
+    # First pass — measure bbox at base scale
+        first_transform = {
+            "scale": None,
+            "rot_deg": opts["rot_deg"],
+            "mirror_y": opts["mirror_y"],
+            "tx": 0.0,
+            "ty": 0.0,
+            "z_thickness": 0.03
+        }
 
-<<<<<<< HEAD:LayeronLeadframe.py
-def _get_LayeronLeadframeConfigurator():
-    try:
-        AC = importlib.import_module('All_Class')
-        return getattr(AC, 'LayeronLeadframeConfigurator', None)
-    except Exception as e:
-        FreeCAD.Console.PrintError(f"Import error (All_Class.LayeronLeadframeConfigurator): {e}\n"); return None
-
-# ---- Compatibility shim: some code imports `configuration` from this module ----
-class configuration:
-    """Callable proxy that instantiates All_Class.LayeronLeadframeConfigurator lazily.
-    Usage stays compatible with: dlg = configuration(); dlg.exec_(); dlg.get_opts()
-    """
-    def __new__(cls, *args, **kwargs):
-        Cfg = _get_LayeronLeadframeConfigurator()
-        if Cfg is not None:
-            return Cfg(*args, **kwargs)
-        # Minimal fallback dialog (so imports don't crash)
-        dlg = QtWidgets.QDialog()
-        dlg.setWindowTitle("Transform Options (Fallback)")
-        dlg.get_opts = lambda: dict(rot_deg=0.0, mirror_y=False, tx=0.0, ty=0.0, auto_fit=True, margin_pct=5.0)
-        dlg.exec_ = lambda: QtWidgets.QDialog.Accepted
-        return dlg
-
-def _finalize_import(doc, gds_path, selected_layers, options, ihp_map, cfg, opts):
-    measure_transform=dict(scale=1.0, rot_deg=opts['rot_deg'], mirror_y=opts['mirror_y'], tx=0.0, ty=0.0, z_thickness=0.03)
-    tmp = mymodule.load_gds(gds_path, selected_layers, transform=measure_transform, preview_2d=True, compound_per_layer=True)
-    bb = mymodule.bbox_from_entries(tmp)
-    if not bb: return None
-    xmin,ymin,xmax,ymax = bb; w=max(0.0,xmax-xmin); h=max(0.0,ymax-ymin)
-    scale=1.0
-    if options.get('match_klayout', True) is False and w>0 and h>0 and opts.get('auto_fit', True):
-        margin=max(0.0,opts.get('margin_pct',0.0))/100.0
-        fit_w=cfg['frame_length']*(1.0-margin); fit_h=cfg['frame_width']*(1.0-margin)
-        scale=min(fit_w/w, fit_h/h)
-    tx=-((xmin+xmax)/2.0) + opts['tx']; ty=-((ymin+ymax)/2.0) + opts['ty']
-    tr=dict(scale=scale, rot_deg=opts['rot_deg'], mirror_y=opts['mirror_y'], tx=tx, ty=ty, z_thickness=0.03)
-=======
         frame_length = config["frame_length"]
         frame_width  = config["frame_width"]
             
@@ -94,31 +52,12 @@ def _finalize_import(doc, gds_path, selected_layers, options, ihp_map, cfg, opts
             fit_factor = min(fit_w / die_w, fit_h / die_h)
             if fit_factor < 1.0:
                 final_scale = base_scale * fit_factor
->>>>>>> Refactoring_Layout:leadframe/LayeronLeadframe.py
 
-    stack = mymodule.build_stack_mm(selected_layers, ihp_map, ild_um=mymodule.ILD_SPACING_UM)
-    entries = mymodule.load_gds(gds_path, selected_layers, transform=tr, preview_2d=False, compound_per_layer=True, skip_fill_datatype=not options.get('match_klayout', True), stack_mm=stack)
-    if not entries: return None
+        cx = (xmin + xmax) / 2.0
+        cy = (ymin + ymax) / 2.0
+        final_tx = -cx + opts["tx"]
+        final_ty = -cy + opts["ty"]
 
-<<<<<<< HEAD:LayeronLeadframe.py
-    layer_objects = {}
-    for L in selected_layers:
-        lid=L.get('layer_id',0); dt=L.get('datatype',0); lname=L.get('name','Unnamed')
-        m=ihp_map.get((lid,dt),{}); types=m.get('edi_types', set())
-        if options.get('match_klayout', True):
-            shape_rgb=hex_to_rgb(L.get('fill-color','#FFFFFF')); line_rgb=hex_to_rgb(L.get('frame-color','#000000')); trn=0
-            if options.get('highlight_bondable',True) and mymodule.is_bondable(types): shape_rgb=(0.90,0.75,0.20); line_rgb=(0.25,0.20,0.10)
-        else:
-            _,shape_rgb,line_rgb,trn=mymodule.style_for_material(m.get('edi_name',''), types)
-        e=next((e for e in entries if e['layer_id']==lid and e['datatype']==dt), None)
-        if not e: continue
-        obj=doc.addObject("Part::Feature", f"Layer_{lname}_{lid}_{dt}"); obj.Shape=e['shape']
-        obj.ViewObject.ShapeColor=shape_rgb; obj.ViewObject.LineColor=line_rgb; obj.ViewObject.Transparency=trn
-        layer_objects.setdefault((lid,dt), []).append(obj)
-    return layer_objects
-
-def create_layer_on_leadframe():
-=======
         final_transform = {
             "scale": final_scale,
             "rot_deg": opts["rot_deg"],
@@ -206,26 +145,20 @@ def create_layer_on_leadframe():
     from ui.LayeronLeadframeConfigurator import LayeronLeadframeConfigurator
     from ui.ExtendedPropertyPanel import ExtendedPropertyPanel
 
->>>>>>> Refactoring_Layout:leadframe/LayeronLeadframe.py
     try:
-        _loader = _safe_get_loader()
-        if _loader is None:
-            QtWidgets.QMessageBox.critical(None, "Error", "GDSCommand.load_gds_layers konnte nicht importiert werden (Zirkularimport).");
-            return None
+        # Pick + preview (fast 2D) -> returns options as 7th item
+        result = load_gds_layers()
+        if not result or result[0] is None:
+            FreeCAD.Console.PrintError("❌ Failed to load GDS layers.\n")
+            return
 
-        result = _loader()
-        if not result or not result[0]: return None
-        _preview_doc, _layer_objects, selected_layers, _unique_colors, gds_path, _lyp_path, options = result
+        # backward compatible unpacking
+        if len(result) >= 7:
+            preview_doc, _, selected_layers, _, gds_path, lyp_path, options = result
+        else:
+            preview_doc, _, selected_layers, _, gds_path, lyp_path = result
+            options = {"match_klayout": True, "highlight_bondable": True}
 
-<<<<<<< HEAD:LayeronLeadframe.py
-        default_map = os.path.join(os.path.dirname(__file__), 'sg13g2.map')
-        ihp_map = mymodule.parse_map(default_map) if os.path.exists(default_map) else {}
-
-        # Use the compatibility shim (behaves like the old 'configuration')
-        dlg = configuration()
-        if dlg.exec_()!=QtWidgets.QDialog.Accepted: return None
-        opts = dlg.get_opts() if hasattr(dlg, 'get_opts') else dict(rot_deg=0.0, mirror_y=False, tx=0.0, ty=0.0, auto_fit=True, margin_pct=5.0)
-=======
         if not selected_layers or not gds_path:
             FreeCAD.Console.PrintError("❌ Missing selected layers or GDS path.\n")
             return
@@ -255,24 +188,33 @@ def create_layer_on_leadframe():
         if not config:
             FreeCAD.Console.PrintError("❌ Leadframe configuration cancelled.\n")
             return
->>>>>>> Refactoring_Layout:leadframe/LayeronLeadframe.py
 
-        # Then ask for leadframe config
-        cfg = LeadframeCommand.configure_leadframe()
-        if not cfg: return None
+        # Transform options
+        tdlg = LayeronLeadframeConfigurator()
+        if tdlg.exec_() != QtWidgets.QDialog.Accepted:
+            FreeCAD.Console.PrintMessage("Transform dialog cancelled by user.\n")
+            return
+        opts = tdlg.get_opts()
 
+        # Final import with material styles / LYP colors and correct Z stacking
         doc = FreeCAD.newDocument("Leadframe_Assembly")
-        try: doc.openTransaction("Final Import")
-        except Exception: pass
+        try:
+            doc.openTransaction("Final Import (stacked)")
+        except Exception:
+            pass
 
-        layer_objects = _finalize_import(doc, gds_path, selected_layers, options, ihp_map, cfg, opts)
-        if layer_objects is None:
-            QtWidgets.QMessageBox.critical(None, "Error", "Failed to import stacked layers."); return None
+        # Initialize PropertyPanel
+        property_panel = ExtendedPropertyPanel(FreeCADGui.getMainWindow())
+        property_panel.set_map(ihp_map, default_map)
+        property_panel.gds_path = gds_path
+        property_panel.lyp_path = lyp_path
+        property_panel.filtered_layers = filtered_layers  # Initially, filtered_layers are the selected ones
+        property_panel.selected_layers = selected_layers
+        property_panel.options = options
+        property_panel.leadframe_config = config  # Store leadframe config
+        property_panel.transform_opts = opts  # Store transform options
+        FreeCADGui.getMainWindow().addDockWidget(QtCore.Qt.RightDockWidgetArea, property_panel)
 
-<<<<<<< HEAD:LayeronLeadframe.py
-        try: doc.commitTransaction()
-        except Exception: pass
-=======
         # Configuration fuction
         result = configuration(doc, gds_path, selected_layers, options, ihp_map, config, opts)
         if not result:
@@ -287,32 +229,37 @@ def create_layer_on_leadframe():
             doc.commitTransaction()
         except Exception:
             pass
->>>>>>> Refactoring_Layout:leadframe/LayeronLeadframe.py
 
-        LeadframeCommand.create_leadframe(cfg, doc, layer_objects)
         doc.recompute()
-        FreeCADGui.activeDocument().activeView().viewIsometric(); FreeCADGui.SendMsgToActiveView("ViewFit")
+        FreeCADGui.activeDocument().activeView().viewIsometric()
+        FreeCADGui.SendMsgToActiveView("ViewFit")
+
         return doc
+
     except Exception as e:
-        FreeCAD.Console.PrintError(f"❌ An error occurred: {e}\n"); return None
+        FreeCAD.Console.PrintError(f"❌ An error occurred: {str(e)}\n")
+        return None
 
 class LayeronLeadframe:
     def GetResources(self):
-<<<<<<< HEAD:LayeronLeadframe.py
-        icon_path=os.path.join(os.path.dirname(__file__),"resources","icons","Layer on Leadframe.png")
-        return {"MenuText":"Layer on Leadframe","ToolTip":"Import GDS on leadframe","Pixmap": icon_path if os.path.exists(icon_path) else ""}
-=======
         return {
             "MenuText": "Layer on Leadframe",
             "ToolTip": "Configure layers on leadframe",
             "Pixmap": get_icon("Layer on Leadframe.png")
         }
     
->>>>>>> Refactoring_Layout:leadframe/LayeronLeadframe.py
     def Activated(self):
-        res=create_layer_on_leadframe()
-        if res is None: QtWidgets.QMessageBox.critical(None,"Error","Failed to create layer on leadframe.")
-        else: QtWidgets.QMessageBox.information(None,"Success","Layered import + leadframe created.")
-    def IsActive(self): return True
+        result = create_layer_on_leadframe()
+        if result is None:
+            QtWidgets.QMessageBox.critical(None, "Error", "❌ Failed to create layer on leadframe.\n")
+        else:
+            QtWidgets.QMessageBox.information(None, "Success", "GDS stacked with correct heights; imported with chosen color mode.\n")
 
-FreeCADGui.addCommand('LayeronLeadframe', LayeronLeadframe())
+    def IsActive(self):
+        """
+        Check if the command is active.
+        """
+        return True
+    
+
+FreeCADGui.addCommand("LayeronLeadframe", LayeronLeadframe())

@@ -7,10 +7,15 @@ Following features are currently planned:
 
 - Importing a full visualization for GDSII files. E.g. directly generated out of the software KLayout (https://www.klayout.de/)
 - An editor and/or a library for importing leadframe structures for chips
+- an library that allows to gather leadframes from an online library
 - functionality to place chips and chiplets inside an housing
 - plan bonding wires
 - assign materials
 - export of assemblies for e.g. thermal simulations
+
+### Leadframe online library
+
+Use the **Leadframe Online Library** button in the *GDSII Tools* toolbar to fetch leadframe packages directly from the MirrorSemi CAD page. The dialog lists downloadable packages, shows image previews when available, and can download and insert the selected package into the current FreeCAD document.
 
 Here are some general ideas (Mindmap):
 
@@ -74,26 +79,8 @@ For Ubuntu Linux systems;
 }
 ```
 
-<<<<<<< HEAD
-Replace `%USER%` with your Windows user name and change `1.0` to the FreeCAD version you installed (e.g., `0.21`).
-
-**Linux example**
-
-```json
-{
-    "python.analysis.extraPaths": [
-        "/usr/lib/freecad/bin",
-        "/home/<username>/.local/lib/python3.11/site-packages",
-        "/usr/lib/freecad/lib/site-packages"
-    ]
-}
-```
-
-Replace `<username>` with your Linux user name and adjust the FreeCAD paths and version numbers to match your installation.
-=======
 https://lucid.app/lucidspark/ebb96ac9-c6d3-408a-9ead-51c1aa83efa1/edit?invitationId=inv_3ef9b6cf-fcc6-4717-8b34-9a1598ceaaf7
 _**note:** you have to replace ```%USER%``` with the corresponding directory of your system_
->>>>>>> Refactoring_Layout
 
 
 

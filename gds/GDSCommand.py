@@ -1,10 +1,4 @@
 from PySide2 import QtWidgets, QtCore
-<<<<<<< HEAD:GDSCommand.py
-import os, FreeCAD, FreeCADGui, importlib
-import mymodule
-from Color import hex_to_rgb
-# from All_Class import LayerSelector  # removed (lazy import)
-=======
 import os, sys
 import FreeCAD, FreeCADGui
 
@@ -15,36 +9,12 @@ from gds.PropertyPanel import PropertyPanel
 from core import Core_Functionality
 from core.Color import hex_to_rgb
 from Get_Path import get_icon
->>>>>>> Refactoring_Layout:gds/GDSCommand.py
 
-def _default_map_path():
-    here=os.path.dirname(os.path.abspath(__file__)); p=os.path.join(here,'sg13g2.map'); return p if os.path.exists(p) else None
-
-def _get_LayerSelector():
-    try:
-        AC = importlib.import_module('All_Class')
-        return getattr(AC, 'LayerSelector', None)
-    except Exception as e:
-        FreeCAD.Console.PrintError(f"Import error (All_Class.LayerSelector): {e}\n"); return None
+# ----------------------------------------
+# Main flow: pick files, preview document
+# ----------------------------------------
 
 def load_gds_layers():
-<<<<<<< HEAD:GDSCommand.py
-    try:
-        gds_path,_ = QtWidgets.QFileDialog.getOpenFileName(None, "Select GDS", "", "GDS Files (*.gds *.GDS)")
-        if not gds_path: return (None,)*7
-        lyp_path,_ = QtWidgets.QFileDialog.getOpenFileName(None, "Select LYP", "", "LYP Files (*.lyp *.LYP)")
-        if not lyp_path: return (None,)*7
-        map_path,_ = QtWidgets.QFileDialog.getOpenFileName(None, "Select MAP (optional)", "", "MAP Files (*.map *.MAP)") 
-        if not map_path: map_path=_default_map_path()
-        ihp_map = mymodule.parse_map(map_path) if map_path else {}
-
-        layers, unique_colors = mymodule.parse_lyp(lyp_path)
-        present = mymodule.get_gds_layer(gds_path)
-        filtered = [L for L in layers if (L.get('layer_id',0), L.get('datatype',0)) in present]
-        if not filtered:
-            QtWidgets.QMessageBox.warning(None, "Warning", "No matching layers between LYP and GDS."); return (None,)*7
-
-=======
     from ui.LayerSelector import LayerSelector
 
     """
@@ -86,59 +56,39 @@ def load_gds_layers():
             QtWidgets.QMessageBox.warning(None, "Warning", "No matching layers found between LYP and GDS files.")
             return None, None, None, None, None, None, None
         
->>>>>>> Refactoring_Layout:gds/GDSCommand.py
         doc = FreeCAD.newDocument("GDSII_Document")
-        try:
-            from PropertyPanel import PropertyPanel
-            panel = PropertyPanel(FreeCADGui.getMainWindow())
-        except Exception:
-            panel = None
-        if panel:
-            if hasattr(panel, 'attach_to_document'): panel.attach_to_document(doc)
-            FreeCADGui.getMainWindow().addDockWidget(QtCore.Qt.RightDockWidgetArea, panel)
-            if hasattr(panel, 'set_map'): panel.set_map(ihp_map, map_path)
-            panel.gds_path=gds_path; panel.lyp_path=lyp_path; panel.filtered_layers=filtered
-            if hasattr(panel, 'update_properties'): panel.update_properties([], unique_colors, {})
 
-        LayerSelector = _get_LayerSelector()
-        if LayerSelector is None:
-            QtWidgets.QMessageBox.critical(None, "Error", "LayerSelector konnte nicht geladen werden (All_Class).");
-            return (None,)*7
+        # Property panel and preview doc
+        property_panel = PropertyPanel(FreeCADGui.getMainWindow())
+        property_panel.attach_to_document(doc)
+        property_panel.set_map(ihp_map, map_path)
 
-        dlg = LayerSelector(filtered, options=getattr(panel, 'options', {"match_klayout": True, "highlight_bondable": True}) if panel else {"match_klayout": True, "highlight_bondable": True})
-        if dlg.exec_()!=QtWidgets.QDialog.Accepted:
-            QtWidgets.QMessageBox.information(None, "Cancelled", "Layer selection cancelled."); return (None,)*7
-        selected_layers = dlg.selected_layers; options = dlg.options
-        if not selected_layers:
-            QtWidgets.QMessageBox.warning(None, "Warning", "No layers selected."); return (None,)*7
-        if panel and hasattr(panel, 'options'):
-            panel.options=dict(options)
+        FreeCADGui.getMainWindow().addDockWidget(QtCore.Qt.RightDockWidgetArea, property_panel)
+        property_panel.gds_path = gds_path
+        property_panel.lyp_path = lyp_path
+        property_panel.filtered_layers = filtered_layers
+        property_panel.update_properties([], unique_colors, {})
 
-        match_klayout = bool(options.get('match_klayout', True)); skip_fill = not match_klayout; highlight = bool(options.get('highlight_bondable', True))
+        # Layer selection (now with 'Import all layers')
+        dialog = LayerSelector(filtered_layers, options=property_panel.options)
+        if dialog.exec_():
+            selected_layers = dialog.selected_layers
+            options = dialog.options
+            if not selected_layers:
+                QtWidgets.QMessageBox.warning(None, "Warning", "No layers selected.")
+                return None, None, None, None, None, None, None
 
-        try: doc.openTransaction("Preview Import")
-        except Exception: pass
+             # save options to panel (needed for modify action)
+            property_panel.options = dict(options)
 
-        entries = mymodule.load_gds(gds_path, selected_layers, preview_2d=True, compound_per_layer=True, skip_fill_datatype=skip_fill)
-        if not entries:
-            QtWidgets.QMessageBox.warning(None, "Warning", "No shapes found for selected layers."); return (None,)*7
+            # params derived from options
+            match_klayout = bool(options.get("match_klayout", True))
+            skip_fill = not match_klayout
+            min_area = 0.0 if match_klayout else 0.0004
+            decimate = 0.0 if match_klayout else 0.002
+            use_klayout_colors = match_klayout
+            highlight_bondable = bool(options.get("highlight_bondable", True))
 
-<<<<<<< HEAD:GDSCommand.py
-        layer_objects = {}
-        for L in selected_layers:
-            lid=L.get('layer_id',0); dt=L.get('datatype',0); lname=L.get('name','Unnamed')
-            m=ihp_map.get((lid,dt),{}); types=m.get('edi_types', set())
-            if match_klayout:
-                shape_rgb = hex_to_rgb(L.get('fill-color','#FFFFFF')); line_rgb = hex_to_rgb(L.get('frame-color','#000000')); tr=0
-                if highlight and mymodule.is_bondable(types): shape_rgb=(0.90,0.75,0.20); line_rgb=(0.25,0.20,0.10)
-            else:
-                _,shape_rgb,line_rgb,tr = mymodule.style_for_material(m.get('edi_name',''), types)
-            entry = next((e for e in entries if e['layer_id']==lid and e['datatype']==dt), None)
-            if not entry: continue
-            obj = doc.addObject("Part::Feature", f"Layer_{lname}_{lid}_{dt}"); obj.Shape = entry['shape']
-            obj.ViewObject.ShapeColor = shape_rgb; obj.ViewObject.LineColor = line_rgb; obj.ViewObject.Transparency = tr
-            layer_objects.setdefault((lid,dt), []).append(obj)
-=======
             # Ensure a valid document is available
             doc = FreeCAD.activeDocument()
 
@@ -247,44 +197,32 @@ def load_gds_layers():
         else:
             QtWidgets.QMessageBox.information(None, "Cancelled", "Layer selection cancelled.")
             return None, None, None, None, None, None, None
->>>>>>> Refactoring_Layout:gds/GDSCommand.py
 
-        try: doc.commitTransaction()
-        except Exception: pass
-        doc.recompute()
-        if panel and hasattr(panel, 'update_properties'):
-            panel.update_properties(selected_layers, unique_colors, layer_objects)
-        FreeCADGui.activeDocument().activeView().viewIsometric(); FreeCADGui.SendMsgToActiveView("ViewFit")
-        return doc, layer_objects, selected_layers, unique_colors, gds_path, lyp_path, options
     except Exception as e:
-        FreeCAD.Console.PrintError(f"An error in GDSCommand: {e}\n")
-        QtWidgets.QMessageBox.critical(None, "Error", f"Failed to process files: {e}")
-        return (None,)*7
+        FreeCAD.Console.PrintError(f"An error in GDSCommand: {str(e)}\n")
+        QtWidgets.QMessageBox.critical(None, "Error", f"Failed to process files: {str(e)}")
+        return None, None, None, None, None, None, None
 
+
+# --------------------------
+# Command registration
+# --------------------------
 class GDSCommand:
     def GetResources(self):
-<<<<<<< HEAD:GDSCommand.py
-        icon_path = os.path.join(os.path.dirname(__file__),"resources","icons","Load GDS.png")
-        return {"MenuText":"Load GDSII","ToolTip":"Load a GDSII file","Pixmap": icon_path if os.path.exists(icon_path) else ""}
-=======
         return {
             "MenuText": "Load GDSII",
             "ToolTip": "Load a GDSII file fast, show technology info and apply material styles",
             "Pixmap": get_icon("Load GDS.png")
         }
 
->>>>>>> Refactoring_Layout:gds/GDSCommand.py
     def Activated(self):
-        res = load_gds_layers()
-        if res and res[0]:
-            QtWidgets.QMessageBox.information(None, "Success", "GDSII preview created.")
-    def IsActive(self): return True
+        result = load_gds_layers()
+        if result and result[0]:  # Check if a document was created
+            doc, layer_objects, selected_layers, unique_colors, gds_path, lyp_path, options = result
+            QtWidgets.QMessageBox.information(None, "Success", f"GDSII file loaded with layers displayed successfully.", QtWidgets.QMessageBox.Ok)
 
-<<<<<<< HEAD:GDSCommand.py
-=======
     def IsActive(self):
         return True
 
 import FreeCADGui
->>>>>>> Refactoring_Layout:gds/GDSCommand.py
 FreeCADGui.addCommand('GDSCommand', GDSCommand())

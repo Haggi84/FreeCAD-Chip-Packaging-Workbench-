@@ -1,9 +1,3 @@
-<<<<<<< HEAD:PropertyPanel.py
-from PySide2 import QtWidgets, QtCore, QtGui
-import FreeCAD, FreeCADGui
-import mymodule
-from Color import hex_to_rgb
-=======
 from PySide2 import QtWidgets, QtGui, QtCore
 import Part, os, sys
 import FreeCAD, FreeCADGui
@@ -13,118 +7,207 @@ sys.path.insert(0, root_path)
 
 from core.Core_Functionality import style_for_material, is_bondable, parse_lyp
 from core.Color import hex_to_rgb, hex_to_qcolor
->>>>>>> Refactoring_Layout:gds/PropertyPanel.py
 
+# -----------------------------------
+# Dock panel for properties & tech
+# -----------------------------------
+ 
 class PropertyPanel(QtWidgets.QDockWidget):
     def __init__(self, parent=None):
-        super().__init__('Layer & Technology', parent)
+        super(PropertyPanel, self).__init__("Layer and Color Properties", parent)
         self.setAllowedAreas(QtCore.Qt.RightDockWidgetArea | QtCore.Qt.LeftDockWidgetArea)
-        self.gds_path=None; self.lyp_path=None; self.filtered_layers=[]; self.selected_layers=[]; self.options={"match_klayout": True, "highlight_bondable": True}; self.ihp_map={}; self.map_path=None
-        self.doc_name=None
+        self.attached_doc = None
 
-        w = QtWidgets.QWidget(); v=QtWidgets.QVBoxLayout(w); self.tabs=QtWidgets.QTabWidget(); v.addWidget(self.tabs)
+        self.main_widget = QtWidgets.QWidget()
+        self.layout = QtWidgets.QVBoxLayout()
 
-        self.layer_tree=QtWidgets.QTreeWidget(); self.layer_tree.setHeaderLabels(["Property","Value"]); self.tabs.addTab(self.layer_tree, "Layer Properties")
-        self.tech_table=QtWidgets.QTableWidget(0, 6); self.tech_table.setHorizontalHeaderLabels(["LayerID","Datatype","Name","Types","Material","Bondable"]); self.tech_table.horizontalHeader().setStretchLastSection(True); self.tabs.addTab(self.tech_table, "Technology")
+        self.tabs = QtWidgets.QTabWidget()
 
-        self.btn=QtWidgets.QPushButton("Modify Layers…"); self.btn.clicked.connect(self.modify_layer_selection); v.addWidget(self.btn)
-        self.setWidget(w)
+        # Tab 1: Layer properties (raw keys from LYP)
+        self.layer_tree = QtWidgets.QTreeWidget()
+        self.layer_tree.setHeaderLabels(["Property", "Value"])
+        self.layer_tree.header().setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
+        self.tabs.addTab(self.layer_tree, "Layer Properties")
 
-    # --- NEW: keep API used by GDSCommand ---
+        # Tab 2: Color summary
+        self.color_table = QtWidgets.QTableWidget()
+        self.color_table.setColumnCount(3)
+        self.color_table.setHorizontalHeaderLabels(["Frame Color", "Fill Color", "Count"])
+        self.color_table.horizontalHeader().setStretchLastSection(True)
+        self.tabs.addTab(self.color_table, "Color Summary")
+
+        # Tab 3: Technology (from IHP .map)
+        self.tech_table = QtWidgets.QTableWidget()
+        self.tech_table.setColumnCount(6)
+        self.tech_table.setHorizontalHeaderLabels(["GDS Layer", "Datatype", "EDI Name", "EDI Types", "Material", "Bondable"])
+        self.tech_table.horizontalHeader().setStretchLastSection(True)
+        self.tabs.addTab(self.tech_table, "Technology")
+
+        self.layout.addWidget(self.tabs)
+
+        # Buttons
+        self.modify_layers_button = QtWidgets.QPushButton("Modify Layer Selection")
+        self.modify_layers_button.clicked.connect(self.modify_layer_selection)
+        self.layout.addWidget(self.modify_layers_button)
+
+        self.close_button = QtWidgets.QPushButton("Close Panel")
+        self.close_button.clicked.connect(self.close)
+        self.layout.addWidget(self.close_button)
+
+        self.main_widget.setLayout(self.layout)
+        self.setWidget(self.main_widget)
+
+        # Stored context for re-selection
+        self.layer_objects = {}
+        self.gds_path = None
+        self.lyp_path = None
+        self.map_path = None
+        self.filtered_layers = None
+        self.selected_layers = None
+        self.ihp_map = {}  # (layer,datatype)->{edi_name,edi_types}
+        self.options = {"match_klayout": True, "highlight_bondable": True}
+
+        self.hide()
+
+        self.doc_observer = self.make_doc_observer()
+        FreeCADGui.addDocumentObserver(self.doc_observer)
+
     def attach_to_document(self, doc):
-        """Remember the active document name for context (non-critical)."""
-        try:
-            self.doc_name=getattr(doc, 'Name', None)
-        except Exception:
-            self.doc_name=None
+        self.attached_doc = doc
 
-    def set_map(self, ihp_map: dict, map_path: str=None):
-        self.ihp_map=ihp_map or {}; self.map_path=map_path
+    def make_doc_observer(self):
+        panel = self
+        class Observer:
+            def DeletedDocument(self, doc):
+                if panel.attached_doc and doc == panel.attached_doc:
+                   try:
+                       # Close and delete the property panel
+                       panel.setParent(None)
+                       panel.close()
+                   except Exception as e:
+                       FreeCAD.Console.PrintError(f"Error closing property panel: {str(e)}\n")
+        return Observer()
 
-    def _fill_layer_properties(self, layers):
-        self.layer_tree.clear()
-        for L in layers or []:
-            p=QtWidgets.QTreeWidgetItem(self.layer_tree, ["Layer", L.get('name','Unnamed')])
-            for k in ("layer_id","datatype","frame-color","fill-color","source"): QtWidgets.QTreeWidgetItem(p,[k,str(L.get(k))])
-        self.layer_tree.expandAll()
-
-    def _fill_tech_table(self, selected_layers, unique_colors, layer_objects):
-        self.tech_table.setRowCount(0)
-        for r, L in enumerate(selected_layers or []):
-            lid=L.get('layer_id',0); dt=L.get('datatype',0); name=L.get('name','')
-            m=self.ihp_map.get((lid,dt), {}); edi=m.get('edi_name',''); types=m.get('edi_types', set())
-            mat_label, shape_rgb, line_rgb, _ = mymodule.style_for_material(edi, types)
-            bondable = 'yes' if mymodule.is_bondable(types) else 'no'
-            self.tech_table.insertRow(r)
-            self.tech_table.setItem(r,0,QtWidgets.QTableWidgetItem(str(lid)))
-            self.tech_table.setItem(r,1,QtWidgets.QTableWidgetItem(str(dt)))
-            self.tech_table.setItem(r,2,QtWidgets.QTableWidgetItem(edi or name))
-            self.tech_table.setItem(r,3,QtWidgets.QTableWidgetItem(','.join(sorted(types))))
-            it=QtWidgets.QTableWidgetItem(mat_label); it.setBackground(QtGui.QBrush(QtGui.QColor.fromRgbF(*shape_rgb))); self.tech_table.setItem(r,4,it)
-            self.tech_table.setItem(r,5,QtWidgets.QTableWidgetItem(bondable))
-        self.tech_table.resizeColumnsToContents()
+    def set_map(self, map_dict, map_path):
+        self.ihp_map = map_dict or {}
+        self.map_path = map_path
 
     def update_properties(self, selected_layers, unique_colors, layer_objects):
-        self.selected_layers=list(selected_layers or [])
-        self._fill_layer_properties(self.filtered_layers or [])
-        self._fill_tech_table(self.selected_layers, unique_colors, layer_objects)
+        """Populate the dock widgets with layer properties, color summary & technology."""
+        self.layer_tree.clear()
+        self.layer_objects = layer_objects
+        self.selected_layers = selected_layers
+
+        # ---- Layer properties
+        if selected_layers:
+            for selected_layer in selected_layers:
+                layer_id = selected_layer.get("layer_id", 0)
+                layer_datatype = selected_layer.get("datatype", 0)
+                layer_name = selected_layer.get("name", "Unnamed")
+                item = QtWidgets.QTreeWidgetItem()
+                item.setText(0, f"{layer_name} ({layer_id}: {layer_datatype})")
+                for key, value in selected_layer.items():
+                    if key == "frame-color" or key == "fill-color":
+                        c = hex_to_qcolor(value)
+                        color_item = QtWidgets.QTreeWidgetItem([key, value])
+                        color_item.setBackground(0, QtGui.QBrush(c))
+                        color_item.setBackground(1, QtGui.QBrush(c))
+                        item.addChild(color_item)
+                    elif key not in ["frame-color", "fill-color"]:
+                        child = QtWidgets.QTreeWidgetItem([key, str(value)])
+                        item.addChild(child)
+                self.layer_tree.addTopLevelItem(item)
+            self.layer_tree.expandAll()
+        else:
+            self.layer_tree.addTopLevelItem(QtWidgets.QTreeWidgetItem(["No layer selected", "Please select a layer"]))
+
+        # ---- Color summary -------
+        color_counts = {}
+        for selected_layer in selected_layers:
+            frame_hex = selected_layer.get("frame-color", "#000000")
+            fill_hex = selected_layer.get("fill-color", "#FFFFFF")
+            color_counts[(frame_hex, fill_hex)] = color_counts.get((frame_hex, fill_hex), 0) + 1
+
+        self.color_table.clearContents()
+        self.color_table.setRowCount(len(color_counts))
+        row = 0
+        for (frame_hex, fill_hex), count in color_counts.items():
+            frame_item = QtWidgets.QTableWidgetItem(frame_hex)
+            frame_item.setBackground(QtGui.QBrush(hex_to_qcolor(frame_hex)))
+            self.color_table.setItem(row, 0, frame_item)
+
+            fill_item = QtWidgets.QTableWidgetItem(fill_hex)
+            fill_item.setBackground(QtGui.QBrush(hex_to_qcolor(fill_hex)))
+            self.color_table.setItem(row, 1, fill_item)
+
+            self.color_table.setItem(row, 2, QtWidgets.QTableWidgetItem(str(count)))
+            row += 1
+        self.color_table.resizeColumnsToContents()
+
+        # Technology table
+        self.tech_table.clearContents()
+        self.tech_table.setRowCount(len(selected_layers))
+        for r, layer in enumerate(selected_layers):
+            lid = int(layer.get("layer_id", 0))
+            dt = int(layer.get("datatype", 0))
+            map_entry = self.ihp_map.get((lid, dt), None)
+            edi_name = map_entry["edi_name"] if map_entry else "-"
+            types = map_entry["edi_types"] if map_entry else set()
+            edi_types = ", ".join(sorted(types))
+            material_label, shape_rgb, line_rgb, tr = style_for_material(edi_name, types)
+            bondable = "yes" if is_bondable(types) else "no"
+
+            self.tech_table.setItem(r, 0, QtWidgets.QTableWidgetItem(str(lid)))
+            self.tech_table.setItem(r, 1, QtWidgets.QTableWidgetItem(str(dt)))
+            self.tech_table.setItem(r, 2, QtWidgets.QTableWidgetItem(edi_name))
+            self.tech_table.setItem(r, 3, QtWidgets.QTableWidgetItem(edi_types))
+
+            mat_item = QtWidgets.QTableWidgetItem(material_label)
+            c = QtGui.QColor.fromRgbF(*shape_rgb)
+            mat_item.setBackground(QtGui.QBrush(c))
+            self.tech_table.setItem(r, 4, mat_item)
+
+            self.tech_table.setItem(r, 5, QtWidgets.QTableWidgetItem(bondable))
+
+        self.tech_table.resizeColumnsToContents()
+    
+        self.show()
 
     def modify_layer_selection(self):
-<<<<<<< HEAD:PropertyPanel.py
-        from All_Class import LayerSelector
-=======
         from ui.LayerSelector import LayerSelector
         from core import Core_Functionality
 
         """Reopen the layer selection dialog to modify selected layers."""
->>>>>>> Refactoring_Layout:gds/PropertyPanel.py
         if not self.gds_path or not self.lyp_path or not self.filtered_layers:
-            QtWidgets.QMessageBox.critical(None, "Error", "Missing file paths or layer metadata."); return
-        dlg = LayerSelector(self.filtered_layers, self.selected_layers, options=self.options)
-        if dlg.exec_()!=QtWidgets.QDialog.Accepted: return
-        selected_layers=dlg.selected_layers; self.options=dict(dlg.options)
-        if not selected_layers:
-            QtWidgets.QMessageBox.warning(None, "Warning", "No layers selected."); return
+            QtWidgets.QMessageBox.critical(None, "Error", "Cannot modify layers: Missing file paths or layer data.")
+            return
 
-        doc = FreeCAD.activeDocument() or FreeCAD.newDocument("GDSII_Document")
-        try: doc.openTransaction("Update Layer Selection")
-        except Exception: pass
+        dialog = LayerSelector(self.filtered_layers, self.selected_layers, options=self.options)
+        if dialog.exec_():
+            selected_layers = dialog.selected_layers
+            options = dialog.options
+            if not selected_layers:
+                QtWidgets.QMessageBox.warning(None, "Warning", "No layers selected.")
+                return
 
-        match_klayout = bool(self.options.get("match_klayout", True))
-        skip_fill = not match_klayout
-        highlight_bondable = bool(self.options.get("highlight_bondable", True))
+            self.options = dict(options)
 
-        # remove old objects
-        for o in list(doc.Objects):
-            try: doc.removeObject(o.Name)
-            except Exception: pass
+            # New/clean document for preview update
+            doc = FreeCAD.activeDocument()
+            if not doc:
+                doc = FreeCAD.newDocument("GDSII_Document")
 
-        entries = mymodule.load_gds(self.gds_path, selected_layers, preview_2d=True, compound_per_layer=True, skip_fill_datatype=skip_fill)
-        if not entries:
-            QtWidgets.QMessageBox.warning(None, "Warning", "No shapes for selection."); return
+            try:
+                doc.openTransaction("Update Layer Selection")
+            except Exception:
+                pass
 
-        layer_objects = {}
-        for L in selected_layers:
-            lid=L.get('layer_id',0); dt=L.get('datatype',0); lname=L.get('name','Unnamed')
-            m=self.ihp_map.get((lid,dt), {}); types=m.get('edi_types', set())
-            if match_klayout:
-                shape_rgb = hex_to_rgb(L.get('fill-color', '#FFFFFF')); line_rgb = hex_to_rgb(L.get('frame-color', '#000000')); tr=0
-                if highlight_bondable and mymodule.is_bondable(types): shape_rgb=(0.95,0.80,0.25)
-            else:
-                _, shape_rgb, line_rgb, tr = mymodule.style_for_material(m.get('edi_name',''), types)
-            e = next((e for e in entries if e['layer_id']==lid and e['datatype']==dt), None)
-            if not e: continue
-            obj = doc.addObject("Part::Feature", f"Layer_{lname}_{lid}_{dt}"); obj.Shape = e['shape']
-            obj.ViewObject.ShapeColor = shape_rgb; obj.ViewObject.LineColor = line_rgb; obj.ViewObject.Transparency = tr
-            layer_objects.setdefault((lid,dt), []).append(obj)
+            # compute preview params from options
+            match_klayout = bool(options.get("match_klayout", True))
+            skip_fill = not match_klayout
+            min_area = 0.0 if match_klayout else 0.0004
+            decimate = 0.0 if match_klayout else 0.002
 
-<<<<<<< HEAD:PropertyPanel.py
-        try: doc.commitTransaction()
-        except Exception: pass
-        doc.recompute()
-        self.update_properties(selected_layers, mymodule.parse_lyp(self.lyp_path)[1], layer_objects)
-        FreeCADGui.activeDocument().activeView().viewIsometric(); FreeCADGui.SendMsgToActiveView("ViewFit")
-=======
 
             layer_objects = {}
             shapes = Core_Functionality.load_gds(
@@ -205,4 +288,3 @@ class PropertyPanel(QtWidgets.QDockWidget):
             FreeCADGui.SendMsgToActiveView("ViewFit")
 
             QtWidgets.QMessageBox.information(None, "Success", "Layer selection updated successfully.")
->>>>>>> Refactoring_Layout:gds/PropertyPanel.py
