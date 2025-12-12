@@ -28,11 +28,11 @@ class HelpGuideDialog(QtWidgets.QDialog):
         self.tab_widget = QtWidgets.QTabWidget()
         
         # Create tabs
-        self.create_tab("■ Overview", "overview.html")
-        self.create_tab("▶ Quick Start", "quickstart.html")
-        self.create_tab("⚙ Tools", "tools.html")
-        self.create_tab("↯ Workflows", "workflows.html")
-        self.create_tab("⚠ Troubleshooting", "troubleshooting.html")
+        self.create_tab("Overview", "overview.html")
+        self.create_tab("Quick Start", "quickstart.html")
+        self.create_tab("Tools", "tools.html")
+        self.create_tab("Workflows", "workflows.html")
+        self.create_tab("Troubleshooting", "troubleshooting.html")
         
         layout.addWidget(self.tab_widget)
         

@@ -149,7 +149,7 @@ def create_layer_on_leadframe():
         # Pick + preview (fast 2D) -> returns options as 7th item
         result = load_gds_layers()
         if not result or result[0] is None:
-            FreeCAD.Console.PrintError("❌ Failed to load GDS layers.\n")
+            FreeCAD.Console.PrintError("Failed to load GDS layers.\n")
             return
 
         # backward compatible unpacking
@@ -160,7 +160,7 @@ def create_layer_on_leadframe():
             options = {"match_klayout": True, "highlight_bondable": True}
 
         if not selected_layers or not gds_path:
-            FreeCAD.Console.PrintError("❌ Missing selected layers or GDS path.\n")
+            FreeCAD.Console.PrintError("Missing selected layers or GDS path.\n")
             return
         
         # Load GDS Layers
@@ -186,7 +186,7 @@ def create_layer_on_leadframe():
         # Leadframe configuration
         config = configure_leadframe()
         if not config:
-            FreeCAD.Console.PrintError("❌ Leadframe configuration cancelled.\n")
+            FreeCAD.Console.PrintError("Leadframe configuration cancelled.\n")
             return
 
         # Transform options
@@ -218,7 +218,7 @@ def create_layer_on_leadframe():
         # Configuration fuction
         result = configuration(doc, gds_path, selected_layers, options, ihp_map, config, opts)
         if not result:
-            FreeCAD.Console.PrintError("❌ Configuration failed.\n")
+            FreeCAD.Console.PrintError("Configuration failed.\n")
             return
         
         doc, layer_objects = result
@@ -237,7 +237,7 @@ def create_layer_on_leadframe():
         return doc
 
     except Exception as e:
-        FreeCAD.Console.PrintError(f"❌ An error occurred: {str(e)}\n")
+        FreeCAD.Console.PrintError(f"An error occurred: {str(e)}\n")
         return None
 
 class LayeronLeadframe:
@@ -251,7 +251,7 @@ class LayeronLeadframe:
     def Activated(self):
         result = create_layer_on_leadframe()
         if result is None:
-            QtWidgets.QMessageBox.critical(None, "Error", "❌ Failed to create layer on leadframe.\n")
+            QtWidgets.QMessageBox.critical(None, "Error", "Failed to create layer on leadframe.\n")
         else:
             QtWidgets.QMessageBox.information(None, "Success", "GDS stacked with correct heights; imported with chosen color mode.\n")
 

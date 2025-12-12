@@ -11,9 +11,9 @@ try:
     from wirebond import WirebondCommand
     from help import HelpGuideCommand
 
-    FreeCAD.Console.PrintMessage("✔ Commands loaded successfully\n")
+    FreeCAD.Console.PrintMessage("Commands loaded successfully\n")
 except Exception as e:
-    FreeCAD.Console.PrintError(f"❌ Failed to load commands: {e}\n")
+    FreeCAD.Console.PrintError(f"Failed to load commands: {e}\n")
 
 class MyWorkbench(FreeCADGui.Workbench):
 
@@ -46,12 +46,12 @@ class MyWorkbench(FreeCADGui.Workbench):
                     "HelpGuideCommand",
                 ],
             )
-            FreeCAD.Console.PrintMessage("✔ Toolbar initialized\n")
+            FreeCAD.Console.PrintMessage("Toolbar initialized\n")
         except Exception as e:
-            FreeCAD.Console.PrintError(f"❌ Toolbar initialization failed: {e}\n")
+            FreeCAD.Console.PrintError(f"Toolbar initialization failed: {e}\n")
 
     def GetClassName(self):
         return "Gui::PythonWorkbench"
 
 FreeCADGui.addWorkbench(MyWorkbench())
-FreeCAD.Console.PrintMessage("✔ GDSII Workbench registration attempted\n")
+FreeCAD.Console.PrintMessage("GDSII Workbench registration attempted\n")
