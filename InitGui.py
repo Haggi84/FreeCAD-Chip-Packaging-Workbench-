@@ -1,9 +1,6 @@
 from PySide2 import QtWidgets, QtCore
 import FreeCAD, FreeCADGui
 
-
->>>>>>> Refactoring_Layout
-
 # Try to register commands (some are optional)
 try:
     from gds import GDSCommand
