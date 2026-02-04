@@ -309,12 +309,14 @@ def load_gds(gds_path,
              min_area_mm2=0.0,
              decimate_tol_mm=0.0,
              skip_fill_datatype=True,
+             merge_adjacent=False,
              stack_mm=None, # NEW: dict(layer_name, layer_datatype) -> {'t_mm', 'z0_mm'} for 3D stacking
              progress_callback=None
              ):
     """
     GDS loader:
     - builds ONE compound Part shape per selected (layer,datatype)
+    - optional merge of adjacent shapes to reduce artifacts
     - optional 2D preview (wires only) or 3D with per-layer thickness/offset
     - filters tiny polygons and optional FILL (datatype 22) by default
 
@@ -455,6 +457,23 @@ def load_gds(gds_path,
             progress_total = max(progress_total, 1)
             progress_callback(0, progress_total, "Importing GDS layers...")
 
+        def _merge_shapes(shapes):
+            if not shapes:
+                return None
+            if len(shapes) == 1:
+                return shapes[0]
+            merged = shapes[0]
+            for shape in shapes[1:]:
+                try:
+                    merged = merged.fuse(shape)
+                except Exception:
+                    continue
+            try:
+                merged = merged.removeSplitter()
+            except Exception:
+                pass
+            return merged
+
         # collect wires/faces per layer
         progress_count = 0
         for layer, datatype, poly_pts in polygons:
@@ -482,13 +501,13 @@ def load_gds(gds_path,
 
             # build wire/face
             wire = Part.makePolygon([(x, y, 0.0) for (x, y) in (pts2d + [pts2d[0]])])
+            try:
+                face = Part.Face(wire)
+            except Exception:
+                continue
             if preview_2d:
-                by_layer[key].append(wire)
+                by_layer[key].append(face if merge_adjacent else wire)
             else:
-                try:
-                    face = Part.Face(wire)
-                except Exception:
-                    continue
                 # pick thickness & offset for this layer
                 if stack_mm and key in stack_mm:
                     t_mm = float(stack_mm[key]["t_mm"])
@@ -510,7 +529,10 @@ def load_gds(gds_path,
             parts = by_layer.get((lid, dt), [])
             if not parts:
                 continue
-            compound = Part.makeCompound(parts) if compound_per_layer and len(parts) > 1 else parts[0]
+            if merge_adjacent and len(parts) > 1:
+                compound = _merge_shapes(parts) or parts[0]
+            else:
+                compound = Part.makeCompound(parts) if compound_per_layer and len(parts) > 1 else parts[0]
             results.append({
                 "shape": compound,
                 "layer_id": lid,

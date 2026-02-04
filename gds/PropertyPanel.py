@@ -65,7 +65,7 @@ class PropertyPanel(QtWidgets.QDockWidget):
         self.filtered_layers = None
         self.selected_layers = None
         self.ihp_map = {}  # (layer,datatype)->{edi_name,edi_types}
-        self.options = {"match_klayout": True, "highlight_bondable": True}
+        self.options = {"match_klayout": True, "highlight_bondable": True, "merge_adjacent": False}
 
         self.hide()
 
@@ -207,6 +207,7 @@ class PropertyPanel(QtWidgets.QDockWidget):
             skip_fill = not match_klayout
             min_area = 0.0 if match_klayout else 0.0004
             decimate = 0.0 if match_klayout else 0.002
+            merge_adjacent = bool(options.get("merge_adjacent", False))
 
 
             layer_objects = {}
@@ -218,7 +219,8 @@ class PropertyPanel(QtWidgets.QDockWidget):
                 compound_per_layer=True,
                 min_area_mm2=min_area,
                 decimate_tol_mm=decimate,
-                skip_fill_datatype=skip_fill
+                skip_fill_datatype=skip_fill,
+                merge_adjacent=merge_adjacent
             )
             if not shapes:
                 QtWidgets.QMessageBox.warning(None, "Warning", "No shapes found for the selected layers.")

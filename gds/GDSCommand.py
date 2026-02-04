@@ -88,6 +88,7 @@ def load_gds_layers():
             decimate = 0.0 if match_klayout else 0.002
             use_klayout_colors = match_klayout
             highlight_bondable = bool(options.get("highlight_bondable", True))
+            merge_adjacent = bool(options.get("merge_adjacent", False))
 
             # Ensure a valid document is available
             doc = FreeCAD.activeDocument()
@@ -131,6 +132,7 @@ def load_gds_layers():
                     min_area_mm2=min_area,
                     decimate_tol_mm=decimate,
                     skip_fill_datatype=skip_fill,
+                    merge_adjacent=merge_adjacent,
                     progress_callback=progress_callback
                 )
             finally:
