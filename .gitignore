@@ -213,10 +213,9 @@ cython_debug/
 
 # FreeCAD_AddIn stuff:
 .__pycache__/
-.vs/DI-PASSIONATE-FreeCAD/FileContentIndex/a5a4d1b6-41d0-490d-a65b-09786185ecae.vsidx
-.vs/slnx.sqlite
-.vs/DI-PASSIONATE-FreeCAD/v17/.wsuo
+.vs/
 .idea/
 
 # misc
 archive.zip
+startup.log

@@ -5,9 +5,9 @@ import os
 if os.environ.get("FREECAD_DEBUGPY") == "1":
     import debugpy
     debugpy.listen(("localhost", 5678))
-    print("debugpy: waiting for VS Code attach on port 5678...")
+    FreeCAD.Console.PrintMessage("debugpy: waiting for VS Code attach on port 5678...\n")
     debugpy.wait_for_client()
-    print("debugpy: attached.")
+    FreeCAD.Console.PrintMessage("debugpy: attached.\n")
 
 # Try to register commands (some are optional)
 try:
@@ -26,18 +26,10 @@ except Exception as e:
 class MyWorkbench(FreeCADGui.Workbench):
 
     from Get_Path import get_icon
-    #base_path = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() \
-                #else os.path.join(FreeCAD.getUserAppDataDir(), "Mod", "DI-PASSIONATE-FreeCAD")
-
-    #icon_path = os.path.join(base_path, "resources", "icons", "my_icon.svg")
-    #MODULE_PATH = os.path.join(FreeCAD.getHomePath(), "Mod", "DI-PASSIONATE-FreeCAD")
-    #ICON_PATH = os.path.join(MODULE_PATH, "resources", "icons", "my_icon.svg")
-    #ICON_PATH = os.path.join(os.path.dirname(__path__[0]), "resources", "icons", "my_icon.svg")
     MenuText = "GDSII Workbench"
     ToolTip = "FreeCAD GDSII Workbench"
     Icon = get_icon("my_icon.svg")
-    #Icon = ICON_PATH  #"C:/Program Files/FreeCAD 1.0/Mod/DI-PASSIONATE-FreeCAD/resources/icons/my_icon.svg" #"icon_path  # Optional: Add path to your icon
-    
+
 
     def Initialize(self):
         try:
