@@ -55,8 +55,13 @@ def configuration(doc, gds_path, selected_layers, options, ihp_map, config, opts
 
     cx = (xmin + xmax) / 2.0
     cy = (ymin + ymax) / 2.0
-    final_tx = -cx + opts["tx"]
-    final_ty = -cy + opts["ty"]
+    # cx/cy are in mm at base_scale (first-pass coordinate system).
+    # The final transform uses final_scale, so the die centre in the final
+    # coordinate system is cx * (final_scale / base_scale).
+    # We must translate by the negative of that to place the die at the origin.
+    scale_ratio = (final_scale / base_scale) if base_scale > 0 else 1.0
+    final_tx = -cx * scale_ratio + opts["tx"]
+    final_ty = -cy * scale_ratio + opts["ty"]
 
     final_transform = {
         "scale": final_scale,

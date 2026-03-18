@@ -43,29 +43,24 @@ class WirebondCommand:
         if dialog.exec_():
             config = dialog.get_config()
 
-            # Add 2D-specific settings
-            config["wire_style"] = "straight"  # Options: 'straight' or 'arc'
-            config["arc_height"] = 2.0
+            if not FreeCAD.activeDocument():
+                FreeCAD.newDocument("WireBonding")
 
-            # Ensure we have a document
-            doc = FreeCAD.activeDocument()
-            if not doc:
-                doc = FreeCAD.newDocument("2D_WireBonding")
-
-            # Start manual bonding using the global instance
             manual_bonder.start_bonding_session(config)
 
-            # Show instructions
             QtWidgets.QMessageBox.information(
                 None,
-                "Manual 2D Wire Bonding",
-                "Manual 2D Wire Bonding Started!\n\n"
-                "INSTRUCTIONS:\n"
-                "1. Click on START point (die pad)\n"
-                "2. Click on END point (bond finger)\n"
-                "3. Repeat for each bond\n"
-                "4. Use 'Finish Wire Bonding' command to complete\n\n"
-                "Look for green/red temporary markers!",
+                "Wire Bonding Started",
+                "Wire bonding session active.\n\n"
+                "Only ContactPoint markers can be selected.\n\n"
+                "1. Click a ContactPoint on the die pad.\n"
+                "2. Click a ContactPoint on the leadframe lead.\n"
+                "3. A 3-D bond wire is created between them.\n"
+                "4. Repeat for each bond.\n"
+                "5. Click 'Finish Wire Bonding' when done.\n\n"
+                "ContactPoints appear as coloured dots:\n"
+                "  Orange = die side\n"
+                "  Blue   = leadframe side",
             )
         else:
             QtWidgets.QMessageBox.information(None, "Cancelled", "Wire bonding configuration cancelled.")

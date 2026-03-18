@@ -1,216 +1,295 @@
+"""
+Realistic leadframe geometry builder.
+
+Object naming convention
+------------------------
+LeadframeBody      : semi-transparent package body (mold compound)
+DiePaddle          : central die-attach copper pad  — IsDiePaddle = True
+Lead_L01 … L/R/T/B: individual lead fingers        — IsLeadFinger = True
+BGA_Ball_00_00 …   : individual BGA solder balls   — IsLeadFinger = True
+ContactPoint_001 … : auto-generated snap markers   — IsContactPoint = True
+                     placed at the top-face centre of every lead / ball
+"""
+
 from FreeCAD import Base
-import FreeCAD, Part, Sketcher, FreeCADGui
+import FreeCAD
+import FreeCADGui
+import Part
 
-def build_leadframe(config, doc=None, gds_objects=None):
-    """Create a leadframe geometry in the active FreeCAD document.
 
-    Args:
-        config (dict): Leadframe parameters. Required keys for all types:
-            frame_type (str): One of "QFN (Quad Flat No-lead)",
-                              "QFP (Quad Flat Package)", "BGA (Ball Grid Array)".
-            frame_length (float): Package length in mm.
-            frame_width  (float): Package width in mm.
-            frame_thickness (float): Frame body thickness in mm.
-            material (str): Material label (e.g. "Copper", "Alloy 42").
+# ── material / visual colours  (R, G, B)  0–1 ─────────────────────────────────
+_MAT_COLOR = {
+    "Copper":   (0.72, 0.45, 0.20),
+    "Alloy 42": (0.60, 0.60, 0.65),
+    "Silver":   (0.75, 0.75, 0.80),
+}
+_MOLD_COLOR    = (0.25, 0.25, 0.28)   # dark-grey mold compound
+_CONTACT_COLOR = (0.10, 0.60, 0.90)   # blue contact-point markers
 
-            QFN/QFP only:
-                left_lead_count, right_lead_count,
-                top_lead_count, bottom_lead_count (int): Leads per side.
-                lead_width  (float): Width of each lead in mm.
-                lead_pitch  (float): Centre-to-centre spacing in mm (must be > lead_width).
-                lead_length (float): Extension length for QFP leads in mm.
-                qfn_pad_thickness (float): Pad thickness for QFN in mm.
 
-            BGA only:
-                bga_ball_diameter (float): Solder ball diameter in mm.
-                bga_ball_pitch    (float): Ball centre spacing in mm (must be > diameter).
+# ── geometry helpers ───────────────────────────────────────────────────────────
 
-        doc: Unused (kept for API compatibility). Active document is always used.
-        gds_objects (dict, optional): {layer_id: [FreeCAD objects]} to place above
-            the leadframe at z = frame_thickness + 0.01 mm.
+def _box(x0, y0, z0, dx, dy, dz) -> Part.Shape:
+    return Part.makeBox(dx, dy, dz, Base.Vector(x0, y0, z0))
 
-    Returns:
-        FreeCAD document containing the created geometry.
+
+def _feature(doc, name: str, shape: Part.Shape, color, transparency: int = 0):
+    obj = doc.addObject("Part::Feature", name)
+    obj.Shape = shape
+    obj.ViewObject.ShapeColor = color
+    obj.ViewObject.Transparency = transparency
+    return obj
+
+
+def _tag_lead(obj, side: str, index: int):
+    """Mark an object as a wire-bonding lead target."""
+    obj.addProperty("App::PropertyBool",    "IsLeadFinger", "Leadframe",
+                    "Wire-bond target lead finger or BGA ball")
+    obj.addProperty("App::PropertyString",  "LeadSide",     "Leadframe",
+                    "Package side: L / R / T / B  or  BGA")
+    obj.addProperty("App::PropertyInteger", "LeadIndex",    "Leadframe",
+                    "Lead number on this side (1-based)")
+    obj.IsLeadFinger = True
+    obj.LeadSide     = side
+    obj.LeadIndex    = index
+
+
+# ── contact-point marker creation ─────────────────────────────────────────────
+
+def _create_contact_markers(doc, pairs: list):
     """
-    doc = FreeCAD.activeDocument()
-    if not doc:
-        doc = FreeCAD.newDocument("Leadframe")
+    For each (lead_obj, snap_point) in *pairs* create a ContactPoint marker
+    at *snap_point* (top face centre of the lead).
 
-    frame_type = config["frame_type"]
-    frame_length = config["frame_length"]
-    frame_width = config["frame_width"]
+    The markers are coloured blue and carry the same properties as those
+    created by ContactPointTool so the wire-bonding session can use them.
+    """
+    # count existing markers to avoid name clashes
+    existing = sum(1 for o in doc.Objects if o.Name.startswith("ContactPoint_"))
+
+    for i, (lead_obj, pt) in enumerate(pairs, 1):
+        idx    = existing + i
+        name   = f"ContactPoint_{idx:03d}"
+        marker = doc.addObject("Part::Feature", name)
+        marker.Shape = Part.Vertex(pt.x, pt.y, pt.z)
+
+        marker.addProperty("App::PropertyVector", "ContactPoint", "Wirebond",
+                            "Snap point for wire bonding")
+        marker.addProperty("App::PropertyString", "SourceObject", "Wirebond",
+                            "Lead object this point belongs to")
+        marker.addProperty("App::PropertyBool",   "IsContactPoint", "Wirebond",
+                            "Wire-bond contact point marker")
+
+        marker.ContactPoint  = pt
+        marker.SourceObject  = lead_obj.Name
+        marker.IsContactPoint = True
+
+        marker.ViewObject.PointSize  = 8
+        marker.ViewObject.PointColor = _CONTACT_COLOR
+        marker.ViewObject.DisplayMode = "Points"
+
+
+# ── public entry point ─────────────────────────────────────────────────────────
+
+def build_leadframe(config: dict, doc=None, gds_objects=None):
+    """
+    Create a realistic leadframe in the active FreeCAD document.
+
+    Required config keys (all types)
+    ---------------------------------
+    frame_type        : "QFN (Quad Flat No-lead)" | "QFP (Quad Flat Package)"
+                        | "BGA (Ball Grid Array)"
+    frame_length      : package length   [mm]
+    frame_width       : package width    [mm]
+    frame_thickness   : body thickness   [mm]
+    material          : "Copper" | "Alloy 42" | "Silver"
+
+    QFN / QFP additional keys
+    -------------------------
+    left_lead_count, right_lead_count,
+    top_lead_count,  bottom_lead_count  : leads per side  (int)
+    lead_width        : lead width                         [mm]
+    lead_pitch        : centre-to-centre lead spacing      [mm]  > lead_width
+    inner_lead_length : bond-finger depth inside package   [mm]
+    lead_length       : outer gull-wing length (QFP only)  [mm]
+    has_die_paddle    : include central die paddle?        (bool, default True)
+    die_paddle_length : die paddle X size                  [mm]
+    die_paddle_width  : die paddle Y size                  [mm]
+
+    BGA additional keys
+    -------------------
+    bga_ball_diameter : solder ball diameter               [mm]
+    bga_ball_pitch    : ball centre spacing                [mm]  > diameter
+
+    GDS objects
+    -----------
+    gds_objects : {layer_key: [Part::Feature, …]}  — lifted to z = frame_thickness + 0.01
+                  and centred at XY origin (GDS shapes already carry XY transform).
+    """
+    doc = FreeCAD.activeDocument() or FreeCAD.newDocument("Leadframe")
+
+    frame_type      = config["frame_type"]
+    frame_length    = config["frame_length"]
+    frame_width     = config["frame_width"]
     frame_thickness = config["frame_thickness"]
-    material = config["material"]
+    material        = config["material"]
+    metal_color     = _MAT_COLOR.get(material, _MAT_COLOR["Copper"])
 
-    # Create a new sketch in the XY plane
-    sketch = doc.addObject("Sketcher::SketchObject", f"FrameSketch_{material}")
-    sketch.Placement = Base.Placement(Base.Vector(0, 0, 0), Base.Rotation(0, 0, 0, 1))
+    half_l = frame_length / 2
+    half_w = frame_width  / 2
 
-    # Create the main frame rectangle
-    frame_x = -frame_length / 2
-    frame_y = -frame_width / 2
-    frame_x_end = frame_x + frame_length
-    frame_y_end = frame_y + frame_width
-    
-    lines = [
-        Part.LineSegment(Base.Vector(frame_x, frame_y, 0), Base.Vector(frame_x_end, frame_y, 0)),
-        Part.LineSegment(Base.Vector(frame_x_end, frame_y, 0), Base.Vector(frame_x_end, frame_y_end, 0)),
-        Part.LineSegment(Base.Vector(frame_x_end, frame_y_end, 0), Base.Vector(frame_x, frame_y_end, 0)),
-        Part.LineSegment(Base.Vector(frame_x, frame_y_end, 0), Base.Vector(frame_x, frame_y, 0))
-    ]
+    # ── Package body ──────────────────────────────────────────────────────
+    body_shape = _box(-half_l, -half_w, 0, frame_length, frame_width, frame_thickness)
+    _feature(doc, "LeadframeBody", body_shape, _MOLD_COLOR, transparency=65)
 
-    # Add lines to the sketch and constrain them
-    for i, line in enumerate(lines):
-        sketch.addGeometry(line)
-        if i > 0:
-            sketch.addConstraint(Sketcher.Constraint('Coincident', i-1, 2, i, 1))
-    sketch.addConstraint(Sketcher.Constraint('Coincident', len(lines)-1, 2, 0, 1))
-    
-    # Extrude the frame to create the 3D body
-    frame_body = doc.addObject("Part::Extrusion", "LeadframeBody")
-    frame_body.Base = sketch
-    frame_body.Dir = Base.Vector(0, 0, frame_thickness)
-    frame_body.Solid = True
-
-    def add_leads(lead_x_start, lead_x_end, lead_y_start, lead_y_end, lead_sketch):
-        """
-        Helper function to add leads to the sketch.
-        """
-        if lead_x_start != lead_x_end and lead_y_start != lead_y_end:
-            lead_lines = [
-                Part.LineSegment(Base.Vector(lead_x_start, lead_y_start, 0), Base.Vector(lead_x_end, lead_y_start, 0)),
-                Part.LineSegment(Base.Vector(lead_x_end, lead_y_start, 0), Base.Vector(lead_x_end, lead_y_end, 0)),
-                Part.LineSegment(Base.Vector(lead_x_end, lead_y_end, 0), Base.Vector(lead_x_start, lead_y_end, 0)),
-                Part.LineSegment(Base.Vector(lead_x_start, lead_y_end, 0), Base.Vector(lead_x_start, lead_y_start, 0))
-            ]
-
-            start_idx = lead_sketch.GeometryCount
-            for j, line in enumerate(lead_lines):
-                lead_sketch.addGeometry(line)
-                if j > 0:
-                    lead_sketch.addConstraint(Sketcher.Constraint('Coincident', start_idx + j - 1, 2, start_idx + j, 1))
-            lead_sketch.addConstraint(Sketcher.Constraint('Coincident', start_idx + len(lead_lines) - 1, 2, start_idx, 1))
-
-
-    if frame_type in ["QFN (Quad Flat No-lead)", "QFP (Quad Flat Package)"]:
-        # Extract lead parameters
-        left_lead_count = config["left_lead_count"]
-        right_lead_count = config["right_lead_count"]
-        top_lead_count = config["top_lead_count"]
-        bottom_lead_count = config["bottom_lead_count"]
-        lead_width = config["lead_width"]
-        lead_pitch = config["lead_pitch"]
-        lead_length = config["lead_length"]
-        qfn_pad_thickness = config["qfn_pad_thickness"]
-
-        # Check possible lead counts
-        if left_lead_count <= frame_width and right_lead_count <= frame_width and top_lead_count <= frame_length and bottom_lead_count <= frame_length:
-            
-            # Calculate the total span for leads on each side
-            left_lead_span = (left_lead_count - 1) * lead_pitch if left_lead_count > 0 else 0
-            right_lead_span = (right_lead_count - 1) * lead_pitch if right_lead_count > 0 else 0
-            top_lead_span = (top_lead_count - 1) * lead_pitch if top_lead_count > 0 else 0
-            bottom_lead_span = (bottom_lead_count - 1) * lead_pitch if bottom_lead_count > 0 else 0
-
-            # Ensure the frame is large enough to accommodate the leads
-            if max(left_lead_span, right_lead_span) > frame_width:
-                FreeCAD.Console.PrintError("Frame width is too small for the number of leads on the left or right side.")
-            if max(top_lead_span, bottom_lead_span) > frame_length:
-                FreeCAD.Console.PrintError("Frame length is too small for the number of leads on the top or bottom side.")
-
-            # Create a new sketch for leads
-            lead_sketch = doc.addObject("Sketcher::SketchObject", "LeadSketch")
-            lead_sketch.Placement = Base.Placement(Base.Vector(0, 0, 0), Base.Rotation(0, 0, 0, 1))
-
-            # QFP: Leads extend outwards from the frame; QFN: Leads are flush with the frame
-            lead_extension = lead_length if frame_type == "QFP (Quad Flat Package)" else lead_width
-
-            # Add leads to left side
-            for i in range(left_lead_count):
-                lead_y = frame_y + (i * lead_pitch) - (left_lead_span / 2) + (lead_pitch / 2) if left_lead_count > 1 else frame_y + frame_width / 2
-                lead_x_start = frame_x - lead_extension if frame_type == "QFP (Quad Flat Package)" else frame_x - lead_width
-                lead_x_end = frame_x
-                lead_y_start = lead_y - lead_width / 2
-                lead_y_end = lead_y + lead_width / 2
-                add_leads(lead_x_start, lead_x_end, lead_y_start, lead_y_end, lead_sketch)
-
-            # Add leads to right side
-            for i in range(right_lead_count):
-                lead_y = frame_y + (i * lead_pitch) - (right_lead_span / 2) + (lead_pitch / 2) if right_lead_count > 1 else frame_y + frame_width / 2
-                lead_x_start = frame_x + frame_length
-                lead_x_end = frame_x + frame_length + lead_extension if frame_type == "QFP (Quad Flat Package)" else frame_x + frame_length + lead_width
-                lead_y_start = lead_y - lead_width / 2
-                lead_y_end = lead_y + lead_width / 2
-                add_leads(lead_x_start, lead_x_end, lead_y_start, lead_y_end, lead_sketch)
-
-            # Add leads to top side
-            for i in range(top_lead_count):
-                lead_x = frame_x + (i * lead_pitch) - (top_lead_span / 2) + (lead_pitch / 2) if top_lead_count > 1 else frame_x + frame_length / 2
-                lead_y_start = frame_y + frame_width
-                lead_y_end = frame_y + frame_width + lead_extension if frame_type == "QFP (Quad Flat Package)" else frame_y + frame_width + lead_width
-                lead_x_start = lead_x - lead_width / 2
-                lead_x_end = lead_x + lead_width / 2
-                add_leads(lead_x_start, lead_x_end, lead_y_start, lead_y_end, lead_sketch)
-
-            # Add leads to bottom side
-            for i in range(bottom_lead_count):
-                lead_x = frame_x + (i * lead_pitch) - (bottom_lead_span / 2) + (lead_pitch / 2) if bottom_lead_count > 1 else frame_x + frame_length / 2
-                lead_y_start = frame_y - lead_extension if frame_type == "QFP (Quad Flat Package)" else frame_y - lead_width
-                lead_y_end = frame_y
-                lead_x_start = lead_x - lead_width / 2
-                lead_x_end = lead_x + lead_width / 2
-                add_leads(lead_x_start, lead_x_end, lead_y_start, lead_y_end, lead_sketch)
-            
-            # Extrude the lead (QFN pads are placed on the bottom of the frame)
-            if lead_sketch.GeometryCount > 0: # Ensure there are leads to extrude
-                lead_extrusion = doc.addObject("Part::Extrusion", "LeadframeLeads")
-                lead_extrusion.Base = lead_sketch
-                lead_extrusion.Dir = Base.Vector(0, 0, qfn_pad_thickness if frame_type == "QFN (Quad Flat No-lead)" else frame_thickness)
-                lead_extrusion.Solid = True
-                if frame_type == "QFN (Quad Flat No-lead)":
-                    lead_extrusion.Placement = Base.Placement(Base.Vector(0, 0, -qfn_pad_thickness), Base.Rotation(0, 0, 0, 1))
-
-        else:
-            FreeCAD.Console.PrintError("Invalid Lead counts!. Lead counts are out of range for the frame dimensions. Please adjust the lead counts.\n")
-
+    # ── Type-specific geometry → returns (lead_obj, snap_point) pairs ────
+    pairs = []
+    if frame_type in ("QFN (Quad Flat No-lead)", "QFP (Quad Flat Package)"):
+        pairs = _build_qfn_qfp(doc, config, frame_type, metal_color, half_l, half_w)
     elif frame_type == "BGA (Ball Grid Array)":
-        # Extract BGA parameters
-        bga_ball_diameter = config["bga_ball_diameter"]
-        bga_ball_pitch = config["bga_ball_pitch"]
+        pairs = _build_bga(doc, config, metal_color)
 
-        # Calculate the number of balls based on frame dimensions and ball pitch
-        balls_x = int(frame_length / bga_ball_pitch) + 1
-        balls_y = int(frame_width / bga_ball_pitch) + 1
+    # ── Auto contact points on every lead / ball top face ─────────────────
+    if pairs:
+        _create_contact_markers(doc, pairs)
 
-        # Validate frame dimensions
-        if balls_x < 1 or balls_y < 1:
-            FreeCAD.Console.PrintError("Frame dimensions are too small for BGA ball grid.")
-
-        # Create a compound object for BGA balls
-        ball_objects = []
-        for i in range(balls_x):
-            for j in range(balls_y):
-                ball_x = frame_x + (i * bga_ball_pitch)
-                ball_y = frame_y + (j * bga_ball_pitch)
-                ball = doc.addObject("Part::Sphere", f"BGA_Ball_{i}_{j}")
-                ball.Radius = bga_ball_diameter / 2
-                ball.Placement = Base.Placement(Base.Vector(ball_x, ball_y, -bga_ball_diameter / 2), Base.Rotation(0, 0, 0, 1))
-                ball_objects.append(ball)
-
-        # Create a compound of all BGA balls
-        if ball_objects:
-            bga_compound = doc.addObject("Part::Compound", "BGA_Balls")
-            bga_compound.Links = ball_objects
-
+    # ── Position GDS objects on top of leadframe, centred at XY origin ────
     if gds_objects:
-        # If GDS objects are provided, add them to the document
-        for layer_id, objects in gds_objects.items():
-            for obj in objects:
-                obj.Placement = Base.Placement(Base.Vector(0, 0, frame_thickness + 0.01), Base.Rotation(0, 0, 0, 1))
+        z = frame_thickness + 0.01
+        for objs in gds_objects.values():
+            for obj in objs:
+                # Shape already carries XY centering from GDS transform;
+                # Placement only needs to lift the object in Z.
+                obj.Placement = Base.Placement(
+                    Base.Vector(0, 0, z), Base.Rotation(0, 0, 0, 1)
+                )
 
     doc.recompute()
     FreeCADGui.activeDocument().activeView().viewIsometric()
     FreeCADGui.SendMsgToActiveView("ViewFit")
-
     return doc
 
+
+# ── QFN / QFP ─────────────────────────────────────────────────────────────────
+
+def _build_qfn_qfp(doc, config, frame_type, color, half_l, half_w):
+    """
+    Build die paddle + individual lead fingers.
+    Returns list of (lead_obj, snap_point) where snap_point is the
+    top-face centre of the lead (at z = frame_thickness).
+    """
+    frame_thickness = config["frame_thickness"]
+    lead_width      = config["lead_width"]
+    lead_pitch      = config["lead_pitch"]
+    inner_lead_len  = config["inner_lead_length"]
+    is_qfp          = (frame_type == "QFP (Quad Flat Package)")
+    outer_lead_len  = config.get("lead_length", 1.0) if is_qfp else 0.0
+
+    # ── Die paddle ────────────────────────────────────────────────────────
+    if config.get("has_die_paddle", True):
+        dp_l = config.get("die_paddle_length", half_l * 2 * 0.55)
+        dp_w = config.get("die_paddle_width",  half_w * 2 * 0.55)
+        dp_shape = _box(-dp_l / 2, -dp_w / 2, 0,
+                        dp_l, dp_w, frame_thickness + 0.005)
+        dp_obj = _feature(doc, "DiePaddle", dp_shape, color)
+        dp_obj.addProperty("App::PropertyBool", "IsDiePaddle", "Leadframe",
+                            "Central die-attach paddle")
+        dp_obj.IsDiePaddle = True
+
+    # ── Individual lead fingers ───────────────────────────────────────────
+    sides = [
+        ("L", config.get("left_lead_count",   0)),
+        ("R", config.get("right_lead_count",  0)),
+        ("T", config.get("top_lead_count",    0)),
+        ("B", config.get("bottom_lead_count", 0)),
+    ]
+
+    pairs = []
+    for side, n in sides:
+        if n <= 0:
+            continue
+        span = (n - 1) * lead_pitch
+        for i in range(n):
+            along = -span / 2 + i * lead_pitch   # position along the side
+
+            if side in ("L", "R"):
+                y0 = along - lead_width / 2
+                y1 = along + lead_width / 2
+                if side == "L":
+                    x0 = -half_l - outer_lead_len
+                    x1 = -half_l + inner_lead_len
+                else:
+                    x0 =  half_l - inner_lead_len
+                    x1 =  half_l + outer_lead_len
+                dx, dy = x1 - x0, y1 - y0
+                shape  = _box(x0, y0, 0, dx, dy, frame_thickness)
+                # Snap point: top-face centre (inner-finger X midpoint × full Y midpoint)
+                # For QFP we snap to the inner-finger half only
+                if is_qfp:
+                    snap_x = (-half_l + inner_lead_len / 2) if side == "L" else (half_l - inner_lead_len / 2)
+                else:
+                    snap_x = x0 + dx / 2
+                snap_pt = Base.Vector(snap_x, along, frame_thickness)
+
+            else:  # T or B
+                x0 = along - lead_width / 2
+                x1 = along + lead_width / 2
+                if side == "B":
+                    y0 = -half_w - outer_lead_len
+                    y1 = -half_w + inner_lead_len
+                else:
+                    y0 =  half_w - inner_lead_len
+                    y1 =  half_w + outer_lead_len
+                dx, dy = x1 - x0, y1 - y0
+                shape  = _box(x0, y0, 0, dx, dy, frame_thickness)
+                if is_qfp:
+                    snap_y = (-half_w + inner_lead_len / 2) if side == "B" else (half_w - inner_lead_len / 2)
+                else:
+                    snap_y = y0 + dy / 2
+                snap_pt = Base.Vector(along, snap_y, frame_thickness)
+
+            name     = f"Lead_{side}{i + 1:02d}"
+            lead_obj = _feature(doc, name, shape, color)
+            _tag_lead(lead_obj, side, i + 1)
+            pairs.append((lead_obj, snap_pt))
+
+    return pairs
+
+
+# ── BGA ───────────────────────────────────────────────────────────────────────
+
+def _build_bga(doc, config, color):
+    """
+    Build individual BGA solder balls.
+    Returns list of (ball_obj, snap_point) where snap_point is the top of
+    each ball (z = 0, the PCB contact surface).
+    """
+    diameter = config["bga_ball_diameter"]
+    pitch    = config["bga_ball_pitch"]
+    radius   = diameter / 2
+
+    frame_l = config["frame_length"]
+    frame_w = config["frame_width"]
+    nx      = max(1, round(frame_l / pitch))
+    ny      = max(1, round(frame_w / pitch))
+    x_start = -(nx - 1) * pitch / 2
+    y_start = -(ny - 1) * pitch / 2
+
+    pairs = []
+    for i in range(nx):
+        for j in range(ny):
+            bx   = x_start + i * pitch
+            by   = y_start + j * pitch
+            name = f"BGA_Ball_{i:02d}_{j:02d}"
+            ball = doc.addObject("Part::Sphere", name)
+            ball.Radius    = radius
+            ball.Placement = Base.Placement(
+                Base.Vector(bx, by, -radius), Base.Rotation(0, 0, 0, 1)
+            )
+            ball.ViewObject.ShapeColor = color
+            _tag_lead(ball, "BGA", i * ny + j + 1)
+            # Top of ball is at z = placement.z + radius = 0
+            snap_pt = Base.Vector(bx, by, 0.0)
+            pairs.append((ball, snap_pt))
+
+    return pairs

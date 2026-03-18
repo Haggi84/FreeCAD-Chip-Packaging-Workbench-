@@ -1,367 +1,374 @@
-from FreeCAD import Base
-from PySide2 import QtCore
-import FreeCAD, FreeCADGui ,Part
+"""
+Manual wire bonding — contact-point filter and 3-D swept-tube geometry.
 
+Session flow
+------------
+1. User runs "Manual Wire Bonding" → WirebondConfigurator dialog.
+2. Session starts; only ContactPoint markers are selectable (everything
+   else is rejected and immediately deselected).
+3. Click 1 — first ContactPoint  (die-side or leadframe-side, order free).
+   A green snap-marker appears at the selected point.
+4. Click 2 — second ContactPoint (must be a different object).
+   A 3-D bond wire is created between the two ContactPoint positions.
+5. Repeat from step 3 for the next bond.
+6. "Finish Wire Bonding" ends the session and prints a report.
+
+Wire geometry
+-------------
+Parabolic BSpline arc (5 control points) swept with a circular cross-section
+of diameter = config['diameter'].  Falls back to a pipe shell, then a line.
+"""
+
+import FreeCAD
+import FreeCADGui
+import Part
+from FreeCAD import Base
+
+
+# ── colour constants ───────────────────────────────────────────────────────────
+_COLOR_WIRE       = (0.90, 0.75, 0.20)   # gold
+_COLOR_SNAP_VALID = (0.10, 0.90, 0.10)   # green  — valid hover / first pick
+_COLOR_SNAP_WAIT  = (0.10, 0.50, 0.90)   # blue   — first pick locked in
+
+
+# ── snap-point resolution ──────────────────────────────────────────────────────
+
+def resolve_snap_point(obj) -> Base.Vector:
+    """
+    Return the stored ContactPoint position of *obj*.
+    Falls back to top-face centre, then BoundBox centre.
+    """
+    if getattr(obj, "IsContactPoint", False):
+        cp = getattr(obj, "ContactPoint", None)
+        if cp is not None:
+            return Base.Vector(cp)
+
+    shape = getattr(obj, "Shape", None)
+    if shape is None:
+        return Base.Vector(0, 0, 0)
+    if shape.Faces:
+        top_face = max(shape.Faces, key=lambda f: f.CenterOfMass.z)
+        return top_face.CenterOfMass
+    return Base.Vector(shape.BoundBox.Center)
+
+
+# ── 3-D bond-wire geometry ─────────────────────────────────────────────────────
+
+def create_bond_wire_3d(start: Base.Vector, end: Base.Vector, config: dict) -> Part.Shape:
+    """
+    Return a 3-D solid bond wire between *start* and *end*.
+
+    Path  : parabolic BSpline through 5 points (start, q1, peak, q2, end).
+    Profile: circle of radius = config['diameter'] / 2.
+    Fallback chain: solid → open pipe shell → plain line.
+    """
+    loop_height = float(config.get("loop_height", 0.3))
+    radius      = float(config.get("diameter",    0.025)) / 2.0
+
+    z_top = max(start.z, end.z) + loop_height
+    peak  = Base.Vector((start.x + end.x) / 2.0,
+                        (start.y + end.y) / 2.0,
+                        z_top)
+    q1    = Base.Vector((start.x + peak.x) / 2.0,
+                        (start.y + peak.y) / 2.0,
+                        (start.z + peak.z) / 2.0)
+    q2    = Base.Vector((peak.x + end.x) / 2.0,
+                        (peak.y + end.y) / 2.0,
+                        (peak.z + end.z) / 2.0)
+    try:
+        bspline = Part.BSplineCurve()
+        bspline.interpolate([start, q1, peak, q2, end])
+        spine_edge = bspline.toShape()
+        spine_wire = Part.Wire([spine_edge])
+        tangent    = spine_edge.tangentAt(spine_edge.FirstParameter)
+        circle     = Part.makeCircle(radius, start, tangent)
+        profile    = Part.Wire([Part.Edge(circle)])
+        pipe       = spine_wire.makePipe(profile)
+        try:
+            return Part.makeSolid(Part.Shell(pipe.Faces))
+        except Exception:
+            return pipe
+    except Exception as e:
+        FreeCAD.Console.PrintWarning(f"3-D wire sweep failed ({e}); using line.\n")
+        return Part.makeLine(start, end)
+
+
+# ── contact-point filter ───────────────────────────────────────────────────────
+
+def _is_contact_point(obj) -> bool:
+    return getattr(obj, "IsContactPoint", False)
+
+
+# ── state constants ────────────────────────────────────────────────────────────
+
+class _State:
+    IDLE         = "idle"
+    AWAIT_FIRST  = "await_first"
+    AWAIT_SECOND = "await_second"
+
+
+# ── main class ─────────────────────────────────────────────────────────────────
 
 class ManualWireBonding:
-    """Manual 2D wire bonding with controlled object selection."""
-    
+    """
+    Wire bonding session controller with strict ContactPoint-only filter.
+
+    Only objects with IsContactPoint = True are accepted.  Clicking any
+    other object clears the selection immediately so the user gets clear
+    visual feedback that the click was rejected.
+    """
+
     def __init__(self):
-        self.selected_objects = []  # Store [die_pad, bond_finger] pairs
-        self.current_selection = None
-        self.doc = FreeCAD.activeDocument()
-        self.config = None
-        self.is_active = False
-        self.selection_mode = "waiting"  # "waiting", "select_die", "select_bond"
-        
-    def start_bonding_session(self, config):
-        """Start manual wire bonding session. Cancels any in-progress session first."""
-        # Clean up any existing session before starting a new one
+        self.bonds             = []          # list of completed bond dicts
+        self.first_cp          = None        # first ContactPoint object
+        self.first_pt          = None        # its resolved snap point
+        self.doc               = None
+        self.config            = None
+        self.is_active         = False
+        self.state             = _State.IDLE
+        self._highlighted      = None
+        self._highlighted_orig = None
+
+    # ── session lifecycle ──────────────────────────────────────────────────
+
+    def start_bonding_session(self, config: dict):
         if self.is_active:
             self.cancel_session()
 
-        self.config = config
-        self.selected_objects = []
-        self.current_selection = None
+        self.config    = config
+        self.bonds     = []
+        self.first_cp  = None
+        self.first_pt  = None
         self.is_active = True
-        self.selection_mode = "select_die"
-        self.doc = FreeCAD.activeDocument()
+        self.state     = _State.AWAIT_FIRST
+        self.doc       = FreeCAD.activeDocument() or FreeCAD.newDocument("WireBonding")
 
-        if not self.doc:
-            self.doc = FreeCAD.newDocument("WireBonding")
-
-        FreeCAD.Console.PrintMessage("=== MANUAL 2D WIRE BONDING STARTED ===\n")
-        FreeCAD.Console.PrintMessage("STEP 1: Click on a DIE PAD (starting point)\n")
-        FreeCAD.Console.PrintMessage("STEP 2: Click on a BOND FINGER (ending point)\n") 
-        FreeCAD.Console.PrintMessage("• Use 'Finish Wire Bonding' command to complete\n")
-        
-        # Set selection observer
         FreeCADGui.Selection.addObserver(self)
-        
-    def addSelection(self, doc, obj, sub, pos):
-        """Handle selection events - but only for valid objects."""
-        if not self.is_active or not self.config:
-            return
-            
-        try:
-            # Get the actual FreeCAD object
-            freecad_obj = None
-            if isinstance(obj, str):
-                freecad_obj = self.doc.getObject(obj)
-            else:
-                freecad_obj = obj
-                
-            if not freecad_obj:
-                FreeCAD.Console.PrintWarning("No valid object selected\n")
-                return
-                
-            # Get object name for identification
-            obj_name = freecad_obj.Name.lower()
-            obj_label = freecad_obj.Label.lower() if hasattr(freecad_obj, 'Label') else ""
-            
-            FreeCAD.Console.PrintMessage(f"Selected: {freecad_obj.Name} | Mode: {self.selection_mode}\n")
-            
-            # STEP 1: Select DIE PAD
-            if self.selection_mode == "select_die":
-                # Check if this is a die pad (you can customize these conditions)
-                if self.is_die_pad(freecad_obj, obj_name, obj_label):
-                    # Get connection point from die pad
-                    die_point = self.get_die_pad_connection_point(freecad_obj, sub)
-                    
-                    self.current_selection = {
-                        'die_pad': freecad_obj,
-                        'die_point': die_point,
-                        'die_sub': sub
-                    }
-                    
-                    FreeCAD.Console.PrintMessage(f"✓ DIE PAD selected: {freecad_obj.Name}\n")
-                    FreeCAD.Console.PrintMessage(f"  Connection point: ({die_point.x:.3f}, {die_point.y:.3f})\n")
-                    
-                    # Create visual feedback
-                    self.create_temp_marker(die_point, "die")
-                    
-                    # Move to next step
-                    self.selection_mode = "select_bond"
-                    FreeCAD.Console.PrintMessage("STEP 2: Now click on a BOND FINGER\n")
-                    
-                else:
-                    FreeCAD.Console.PrintWarning("Please select a DIE PAD object\n")
-                    FreeCAD.Console.PrintMessage("Look for objects named like: die_pad, pad, bond_pad, etc.\n")
-            
-            # STEP 2: Select BOND FINGER  
-            elif self.selection_mode == "select_bond":
-                # Check if this is a bond finger (you can customize these conditions)
-                if self.is_bond_finger(freecad_obj, obj_name, obj_label):
-                    # Get connection point from bond finger
-                    bond_point = self.get_bond_finger_connection_point(freecad_obj, sub)
-                    
-                    # Create the bond wire
-                    die_point = self.current_selection['die_point']
-                    self.create_2d_bond_wire(die_point, bond_point)
-                    
-                    # Store the pair
-                    self.selected_objects.append({
-                        'die_pad': self.current_selection['die_pad'],
-                        'bond_finger': freecad_obj,
-                        'die_point': die_point,
-                        'bond_point': bond_point
-                    })
-                    
-                    FreeCAD.Console.PrintMessage(f"✓ BOND FINGER selected: {freecad_obj.Name}\n")
-                    FreeCAD.Console.PrintMessage(f"✓ Bond created between {self.current_selection['die_pad'].Name} → {freecad_obj.Name}\n")
-                    
-                    # Reset for next bond
-                    self.current_selection = None
-                    self.selection_mode = "select_die"
-                    FreeCAD.Console.PrintMessage("STEP 1: Click on next DIE PAD\n")
-                    
-                else:
-                    FreeCAD.Console.PrintWarning("Please select a BOND FINGER object\n")
-                    FreeCAD.Console.PrintMessage("Look for objects named like: bond_finger, finger, lead, etc.\n")
-                    
-        except Exception as e:
-            FreeCAD.Console.PrintError(f"Error in selection: {str(e)}\n")
-            import traceback
-            FreeCAD.Console.PrintError(traceback.format_exc())
-    
-    def is_die_pad(self, obj, obj_name, obj_label):
-        """Check if object is a die pad (customize these conditions)."""
-        # Add your specific conditions for identifying die pads
-        die_keywords = ['die', 'pad', 'bond_pad', 'chip_pad', 'ic_pad', 'metal1', 'drawing']
-        
-        # Check name and label
-        for keyword in die_keywords:
-            if keyword in obj_name or keyword in obj_label:
-                return True
-                
-        # Check object type or properties
-        if hasattr(obj, 'TypeId'):
-            if 'Pad' in obj.TypeId or 'Face' in obj.TypeId:
-                return True
-                
-        # If no specific identification, ask user to confirm
-        FreeCAD.Console.PrintMessage(f"Object '{obj.Name}' selected as die pad. Is this correct? (Y/N)\n")
-        # For now, assume yes - you can add user confirmation later
-        return True
-    
-    def is_bond_finger(self, obj, obj_name, obj_label):
-        """Check if object is a bond finger (customize these conditions)."""
-        if hasattr(obj, "IsContactPoint") and getattr(obj, "IsContactPoint", False):
-            return True
+        self._set_status("Wire bonding — click the first contact point (die pad)")
+        FreeCAD.Console.PrintMessage(
+            "Wire bonding started.\n"
+            "  Step 1: click a ContactPoint on the die.\n"
+            "  Step 2: click a ContactPoint on the leadframe.\n"
+            "  Repeat. Use 'Finish Wire Bonding' when done.\n"
+        )
 
-        # Add your specific conditions for identifying bond fingers
-        finger_keywords = ['finger', 'bond', 'lead', 'terminal', 'pin', 'leadframe']
-        
-        # Check name and label
-        for keyword in finger_keywords:
-            if keyword in obj_name or keyword in obj_label:
-                return True
-                
-        # Check object type or properties
-        if hasattr(obj, 'TypeId'):
-            if 'Lead' in obj.TypeId or 'Terminal' in obj.TypeId:
-                return True
-                
-        # If no specific identification, ask user to confirm
-        FreeCAD.Console.PrintMessage(f"Object '{obj.Name}' selected as bond finger. Is this correct? (Y/N)\n")
-        # For now, assume yes - you can add user confirmation later
-        return True
-    
-    def get_die_pad_connection_point(self, die_pad, sub):
-        """Get the connection point on a die pad."""
-        try:
-            if sub and "Vertex" in sub:
-                # Use selected vertex
-                vertex_index = int(sub.replace("Vertex", "")) - 1
-                if vertex_index < len(die_pad.Shape.Vertexes):
-                    return die_pad.Shape.Vertexes[vertex_index].Point
-            elif sub and "Face" in sub:
-                # Use face center
-                face_index = int(sub.replace("Face", "")) - 1
-                if face_index < len(die_pad.Shape.Faces):
-                    return die_pad.Shape.Faces[face_index].CenterOfMass
-            elif sub and "Edge" in sub:
-                # Use edge midpoint
-                edge_index = int(sub.replace("Edge", "")) - 1
-                if edge_index < len(die_pad.Shape.Edges):
-                    curve = die_pad.Shape.Edges[edge_index].Curve
-                    if hasattr(curve, 'value'):
-                        return curve.value(0.5)
-        except Exception as e:
-            FreeCAD.Console.PrintWarning(f"Could not resolve die pad sub-shape: {e}\n")
-
-        # Default: use object center
-        return die_pad.Shape.BoundBox.Center
-    
-    def get_bond_finger_connection_point(self, bond_finger, sub):
-        """Get the connection point on a bond finger."""
-        if hasattr(bond_finger, "IsContactPoint") and getattr(bond_finger, "IsContactPoint", False):
-            try:
-                return bond_finger.ContactPoint
-            except Exception:
-                pass
-
-        try:
-            if sub and "Vertex" in sub:
-                # Use selected vertex
-                vertex_index = int(sub.replace("Vertex", "")) - 1
-                if vertex_index < len(bond_finger.Shape.Vertexes):
-                    return bond_finger.Shape.Vertexes[vertex_index].Point
-            elif sub and "Face" in sub:
-                # Use face center
-                face_index = int(sub.replace("Face", "")) - 1
-                if face_index < len(bond_finger.Shape.Faces):
-                    return bond_finger.Shape.Faces[face_index].CenterOfMass
-            elif sub and "Edge" in sub:
-                # Use edge midpoint
-                edge_index = int(sub.replace("Edge", "")) - 1
-                if edge_index < len(bond_finger.Shape.Edges):
-                    curve = bond_finger.Shape.Edges[edge_index].Curve
-                    if hasattr(curve, 'value'):
-                        return curve.value(0.5)
-        except Exception as e:
-            FreeCAD.Console.PrintWarning(f"Could not resolve bond finger sub-shape: {e}\n")
-
-        # Default: use object center
-        return bond_finger.Shape.BoundBox.Center
-    
-    def create_temp_marker(self, position, marker_type):
-        """Create temporary visual marker."""
-        if not self.doc:
-            return
-            
-        try:
-            marker = self.doc.addObject("Part::Sphere", f"TempMarker_{marker_type}")
-            marker.Radius = 0.15  # Slightly larger for visibility
-            marker.Placement.Base = position
-            
-            # Color coding
-            if marker_type == "die":
-                marker.ViewObject.ShapeColor = (0.0, 1.0, 0.0)  # Green for die
-            else:
-                marker.ViewObject.ShapeColor = (0.0, 0.0, 1.0)  # Blue for bond
-                
-            marker.ViewObject.Transparency = 30
-            self.doc.recompute()
-            
-            # Auto-remove after 2 seconds
-            QtCore.QTimer.singleShot(2000, lambda: self.remove_temp_marker(marker))
-        except Exception as e:
-            FreeCAD.Console.PrintWarning(f"Could not create temp marker: {e}\n")
-    
-    def remove_temp_marker(self, marker):
-        """Remove temporary marker."""
-        try:
-            if marker and marker in self.doc.Objects:
-                self.doc.removeObject(marker.Name)
-                if self.doc:
-                    self.doc.recompute()
-        except Exception as e:
-            FreeCAD.Console.PrintWarning(f"Could not remove temp marker: {e}\n")
-    
-    def create_2d_bond_wire(self, start_point, end_point):
-        """Create a 2D bond wire between die pad and bond finger."""
-        if not self.doc:
-            return None
-            
-        try:
-            # Convert to 2D (XY plane)
-            start_2d = Base.Vector(start_point.x, start_point.y, 0)
-            end_2d = Base.Vector(end_point.x, end_point.y, 0)
-            
-            # Create wire
-            if self.config.get('wire_style', 'straight') == 'arc':
-                # Create arc wire
-                arc_height = self.config.get('arc_height', 2.0)
-                mid_point = Base.Vector(
-                    (start_2d.x + end_2d.x) / 2,
-                    (start_2d.y + end_2d.y) / 2,
-                    arc_height
-                )
-                arc = Part.Arc(start_2d, mid_point, end_2d)
-                wire_shape = arc.toShape()
-            else:
-                # Straight line wire
-                wire_shape = Part.makeLine(start_2d, end_2d)
-            
-            # Create wire object
-            bond_count = len(self.selected_objects)
-            wire_obj = self.doc.addObject("Part::Feature", f"BondWire_{bond_count+1:03d}")
-            wire_obj.Shape = wire_shape
-            
-            # Styling
-            wire_obj.ViewObject.LineWidth = 3
-            wire_obj.ViewObject.LineColor = (0.90, 0.75, 0.20)  # Gold
-            wire_obj.ViewObject.PointSize = 5
-            
-            # Add properties
-            wire_obj.addProperty("App::PropertyVector", "StartPoint", "Wirebond", "Die pad connection")
-            wire_obj.addProperty("App::PropertyVector", "EndPoint", "Wirebond", "Bond finger connection")
-            wire_obj.addProperty("App::PropertyLength", "WireLength", "Wirebond", "Wire length")
-            wire_obj.addProperty("App::PropertyString", "NetName", "Wirebond", "Net name")
-            
-            wire_obj.StartPoint = start_point
-            wire_obj.EndPoint = end_point
-            wire_obj.WireLength = wire_shape.Length
-            wire_obj.NetName = f"Net_{bond_count+1:03d}"
-            
-            self.doc.recompute()
-            FreeCAD.Console.PrintMessage(f"✓ Bond wire created: {wire_obj.Name}\n")
-            return wire_obj
-            
-        except Exception as e:
-            FreeCAD.Console.PrintError(f"Error creating bond wire: {str(e)}\n")
-            return None
-    
-    def finish_session(self):
-        """Finish bonding session."""
+    def finish_session(self) -> int:
         if not self.is_active:
             return 0
-            
-        self.is_active = False
-        try:
-            FreeCADGui.Selection.removeObserver(self)
-        except Exception as e:
-            FreeCAD.Console.PrintWarning(f"Could not remove selection observer: {e}\n")
+        self._teardown()
+        count = len(self.bonds)
+        FreeCAD.Console.PrintMessage(f"Wire bonding finished — {count} bond(s).\n")
+        self._report()
+        return count
 
-        FreeCAD.Console.PrintMessage("=== WIRE BONDING FINISHED ===\n")
-        FreeCAD.Console.PrintMessage(f"• Total bonds created: {len(self.selected_objects)}\n")
-        self.generate_report()
-        return len(self.selected_objects)
-    
-    def generate_report(self):
-        """Generate bonding report."""
-        if not self.selected_objects:
-            FreeCAD.Console.PrintMessage("• No bonds were created.\n")
-            return
-            
-        report = "=== WIRE BONDING REPORT ===\n"
-        total_length = 0
-        
-        for i, bond in enumerate(self.selected_objects):
-            length = bond['die_point'].distanceTo(bond['bond_point'])
-            total_length += length
-            report += f"Bond {i+1}: {bond['die_pad'].Name} → {bond['bond_finger'].Name} | Length: {length:.3f} mm\n"
-        
-        report += f"\nSUMMARY:\n"
-        report += f"Total bonds: {len(self.selected_objects)}\n"
-        report += f"Total wire length: {total_length:.3f} mm\n"
-        report += f"Average length: {total_length/len(self.selected_objects):.3f} mm\n"
-        
-        FreeCAD.Console.PrintMessage(report)
-    
     def cancel_session(self):
-        """Cancel bonding session."""
-        self.is_active = False
-        try:
-            FreeCADGui.Selection.removeObserver(self)
-        except Exception as e:
-            FreeCAD.Console.PrintWarning(f"Could not remove selection observer: {e}\n")
-        self.selected_objects = []
-        self.current_selection = None
-        self.selection_mode = "waiting"
+        self._teardown()
+        self.bonds    = []
+        self.first_cp = None
+        self.first_pt = None
         FreeCAD.Console.PrintMessage("Wire bonding cancelled.\n")
 
-# Module-level instance — shared across WirebondCommand, FinishWireBondingCommand,
-# and CancelWireBondingCommand. start_bonding_session() resets state on each use.
+    def _teardown(self):
+        self.is_active = False
+        self.state     = _State.IDLE
+        self._clear_highlight()
+        try:
+            FreeCADGui.Selection.removeObserver(self)
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(f"removeObserver: {e}\n")
+        self._set_status("")
+
+    # ── FreeCAD Selection observer callbacks ───────────────────────────────
+
+    def setPreselection(self, doc, obj_name, sub):
+        """Highlight ContactPoint objects green on hover; ignore everything else."""
+        if not self.is_active:
+            return
+        try:
+            obj = FreeCAD.getDocument(doc).getObject(obj_name)
+            if obj is None or obj is self._highlighted:
+                return
+            if _is_contact_point(obj):
+                self._clear_highlight()
+                self._highlighted      = obj
+                self._highlighted_orig = obj.ViewObject.LineColor
+                obj.ViewObject.LineColor = _COLOR_SNAP_VALID
+        except Exception:
+            pass
+
+    def removePreselection(self, doc, obj_name, sub):
+        if not self.is_active:
+            return
+        self._clear_highlight()
+
+    def addSelection(self, doc, obj_name, sub, pos):
+        """
+        Accept only ContactPoint objects.
+        Any other click is immediately cleared from the FreeCAD selection
+        so the 3D view gives clear visual feedback of the rejection.
+        """
+        if not self.is_active or not self.config:
+            return
+        try:
+            obj = FreeCAD.getDocument(doc).getObject(obj_name)
+            if obj is None:
+                return
+
+            # ── Reject non-ContactPoint objects ────────────────────────────
+            if not _is_contact_point(obj):
+                FreeCADGui.Selection.clearSelection()
+                self._set_status(
+                    "Wire bonding — only ContactPoint markers can be selected"
+                )
+                FreeCAD.Console.PrintWarning(
+                    f"'{obj.Name}' is not a ContactPoint — skipped.\n"
+                    "Select a ContactPoint marker (blue dot on leadframe or orange dot on die).\n"
+                )
+                return
+
+            # ── First pick ─────────────────────────────────────────────────
+            if self.state == _State.AWAIT_FIRST:
+                self.first_cp = obj
+                self.first_pt = resolve_snap_point(obj)
+                self._create_temp_marker(self.first_pt)
+                self.state = _State.AWAIT_SECOND
+                self._set_status(
+                    f"First point: {obj.Label} — now click the second contact point"
+                )
+                FreeCAD.Console.PrintMessage(
+                    f"  First CP: {obj.Name}  "
+                    f"pos=({self.first_pt.x:.3f}, {self.first_pt.y:.3f}, {self.first_pt.z:.3f})\n"
+                )
+
+            # ── Second pick ────────────────────────────────────────────────
+            elif self.state == _State.AWAIT_SECOND:
+                if obj is self.first_cp:
+                    FreeCAD.Console.PrintWarning(
+                        "Same contact point selected — pick a different one.\n"
+                    )
+                    return
+                second_pt = resolve_snap_point(obj)
+                self._place_wire(self.first_pt, second_pt, self.first_cp, obj)
+                # Reset for the next bond
+                self.first_cp = None
+                self.first_pt = None
+                self.state    = _State.AWAIT_FIRST
+                self._set_status("Wire bonding — click the first contact point (die pad)")
+
+        except Exception as e:
+            FreeCAD.Console.PrintError(f"Wire bonding error: {e}\n")
+            import traceback
+            FreeCAD.Console.PrintError(traceback.format_exc())
+
+    # ── wire placement ─────────────────────────────────────────────────────
+
+    def _place_wire(self, start: Base.Vector, end: Base.Vector, cp1, cp2):
+        """Create one bond wire in its own undo transaction."""
+        doc = self.doc
+        doc.openTransaction("Place Bond Wire")
+        try:
+            shape    = create_bond_wire_3d(start, end, self.config)
+            idx      = len(self.bonds) + 1
+            wire_obj = doc.addObject("Part::Feature", f"BondWire_{idx:03d}")
+            wire_obj.Shape = shape
+
+            wire_obj.ViewObject.ShapeColor = _COLOR_WIRE
+            wire_obj.ViewObject.LineColor  = _COLOR_WIRE
+            wire_obj.ViewObject.LineWidth  = 2
+
+            def _prop(ptype, name, grp, desc):
+                if not hasattr(wire_obj, name):
+                    wire_obj.addProperty(ptype, name, grp, desc)
+
+            _prop("App::PropertyVector", "StartPoint",  "Wirebond", "First contact point position")
+            _prop("App::PropertyVector", "EndPoint",    "Wirebond", "Second contact point position")
+            _prop("App::PropertyString", "StartCP",     "Wirebond", "First ContactPoint object name")
+            _prop("App::PropertyString", "EndCP",       "Wirebond", "Second ContactPoint object name")
+            _prop("App::PropertyString", "NetName",     "Wirebond", "Net identifier")
+            _prop("App::PropertyLength", "WireLength",  "Wirebond", "Wire arc length (mm)")
+
+            wire_obj.StartPoint = start
+            wire_obj.EndPoint   = end
+            wire_obj.StartCP    = cp1.Name
+            wire_obj.EndCP      = cp2.Name
+            wire_obj.NetName    = f"Net_{idx:03d}"
+            wire_obj.WireLength = shape.Length
+
+            doc.commitTransaction()
+            doc.recompute()
+
+            self.bonds.append({
+                "cp1": cp1, "cp2": cp2,
+                "start": start, "end": end,
+                "wire": wire_obj,
+            })
+            FreeCAD.Console.PrintMessage(
+                f"  Bond {idx:03d}: {cp1.Name} -> {cp2.Name}  "
+                f"length={shape.Length:.3f} mm\n"
+            )
+
+        except Exception as e:
+            doc.abortTransaction()
+            FreeCAD.Console.PrintError(f"Wire placement failed: {e}\n")
+
+    # ── helpers ────────────────────────────────────────────────────────────
+
+    def _create_temp_marker(self, pos: Base.Vector):
+        """Green sphere at the first pick; auto-removed after 3 s."""
+        try:
+            from PySide2 import QtCore
+            m = self.doc.addObject("Part::Sphere", "_SnapMarker")
+            m.Radius = 0.06
+            m.Placement.Base = pos
+            m.ViewObject.ShapeColor = _COLOR_SNAP_VALID
+            m.ViewObject.Transparency = 20
+            self.doc.recompute()
+            QtCore.QTimer.singleShot(3000, lambda: self._remove_marker(m))
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(f"Snap marker: {e}\n")
+
+    def _remove_marker(self, marker):
+        try:
+            if self.doc and marker in self.doc.Objects:
+                self.doc.removeObject(marker.Name)
+                self.doc.recompute()
+        except Exception:
+            pass
+
+    def _clear_highlight(self):
+        if self._highlighted is not None:
+            try:
+                self._highlighted.ViewObject.LineColor = self._highlighted_orig
+            except Exception:
+                pass
+            self._highlighted      = None
+            self._highlighted_orig = None
+
+    @staticmethod
+    def _set_status(msg: str):
+        try:
+            view = FreeCADGui.ActiveDocument.ActiveView
+            if hasattr(view, "setStatusBarMessage"):
+                view.setStatusBarMessage(msg)
+        except Exception:
+            pass
+
+    def _report(self):
+        if not self.bonds:
+            FreeCAD.Console.PrintMessage("No bonds were created.\n")
+            return
+        total = sum(b["start"].distanceTo(b["end"]) for b in self.bonds)
+        lines = [
+            f"  Bond {i+1:03d}: {b['cp1'].Name} -> {b['cp2'].Name}"
+            f"  {b['start'].distanceTo(b['end']):.3f} mm"
+            for i, b in enumerate(self.bonds)
+        ]
+        FreeCAD.Console.PrintMessage(
+            "=== Wire Bonding Report ===\n"
+            + "\n".join(lines)
+            + f"\n  Total: {len(self.bonds)} bonds, {total:.3f} mm wire\n"
+        )
+
+
+# Module-level singleton shared across all WirebondCommand instances.
 manual_bonder = ManualWireBonding()

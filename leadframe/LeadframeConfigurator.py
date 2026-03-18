@@ -1,200 +1,306 @@
 """
 Leadframe Configuration Dialog
-UI for configuring QFN, QFP, and BGA leadframe parameters
+Supports QFN, QFP, and BGA package types with die paddle and realistic lead geometry.
 """
 
-from PySide2 import QtWidgets
+from PySide2 import QtWidgets, QtCore
 
 
 class LeadframeConfigurator(QtWidgets.QDialog):
     def __init__(self, parent=None):
-        super(LeadframeConfigurator, self).__init__(parent)
+        super().__init__(parent)
         self.setWindowTitle("Leadframe Configuration")
-        self.setMinimumWidth(400)
+        self.setMinimumWidth(440)
 
-        # Layout
-        layout = QtWidgets.QFormLayout()
+        root = QtWidgets.QVBoxLayout(self)
 
-        # Leadframe Type Dropdown
+        # ── Package type ───────────────────────────────────────────────────
+        type_box = QtWidgets.QGroupBox("Package Type")
+        type_form = QtWidgets.QFormLayout(type_box)
         self.frame_type = QtWidgets.QComboBox()
-        self.frame_type.addItems(["QFN (Quad Flat No-lead)", "QFP (Quad Flat Package)", "BGA (Ball Grid Array)"])
-        layout.addRow("Leadframe Type:", self.frame_type)
+        self.frame_type.addItems([
+            "QFN (Quad Flat No-lead)",
+            "QFP (Quad Flat Package)",
+            "BGA (Ball Grid Array)",
+        ])
+        type_form.addRow("Type:", self.frame_type)
+        root.addWidget(type_box)
 
-        # Frame Dimensions
-        self.frame_length = QtWidgets.QDoubleSpinBox()
-        self.frame_length.setRange(1.0, 1000.0)
-        self.frame_length.setSingleStep(0.5)
-        self.frame_length.setSuffix(" mm")
-        self.frame_length.setValue(5.0)
-        layout.addRow("Length:", self.frame_length)
+        # ── Package body dimensions ────────────────────────────────────────
+        body_box = QtWidgets.QGroupBox("Package Body")
+        body_form = QtWidgets.QFormLayout(body_box)
 
-        self.frame_width = QtWidgets.QDoubleSpinBox()
-        self.frame_width.setRange(1.0, 1000.0)
-        self.frame_width.setSingleStep(0.5)
-        self.frame_width.setSuffix(" mm")
-        self.frame_width.setValue(5.0)
-        layout.addRow("Width:", self.frame_width)
-
-        self.frame_thickness = QtWidgets.QDoubleSpinBox()
-        self.frame_thickness.setRange(0.05, 5.0)
-        self.frame_thickness.setSingleStep(0.05)
-        self.frame_thickness.setSuffix(" mm")
-        self.frame_thickness.setValue(0.2)
-        layout.addRow("Thickness:", self.frame_thickness)
-
-        # (QFN/QFP) Parameters
-        self.qfn_qfp = QtWidgets.QWidget()
-        qfn_qfp_layout = QtWidgets.QFormLayout()
-        
-        # Lead Counts
-        self.left_lead_count = QtWidgets.QSpinBox()
-        self.left_lead_count.setRange(0, 80)
-        self.left_lead_count.setValue(4)
-        qfn_qfp_layout.addRow("Left Lead Count:", self.left_lead_count)
-
-        self.right_lead_count = QtWidgets.QSpinBox()
-        self.right_lead_count.setRange(0, 80)
-        self.right_lead_count.setValue(4)
-        qfn_qfp_layout.addRow("Right Lead Count:", self.right_lead_count)
-
-        self.top_lead_count = QtWidgets.QSpinBox()
-        self.top_lead_count.setRange(0, 80)
-        self.top_lead_count.setValue(4)
-        qfn_qfp_layout.addRow("Top Lead Count:", self.top_lead_count)
-
-        self.bottom_lead_count = QtWidgets.QSpinBox()
-        self.bottom_lead_count.setRange(0, 80)
-        self.bottom_lead_count.setValue(4)
-        qfn_qfp_layout.addRow("Bottom Lead Count:", self.bottom_lead_count)
-
-        # Lead Parameters (QFN/QFP)
-        self.lead_width = QtWidgets.QDoubleSpinBox()
-        self.lead_width.setRange(0.1, 5.0)
-        self.lead_width.setSingleStep(0.1)
-        self.lead_width.setSuffix(" mm")
-        self.lead_width.setValue(0.4)
-        qfn_qfp_layout.addRow("Lead Width:", self.lead_width)
-
-        self.lead_pitch = QtWidgets.QDoubleSpinBox()
-        self.lead_pitch.setRange(0.1, 10.0)
-        self.lead_pitch.setSingleStep(0.1)
-        self.lead_pitch.setSuffix(" mm")
-        self.lead_pitch.setValue(1.0)
-        qfn_qfp_layout.addRow("Lead Pitch:", self.lead_pitch)
-
-        self.lead_length = QtWidgets.QDoubleSpinBox()
-        self.lead_length.setRange(0.5, 10.0)
-        self.lead_length.setSingleStep(0.5)
-        self.lead_length.setSuffix(" mm")
-        self.lead_length.setValue(1.0)
-        qfn_qfp_layout.addRow("Lead Length:", self.lead_length)
-
-        self.qfn_pad_thickness = QtWidgets.QDoubleSpinBox()
-        self.qfn_pad_thickness.setRange(0.01, 2.0)
-        self.qfn_pad_thickness.setSingleStep(0.01)
-        self.qfn_pad_thickness.setSuffix(" mm")
-        self.qfn_pad_thickness.setValue(0.05)
-        qfn_qfp_layout.addRow("QFN Pad Thickness:", self.qfn_pad_thickness)
-
-        self.qfn_qfp.setLayout(qfn_qfp_layout)
-        layout.addRow(self.qfn_qfp)
-
-        # BGA Parameters
-        self.bga = QtWidgets.QWidget()
-        bga_layout = QtWidgets.QFormLayout()
-
-        self.bga_ball_diameter = QtWidgets.QDoubleSpinBox()
-        self.bga_ball_diameter.setRange(0.1, 2.0)
-        self.bga_ball_diameter.setSingleStep(0.1)
-        self.bga_ball_diameter.setSuffix(" mm")
-        self.bga_ball_diameter.setValue(0.5)
-        bga_layout.addRow("BGA Ball Diameter:", self.bga_ball_diameter)
-
-        self.bga_ball_pitch = QtWidgets.QDoubleSpinBox()
-        self.bga_ball_pitch.setRange(0.1, 5.0)
-        self.bga_ball_pitch.setSingleStep(0.1)
-        self.bga_ball_pitch.setSuffix(" mm")
-        self.bga_ball_pitch.setValue(1.0)
-        bga_layout.addRow("BGA Ball Pitch:", self.bga_ball_pitch)
-
-        self.bga.setLayout(bga_layout)
-        layout.addRow(self.bga)
-
-        # Material Selection
+        self.frame_length = self._dspin(1.0, 1000.0, 5.0, " mm", 0.5)
+        self.frame_width  = self._dspin(1.0, 1000.0, 5.0, " mm", 0.5)
+        self.frame_thickness = self._dspin(0.05, 5.0, 0.20, " mm", 0.05)
         self.material_combo = QtWidgets.QComboBox()
         self.material_combo.addItems(["Copper", "Alloy 42", "Silver"])
-        layout.addRow("Material:", self.material_combo)
 
-        # OK/Cancel Buttons
-        button_box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
-        button_box.accepted.connect(self.accept)
-        button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
+        body_form.addRow("Length (X):", self.frame_length)
+        body_form.addRow("Width  (Y):", self.frame_width)
+        body_form.addRow("Thickness:", self.frame_thickness)
+        body_form.addRow("Material:", self.material_combo)
+        root.addWidget(body_box)
 
-        self.setLayout(layout)
+        # ── QFN / QFP section ──────────────────────────────────────────────
+        self.qfnqfp_box = QtWidgets.QGroupBox("Lead Fingers  (QFN / QFP)")
+        qfnqfp = QtWidgets.QVBoxLayout(self.qfnqfp_box)
 
-        # Connect frame type change to update visibility
-        self.frame_type.currentIndexChanged.connect(self.update_parameter_visibility)
+        # Lead counts (2-column grid)
+        counts_form = QtWidgets.QFormLayout()
+        self.left_lead_count   = self._spin(0, 128, 4)
+        self.right_lead_count  = self._spin(0, 128, 4)
+        self.top_lead_count    = self._spin(0, 128, 4)
+        self.bottom_lead_count = self._spin(0, 128, 4)
+        counts_form.addRow("Left leads:",   self.left_lead_count)
+        counts_form.addRow("Right leads:",  self.right_lead_count)
+        counts_form.addRow("Top leads:",    self.top_lead_count)
+        counts_form.addRow("Bottom leads:", self.bottom_lead_count)
+        qfnqfp.addLayout(counts_form)
 
-        # Initial visibility setup
-        self.update_parameter_visibility()
+        # Lead dimensions
+        dims_form = QtWidgets.QFormLayout()
+        self.lead_width        = self._dspin(0.05, 5.0, 0.25, " mm", 0.05)
+        self.lead_pitch        = self._dspin(0.10, 10.0, 0.50, " mm", 0.05)
+        self.inner_lead_length = self._dspin(0.10, 10.0, 0.50, " mm", 0.05)
+        self.lead_length       = self._dspin(0.10, 10.0, 0.80, " mm", 0.05)  # QFP outer
+        dims_form.addRow("Lead width:",             self.lead_width)
+        dims_form.addRow("Lead pitch (c-to-c):",    self.lead_pitch)
+        dims_form.addRow("Inner finger length:",    self.inner_lead_length)
+
+        # QFP-only outer lead length — hidden for QFN
+        self.outer_lead_row_label = QtWidgets.QLabel("Outer lead length (QFP):")
+        dims_form.addRow(self.outer_lead_row_label, self.lead_length)
+        qfnqfp.addLayout(dims_form)
+
+        # Span hint label
+        self.span_hint = QtWidgets.QLabel()
+        self.span_hint.setStyleSheet("color: grey; font-size: 10px;")
+        qfnqfp.addWidget(self.span_hint)
+        root.addWidget(self.qfnqfp_box)
+
+        # ── Die paddle section (QFN / QFP) ────────────────────────────────
+        self.paddle_box = QtWidgets.QGroupBox("Die Paddle")
+        self.paddle_box.setCheckable(True)
+        self.paddle_box.setChecked(True)
+        paddle_form = QtWidgets.QFormLayout(self.paddle_box)
+
+        self.die_paddle_length = self._dspin(0.5, 500.0, 3.0, " mm", 0.1)
+        self.die_paddle_width  = self._dspin(0.5, 500.0, 3.0, " mm", 0.1)
+        paddle_form.addRow("Paddle length:", self.die_paddle_length)
+        paddle_form.addRow("Paddle width:",  self.die_paddle_width)
+        root.addWidget(self.paddle_box)
+
+        # ── BGA section ────────────────────────────────────────────────────
+        self.bga_box = QtWidgets.QGroupBox("BGA Balls")
+        bga_form = QtWidgets.QFormLayout(self.bga_box)
+        self.bga_ball_diameter = self._dspin(0.05, 2.0, 0.40, " mm", 0.05)
+        self.bga_ball_pitch    = self._dspin(0.10, 5.0, 0.80, " mm", 0.05)
+        bga_form.addRow("Ball diameter:", self.bga_ball_diameter)
+        bga_form.addRow("Ball pitch:",    self.bga_ball_pitch)
+
+        # Info label showing computed grid
+        self.bga_hint = QtWidgets.QLabel()
+        self.bga_hint.setStyleSheet("color: grey; font-size: 10px;")
+        bga_form.addRow(self.bga_hint)
+        root.addWidget(self.bga_box)
+
+        # ── Buttons ────────────────────────────────────────────────────────
+        btn_box = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        root.addWidget(btn_box)
+
+        # ── Connections ────────────────────────────────────────────────────
+        self.frame_type.currentIndexChanged.connect(self._update_visibility)
+        for w in (self.left_lead_count, self.right_lead_count,
+                  self.top_lead_count, self.bottom_lead_count,
+                  self.lead_pitch, self.frame_length, self.frame_width):
+            w.valueChanged.connect(self._update_hints)
+        for w in (self.bga_ball_pitch, self.frame_length, self.frame_width):
+            w.valueChanged.connect(self._update_bga_hint)
+        # Propagate frame size to die paddle defaults
+        self.frame_length.valueChanged.connect(self._sync_paddle_defaults)
+        self.frame_width.valueChanged.connect(self._sync_paddle_defaults)
+
+        self._update_visibility()
+        self._update_hints()
+        self._update_bga_hint()
+
+    # ── widget factories ───────────────────────────────────────────────────
+
+    @staticmethod
+    def _dspin(lo, hi, val, suffix="", step=0.1):
+        w = QtWidgets.QDoubleSpinBox()
+        w.setRange(lo, hi)
+        w.setValue(val)
+        w.setSingleStep(step)
+        w.setDecimals(3)
+        if suffix:
+            w.setSuffix(suffix)
+        return w
+
+    @staticmethod
+    def _spin(lo, hi, val):
+        w = QtWidgets.QSpinBox()
+        w.setRange(lo, hi)
+        w.setValue(val)
+        return w
+
+    # ── dynamic UI helpers ─────────────────────────────────────────────────
+
+    def _frame_type(self) -> str:
+        return self.frame_type.currentText()
+
+    def _update_visibility(self):
+        t = self._frame_type()
+        is_qfnqfp = t in ("QFN (Quad Flat No-lead)", "QFP (Quad Flat Package)")
+        is_qfp    = (t == "QFP (Quad Flat Package)")
+        is_bga    = (t == "BGA (Ball Grid Array)")
+
+        self.qfnqfp_box.setVisible(is_qfnqfp)
+        self.paddle_box.setVisible(is_qfnqfp)
+        self.bga_box.setVisible(is_bga)
+        self.outer_lead_row_label.setVisible(is_qfp)
+        self.lead_length.setVisible(is_qfp)
+        self.adjustSize()
+
+    def _update_hints(self):
+        """Show how much of each side's width the selected leads will occupy."""
+        n_lr  = max(self.left_lead_count.value(), self.right_lead_count.value())
+        n_tb  = max(self.top_lead_count.value(), self.bottom_lead_count.value())
+        pitch = self.lead_pitch.value()
+        fl    = self.frame_length.value()
+        fw    = self.frame_width.value()
+
+        span_lr = (n_lr - 1) * pitch if n_lr > 0 else 0.0
+        span_tb = (n_tb - 1) * pitch if n_tb > 0 else 0.0
+
+        warn_lr = " !" if span_lr > fw else ""
+        warn_tb = " !" if span_tb > fl else ""
+        self.span_hint.setText(
+            f"Left/Right span: {span_lr:.2f} mm  (frame width {fw:.2f} mm){warn_lr}   "
+            f"Top/Bottom span: {span_tb:.2f} mm  (frame length {fl:.2f} mm){warn_tb}"
+        )
+
+    def _update_bga_hint(self):
+        import math
+        pitch = self.bga_ball_pitch.value()
+        nx    = max(1, round(self.frame_length.value() / pitch))
+        ny    = max(1, round(self.frame_width.value()  / pitch))
+        self.bga_hint.setText(f"Grid: {nx} × {ny} = {nx * ny} balls")
+
+    def _sync_paddle_defaults(self):
+        """Keep paddle defaults at ~55% of frame whenever frame size changes."""
+        self.die_paddle_length.setValue(round(self.frame_length.value() * 0.55, 3))
+        self.die_paddle_width.setValue( round(self.frame_width.value()  * 0.55, 3))
+
+    # ── validation ─────────────────────────────────────────────────────────
 
     def accept(self):
-        frame_type = self.frame_type.currentText()
+        t      = self._frame_type()
         errors = []
-        if frame_type in ["QFN (Quad Flat No-lead)", "QFP (Quad Flat Package)"]:
-            lead_pitch = self.lead_pitch.value()
-            lead_width = self.lead_width.value()
-            frame_length = self.frame_length.value()
-            frame_width = self.frame_width.value()
-            if lead_width >= lead_pitch:
-                errors.append(f"Lead width ({lead_width} mm) must be less than lead pitch ({lead_pitch} mm) to avoid overlap.")
-            left_span = (self.left_lead_count.value() - 1) * lead_pitch
-            right_span = (self.right_lead_count.value() - 1) * lead_pitch
-            top_span = (self.top_lead_count.value() - 1) * lead_pitch
-            bottom_span = (self.bottom_lead_count.value() - 1) * lead_pitch
-            if max(left_span, right_span) > frame_width:
-                errors.append(f"Left/right lead span ({max(left_span, right_span):.2f} mm) exceeds frame width ({frame_width} mm).")
-            if max(top_span, bottom_span) > frame_length:
-                errors.append(f"Top/bottom lead span ({max(top_span, bottom_span):.2f} mm) exceeds frame length ({frame_length} mm).")
-        elif frame_type == "BGA (Ball Grid Array)":
+
+        if t in ("QFN (Quad Flat No-lead)", "QFP (Quad Flat Package)"):
+            lw    = self.lead_width.value()
+            lp    = self.lead_pitch.value()
+            ill   = self.inner_lead_length.value()
+            fl    = self.frame_length.value()
+            fw    = self.frame_width.value()
+
+            if lw >= lp:
+                errors.append(
+                    f"Lead width ({lw} mm) must be less than lead pitch ({lp} mm)."
+                )
+
+            span_lr = (max(self.left_lead_count.value(),
+                           self.right_lead_count.value()) - 1) * lp
+            span_tb = (max(self.top_lead_count.value(),
+                           self.bottom_lead_count.value()) - 1) * lp
+
+            if span_lr > fw:
+                errors.append(
+                    f"Left/right lead span ({span_lr:.2f} mm) exceeds frame width ({fw} mm)."
+                )
+            if span_tb > fl:
+                errors.append(
+                    f"Top/bottom lead span ({span_tb:.2f} mm) exceeds frame length ({fl} mm)."
+                )
+            if ill >= fl / 2:
+                errors.append(
+                    f"Inner lead length ({ill} mm) must be less than half frame length ({fl/2} mm)."
+                )
+            if ill >= fw / 2:
+                errors.append(
+                    f"Inner lead length ({ill} mm) must be less than half frame width ({fw/2} mm)."
+                )
+
+            if self.paddle_box.isChecked():
+                dp_l = self.die_paddle_length.value()
+                dp_w = self.die_paddle_width.value()
+                # Check that paddle doesn't reach lead inner tips (need at least 0.05 mm gap)
+                gap_l = fl / 2 - ill - dp_l / 2
+                gap_w = fw / 2 - ill - dp_w / 2
+                if gap_l < 0.05:
+                    errors.append(
+                        f"Die paddle length ({dp_l} mm) overlaps with lead fingers on left/right "
+                        f"(gap = {gap_l:.3f} mm). Reduce paddle or inner lead length."
+                    )
+                if gap_w < 0.05:
+                    errors.append(
+                        f"Die paddle width ({dp_w} mm) overlaps with lead fingers on top/bottom "
+                        f"(gap = {gap_w:.3f} mm). Reduce paddle or inner lead length."
+                    )
+
+        elif t == "BGA (Ball Grid Array)":
             if self.bga_ball_diameter.value() >= self.bga_ball_pitch.value():
-                errors.append(f"BGA ball diameter ({self.bga_ball_diameter.value()} mm) must be less than ball pitch ({self.bga_ball_pitch.value()} mm).")
+                errors.append(
+                    f"Ball diameter ({self.bga_ball_diameter.value()} mm) must be less than "
+                    f"ball pitch ({self.bga_ball_pitch.value()} mm)."
+                )
+
         if errors:
-            QtWidgets.QMessageBox.warning(self, "Invalid Configuration", "\n\n".join(errors))
+            QtWidgets.QMessageBox.warning(
+                self, "Invalid Configuration", "\n\n".join(errors)
+            )
             return
+
         super().accept()
 
-    def update_parameter_visibility(self):
-        """Update the visibility of parameters based on the selected frame type."""
-        frame_type = self.frame_type.currentText()
-        self.qfn_qfp.setVisible(frame_type in ["QFN (Quad Flat No-lead)", "QFP (Quad Flat Package)"])
-        self.bga.setVisible(frame_type == "BGA (Ball Grid Array)")
+    # ── config dict ────────────────────────────────────────────────────────
 
-    def get_config(self):
-        """Return only relevant configuration parameters based on the selected frame type."""
-        frame_type = self.frame_type.currentText()
-        config = {
-            "frame_type": frame_type,
-            "frame_length": self.frame_length.value(),
-            "frame_width": self.frame_width.value(),
+    def get_config(self) -> dict:
+        t = self._frame_type()
+        cfg = {
+            "frame_type":      t,
+            "frame_length":    self.frame_length.value(),
+            "frame_width":     self.frame_width.value(),
             "frame_thickness": self.frame_thickness.value(),
-            "material": self.material_combo.currentText()
+            "material":        self.material_combo.currentText(),
         }
-        if frame_type in ["QFN (Quad Flat No-lead)", "QFP (Quad Flat Package)"]:
-            config.update({
-                "left_lead_count": self.left_lead_count.value(),
-                "right_lead_count": self.right_lead_count.value(),
-                "top_lead_count": self.top_lead_count.value(),
+
+        if t in ("QFN (Quad Flat No-lead)", "QFP (Quad Flat Package)"):
+            cfg.update({
+                "left_lead_count":   self.left_lead_count.value(),
+                "right_lead_count":  self.right_lead_count.value(),
+                "top_lead_count":    self.top_lead_count.value(),
                 "bottom_lead_count": self.bottom_lead_count.value(),
-                "lead_width": self.lead_width.value(),
-                "lead_pitch": self.lead_pitch.value(),
-                "lead_length": self.lead_length.value(),
-                "qfn_pad_thickness": self.qfn_pad_thickness.value()
+                "lead_width":        self.lead_width.value(),
+                "lead_pitch":        self.lead_pitch.value(),
+                "inner_lead_length": self.inner_lead_length.value(),
+                "lead_length":       self.lead_length.value(),
+                "qfn_pad_thickness": self.frame_thickness.value(),  # compat
+                "has_die_paddle":    self.paddle_box.isChecked(),
+                "die_paddle_length": self.die_paddle_length.value(),
+                "die_paddle_width":  self.die_paddle_width.value(),
             })
-        elif frame_type == "BGA (Ball Grid Array)":
-            config.update({
+
+        elif t == "BGA (Ball Grid Array)":
+            cfg.update({
                 "bga_ball_diameter": self.bga_ball_diameter.value(),
-                "bga_ball_pitch": self.bga_ball_pitch.value()
+                "bga_ball_pitch":    self.bga_ball_pitch.value(),
             })
-        return config
+
+        return cfg

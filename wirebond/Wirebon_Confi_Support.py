@@ -19,7 +19,7 @@ def check_wirebond_prerequisites():
     has_die_pads = False
     has_leadframe = False
 
-    _LEADFRAME_NAMES = ("leadframebody", "leadframeleads", "bga_balls", "finalhousing")
+    _LEADFRAME_NAMES = ("leadframebody", "leadframeleads", "bga_balls", "finalhousing", "lead_")
 
     for obj in doc.Objects:
         # Bondable GDS layer (set by LayeronLeadframe.configuration)
@@ -29,8 +29,11 @@ def check_wirebond_prerequisites():
         elif hasattr(obj, "IsContactPoint") and obj.IsContactPoint:
             has_die_pads = True
 
-        # Leadframe geometry created by build_leadframe / build_housing
-        if any(obj.Name.lower().startswith(name) for name in _LEADFRAME_NAMES):
+        # New individual lead fingers (build_leadframe sets IsLeadFinger)
+        if hasattr(obj, "IsLeadFinger") and obj.IsLeadFinger:
+            has_leadframe = True
+        # Legacy compound leadframe objects
+        elif any(obj.Name.lower().startswith(name) for name in _LEADFRAME_NAMES):
             has_leadframe = True
 
     if not has_die_pads and not has_leadframe:

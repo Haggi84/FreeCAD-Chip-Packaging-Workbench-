@@ -1,4 +1,17 @@
-"""Utilities for defining contact points on imported leadframe STEP models."""
+"""
+Contact point definition tool.
+
+Workflow
+--------
+1. Select one or more GDS layer objects (imported via "Load GDSII") in the
+   3D view — whole-object selection is sufficient, no sub-element required.
+2. Run "Define Contact Points".
+3. A ContactPoint marker is placed at the centre of the top face (highest-Z
+   face) of each selected object.  This is the bonding surface of the pad.
+
+Sub-element selection (vertex / edge / face) is still honoured when present,
+allowing finer placement on STEP models or custom geometry.
+"""
 
 from typing import List, Optional
 
@@ -9,8 +22,22 @@ from FreeCAD import Base
 from PySide2 import QtWidgets
 
 
+# ── snap-point helpers ─────────────────────────────────────────────────────────
+
+def _top_face_center(shape: Part.Shape) -> Base.Vector:
+    """
+    Return the centre of mass of the highest-Z face of *shape*.
+    Falls back to the bounding-box centre when the shape has no faces
+    (e.g. a wire or vertex).
+    """
+    if shape.Faces:
+        top_face = max(shape.Faces, key=lambda f: f.CenterOfMass.z)
+        return Base.Vector(top_face.CenterOfMass)
+    return Base.Vector(shape.BoundBox.Center)
+
+
 def _point_from_subobject(sub_obj) -> Optional[Base.Vector]:
-    """Return a representative point for the given sub-object."""
+    """Return a representative point for a selected sub-element."""
     try:
         if hasattr(sub_obj, "Point"):
             return Base.Vector(sub_obj.Point)
@@ -19,102 +46,137 @@ def _point_from_subobject(sub_obj) -> Optional[Base.Vector]:
         if hasattr(sub_obj, "Curve") and hasattr(sub_obj.Curve, "value"):
             return Base.Vector(sub_obj.Curve.value(0.5))
     except Exception:
-        return None
+        pass
     return None
 
 
-def _create_contact_marker(doc, source_name: str, point: Base.Vector, index: int):
-    marker = doc.addObject("Part::Feature", f"ContactPoint_{index:03d}")
-    marker.Shape = Part.Point(point)
-    marker.addProperty("App::PropertyVector", "ContactPoint", "Wirebond", "Defined contact point on the imported STEP model")
-    marker.addProperty("App::PropertyString", "SourceObject", "Wirebond", "Name of the source object the point belongs to")
-    marker.addProperty("App::PropertyBool", "IsContactPoint", "Wirebond", "Marks this object as a wirebond contact point")
+# ── marker creation ────────────────────────────────────────────────────────────
 
-    marker.ContactPoint = point
-    marker.SourceObject = source_name
+def _next_marker_index(doc) -> int:
+    """Return the next free ContactPoint index in the document."""
+    existing = [o for o in doc.Objects if o.Name.startswith("ContactPoint_")]
+    return len(existing) + 1
+
+
+def _create_contact_marker(doc, source_name: str, point: Base.Vector, index: int):
+    """Create a ContactPoint marker at *point* and return it."""
+    marker = doc.addObject("Part::Feature", f"ContactPoint_{index:03d}")
+    marker.Shape = Part.Vertex(point.x, point.y, point.z)
+
+    marker.addProperty("App::PropertyVector", "ContactPoint", "Wirebond",
+                        "Snap point for wire bonding")
+    marker.addProperty("App::PropertyString", "SourceObject", "Wirebond",
+                        "Name of the source object this point belongs to")
+    marker.addProperty("App::PropertyBool",   "IsContactPoint", "Wirebond",
+                        "Marks this object as a wire-bond contact point")
+
+    marker.ContactPoint   = point
+    marker.SourceObject   = source_name
     marker.IsContactPoint = True
 
-    if hasattr(marker, "ViewObject"):
-        marker.ViewObject.PointSize = 6
-        marker.ViewObject.PointColor = (0.90, 0.30, 0.10)
-        marker.ViewObject.DisplayMode = "Point"
+    marker.ViewObject.PointSize   = 8
+    marker.ViewObject.PointColor  = (0.90, 0.30, 0.10)   # orange — die-side
+    marker.ViewObject.DisplayMode = "Points"
 
     return marker
 
 
+# ── main function ──────────────────────────────────────────────────────────────
+
 def define_contact_points() -> List[str]:
-    """Create explicit contact point markers from the current selection.
-
-    The user should pre-select vertices, edges, or faces on the imported
-    STEP/leadframe model. Each selected sub-element becomes a marker with
-    a stored position for later wirebonding.
     """
+    Place ContactPoint markers on all currently selected GDS layer objects.
 
+    For each selected object:
+    - If a sub-element (vertex / edge / face) was selected, use its position.
+    - Otherwise, snap to the centre of the top face (highest-Z face) of the
+      object's solid shape — i.e. the pad bonding surface.
+
+    Returns a list of created marker names.
+    """
     doc = FreeCAD.activeDocument()
     if not doc:
         QtWidgets.QMessageBox.warning(
-            None,
-            "No document",
-            "Open a document and select geometry on the imported STEP model before defining contact points.",
+            None, "No document",
+            "Open a document and select GDS layer objects before defining contact points.",
         )
         return []
 
     selection = FreeCADGui.Selection.getSelectionEx()
     if not selection:
         QtWidgets.QMessageBox.information(
-            None,
-            "Select geometry",
-            "Select vertices, edges, or faces on the imported STEP model, then run the command again.",
+            None, "Nothing selected",
+            "Select one or more GDS layer objects in the 3D view,\n"
+            "then run 'Define Contact Points' again.\n\n"
+            "A contact point will be placed at the centre of each pad's top face.",
         )
         return []
 
-    created_markers: List[str] = []
+    created: List[str] = []
 
     for sel in selection:
         obj = sel.Object
         if not hasattr(obj, "Shape"):
+            FreeCAD.Console.PrintWarning(
+                f"Skipping '{obj.Name}': no Shape property.\n"
+            )
             continue
 
         sub_objects = sel.SubObjects or []
-        sub_names = sel.SubElementNames or []
 
-        if not sub_objects:
-            # Fallback to the object's bounding box center if no subelement was provided.
-            point = obj.Shape.BoundBox.Center
-            marker = _create_contact_marker(doc, obj.Name, point, len(created_markers) + 1)
-            created_markers.append(marker.Name)
-            continue
+        if sub_objects:
+            # Sub-element selected — honour the explicit pick
+            for idx, sub_obj in enumerate(sub_objects):
+                pt = _point_from_subobject(sub_obj)
+                if pt is None:
+                    pt = _top_face_center(obj.Shape)
+                marker = _create_contact_marker(
+                    doc, obj.Name, pt, _next_marker_index(doc)
+                )
+                sub_names = sel.SubElementNames or []
+                if idx < len(sub_names):
+                    marker.Label = f"{obj.Label}:{sub_names[idx]}"
+                created.append(marker.Name)
+        else:
+            # Whole-object selection — snap to top face centre
+            pt = _top_face_center(obj.Shape)
+            marker = _create_contact_marker(
+                doc, obj.Name, pt, _next_marker_index(doc)
+            )
+            marker.Label = f"CP_{obj.Label}"
+            created.append(marker.Name)
 
-        for idx, sub_obj in enumerate(sub_objects):
-            point = _point_from_subobject(sub_obj)
-            if point is None:
-                point = obj.Shape.BoundBox.Center
-            marker = _create_contact_marker(doc, obj.Name, point, len(created_markers) + 1)
-            if idx < len(sub_names):
-                marker.Label = f"{obj.Label}:{sub_names[idx]}"
-            created_markers.append(marker.Name)
-
-    if created_markers:
+    if created:
         doc.recompute()
         QtWidgets.QMessageBox.information(
-            None,
-            "Contact points created",
-            f"Created {len(created_markers)} contact point marker(s). They can be used directly in manual wire bonding.",
+            None, "Contact points created",
+            f"Created {len(created)} contact point(s).\n"
+            "They are ready for use in manual wire bonding.",
+        )
+    else:
+        QtWidgets.QMessageBox.warning(
+            None, "No contact points created",
+            "None of the selected objects had a usable Shape.\n"
+            "Select GDS layer objects (Layer_… objects) and try again.",
         )
 
-    return created_markers
+    return created
 
+
+# ── FreeCAD command ────────────────────────────────────────────────────────────
 
 class DefineContactPointsCommand:
     def GetResources(self):
         return {
             "MenuText": "Define Contact Points",
-            "ToolTip": "Create wirebond contact point markers from selected STEP geometry",
+            "ToolTip":  (
+                "Select GDS layer objects in the 3D view and run this command to place "
+                "a contact point at the centre of each pad's top face."
+            ),
         }
 
     def Activated(self):
         define_contact_points()
 
     def IsActive(self):
-        doc = FreeCAD.activeDocument()
-        return bool(doc and FreeCADGui.Selection.getSelection())
+        return FreeCAD.activeDocument() is not None
