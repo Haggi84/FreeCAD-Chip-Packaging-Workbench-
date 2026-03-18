@@ -84,11 +84,20 @@ def fetch_leadframe_entries(library_url: str = DEFAULT_LIBRARY_URL) -> List[Lead
     return entries
 
 
+_DOWNLOAD_TIMEOUT_S = 30
+_DOWNLOAD_MAX_BYTES = 50 * 1024 * 1024  # 50 MB
+
+
 def _download_to_temp(entry: LeadframeEntry) -> str:
     target_dir = tempfile.mkdtemp(prefix="leadframe_download_")
     target_name = os.path.basename(entry.url.split("?")[0]) or entry.name
     target_path = os.path.join(target_dir, target_name)
-    urllib.request.urlretrieve(entry.url, target_path)
+    with urllib.request.urlopen(entry.url, timeout=_DOWNLOAD_TIMEOUT_S) as response:
+        data = response.read(_DOWNLOAD_MAX_BYTES + 1)
+    if len(data) > _DOWNLOAD_MAX_BYTES:
+        raise ValueError(f"Download exceeded the {_DOWNLOAD_MAX_BYTES // (1024 * 1024)} MB size limit.")
+    with open(target_path, "wb") as f:
+        f.write(data)
     return target_path
 
 

@@ -94,6 +94,19 @@ class TransparentHousingConfigurator(QtWidgets.QDialog):
         self.setLayout(layout)
         self.leadframe_config = None
 
+    def accept(self):
+        errors = []
+        if not self.leadframe_config:
+            errors.append("Please configure a leadframe first by clicking 'Configure Leadframe'.")
+        if self.wall_thickness.value() <= 0:
+            errors.append("Wall thickness must be greater than 0.")
+        if self.housing_height.value() <= 0:
+            errors.append("Housing height must be greater than 0.")
+        if errors:
+            QtWidgets.QMessageBox.warning(self, "Invalid Configuration", "\n\n".join(errors))
+            return
+        super().accept()
+
     def open_leadframe_config(self):
         dialog = LeadframeConfigurator()
         if dialog.exec_():

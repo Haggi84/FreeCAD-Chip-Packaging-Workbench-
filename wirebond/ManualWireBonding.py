@@ -15,16 +15,21 @@ class ManualWireBonding:
         self.selection_mode = "waiting"  # "waiting", "select_die", "select_bond"
         
     def start_bonding_session(self, config):
-        """Start manual wire bonding session."""
+        """Start manual wire bonding session. Cancels any in-progress session first."""
+        # Clean up any existing session before starting a new one
+        if self.is_active:
+            self.cancel_session()
+
         self.config = config
         self.selected_objects = []
+        self.current_selection = None
         self.is_active = True
         self.selection_mode = "select_die"
         self.doc = FreeCAD.activeDocument()
-        
+
         if not self.doc:
             self.doc = FreeCAD.newDocument("WireBonding")
-        
+
         FreeCAD.Console.PrintMessage("=== MANUAL 2D WIRE BONDING STARTED ===\n")
         FreeCAD.Console.PrintMessage("STEP 1: Click on a DIE PAD (starting point)\n")
         FreeCAD.Console.PrintMessage("STEP 2: Click on a BOND FINGER (ending point)\n") 
@@ -182,9 +187,9 @@ class ManualWireBonding:
                     curve = die_pad.Shape.Edges[edge_index].Curve
                     if hasattr(curve, 'value'):
                         return curve.value(0.5)
-        except:
-            pass
-            
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(f"Could not resolve die pad sub-shape: {e}\n")
+
         # Default: use object center
         return die_pad.Shape.BoundBox.Center
     
@@ -214,9 +219,9 @@ class ManualWireBonding:
                     curve = bond_finger.Shape.Edges[edge_index].Curve
                     if hasattr(curve, 'value'):
                         return curve.value(0.5)
-        except:
-            pass
-            
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(f"Could not resolve bond finger sub-shape: {e}\n")
+
         # Default: use object center
         return bond_finger.Shape.BoundBox.Center
     
@@ -316,10 +321,10 @@ class ManualWireBonding:
         self.is_active = False
         try:
             FreeCADGui.Selection.removeObserver(self)
-        except:
-            pass
-        
-        FreeCAD.Console.PrintMessage(f"=== WIRE BONDING FINISHED ===\n")
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(f"Could not remove selection observer: {e}\n")
+
+        FreeCAD.Console.PrintMessage("=== WIRE BONDING FINISHED ===\n")
         FreeCAD.Console.PrintMessage(f"• Total bonds created: {len(self.selected_objects)}\n")
         self.generate_report()
         return len(self.selected_objects)
@@ -350,12 +355,13 @@ class ManualWireBonding:
         self.is_active = False
         try:
             FreeCADGui.Selection.removeObserver(self)
-        except:
-            pass
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(f"Could not remove selection observer: {e}\n")
         self.selected_objects = []
         self.current_selection = None
         self.selection_mode = "waiting"
-        FreeCAD.Console.PrintMessage("✗ Wire bonding cancelled.\n")
+        FreeCAD.Console.PrintMessage("Wire bonding cancelled.\n")
 
-# Global instance
+# Module-level instance — shared across WirebondCommand, FinishWireBondingCommand,
+# and CancelWireBondingCommand. start_bonding_session() resets state on each use.
 manual_bonder = ManualWireBonding()

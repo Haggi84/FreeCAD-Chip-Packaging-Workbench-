@@ -2,6 +2,7 @@
 Simple helper functions for resource paths
 """
 import os
+import FreeCAD
 
 
 def get_root():
@@ -25,7 +26,7 @@ def get_icon(name):
     if os.path.exists(icon_path):
         return icon_path
     else:
-        print(f"Warning: Icon not found: {icon_path}")
+        FreeCAD.Console.PrintWarning(f"Icon not found: {icon_path}\n")
         return ""
 
 
@@ -44,7 +45,7 @@ def get_html(name):
     if os.path.exists(html_path):
         return html_path
     else:
-        print(f"Warning: HTML file not found: {html_path}")
+        FreeCAD.Console.PrintWarning(f"HTML file not found: {html_path}\n")
         return ""
 
 
@@ -64,5 +65,5 @@ def get_resource(resource_type, name):
     if os.path.exists(resource_path):
         return resource_path
     else:
-        print(f"Warning: Resource not found: {resource_path}")
+        FreeCAD.Console.PrintWarning(f"Resource not found: {resource_path}\n")
         return ""

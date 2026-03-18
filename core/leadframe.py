@@ -2,10 +2,35 @@ from FreeCAD import Base
 import FreeCAD, Part, Sketcher, FreeCADGui
 
 def build_leadframe(config, doc=None, gds_objects=None):
-    """Create a leadframe based on the provided configuration.
+    """Create a leadframe geometry in the active FreeCAD document.
 
     Args:
-        config (dict): A dictionary containing leadframe parameters.
+        config (dict): Leadframe parameters. Required keys for all types:
+            frame_type (str): One of "QFN (Quad Flat No-lead)",
+                              "QFP (Quad Flat Package)", "BGA (Ball Grid Array)".
+            frame_length (float): Package length in mm.
+            frame_width  (float): Package width in mm.
+            frame_thickness (float): Frame body thickness in mm.
+            material (str): Material label (e.g. "Copper", "Alloy 42").
+
+            QFN/QFP only:
+                left_lead_count, right_lead_count,
+                top_lead_count, bottom_lead_count (int): Leads per side.
+                lead_width  (float): Width of each lead in mm.
+                lead_pitch  (float): Centre-to-centre spacing in mm (must be > lead_width).
+                lead_length (float): Extension length for QFP leads in mm.
+                qfn_pad_thickness (float): Pad thickness for QFN in mm.
+
+            BGA only:
+                bga_ball_diameter (float): Solder ball diameter in mm.
+                bga_ball_pitch    (float): Ball centre spacing in mm (must be > diameter).
+
+        doc: Unused (kept for API compatibility). Active document is always used.
+        gds_objects (dict, optional): {layer_id: [FreeCAD objects]} to place above
+            the leadframe at z = frame_thickness + 0.01 mm.
+
+    Returns:
+        FreeCAD document containing the created geometry.
     """
     doc = FreeCAD.activeDocument()
     if not doc:

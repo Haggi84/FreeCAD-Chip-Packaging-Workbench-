@@ -139,6 +139,32 @@ class LeadframeConfigurator(QtWidgets.QDialog):
         # Initial visibility setup
         self.update_parameter_visibility()
 
+    def accept(self):
+        frame_type = self.frame_type.currentText()
+        errors = []
+        if frame_type in ["QFN (Quad Flat No-lead)", "QFP (Quad Flat Package)"]:
+            lead_pitch = self.lead_pitch.value()
+            lead_width = self.lead_width.value()
+            frame_length = self.frame_length.value()
+            frame_width = self.frame_width.value()
+            if lead_width >= lead_pitch:
+                errors.append(f"Lead width ({lead_width} mm) must be less than lead pitch ({lead_pitch} mm) to avoid overlap.")
+            left_span = (self.left_lead_count.value() - 1) * lead_pitch
+            right_span = (self.right_lead_count.value() - 1) * lead_pitch
+            top_span = (self.top_lead_count.value() - 1) * lead_pitch
+            bottom_span = (self.bottom_lead_count.value() - 1) * lead_pitch
+            if max(left_span, right_span) > frame_width:
+                errors.append(f"Left/right lead span ({max(left_span, right_span):.2f} mm) exceeds frame width ({frame_width} mm).")
+            if max(top_span, bottom_span) > frame_length:
+                errors.append(f"Top/bottom lead span ({max(top_span, bottom_span):.2f} mm) exceeds frame length ({frame_length} mm).")
+        elif frame_type == "BGA (Ball Grid Array)":
+            if self.bga_ball_diameter.value() >= self.bga_ball_pitch.value():
+                errors.append(f"BGA ball diameter ({self.bga_ball_diameter.value()} mm) must be less than ball pitch ({self.bga_ball_pitch.value()} mm).")
+        if errors:
+            QtWidgets.QMessageBox.warning(self, "Invalid Configuration", "\n\n".join(errors))
+            return
+        super().accept()
+
     def update_parameter_visibility(self):
         """Update the visibility of parameters based on the selected frame type."""
         frame_type = self.frame_type.currentText()
