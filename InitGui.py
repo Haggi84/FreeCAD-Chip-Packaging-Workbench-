@@ -1,6 +1,14 @@
 from PySide2 import QtWidgets, QtCore
 import FreeCAD, FreeCADGui
 
+import os
+if os.environ.get("FREECAD_DEBUGPY") == "1":
+    import debugpy
+    debugpy.listen(("localhost", 5678))
+    print("debugpy: waiting for VS Code attach on port 5678...")
+    debugpy.wait_for_client()
+    print("debugpy: attached.")
+
 # Try to register commands (some are optional)
 try:
     from gds import GDSCommand

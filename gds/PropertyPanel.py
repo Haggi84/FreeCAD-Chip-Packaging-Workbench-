@@ -278,7 +278,7 @@ class PropertyPanel(QtWidgets.QDockWidget):
                 layer_objects.setdefault((layer_id, datatype), []).append(obj)
 
             try:
-                obj.commitTransaction()
+                doc.commitTransaction()
             except Exception:
                 pass
 

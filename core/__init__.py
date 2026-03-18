@@ -6,8 +6,11 @@ Contains fundamental utilities for GDS processing and geometry operations
 from .Core_Functionality import (
     parse_lyp,
     parse_map,
+    parse_ihp_map,
     get_gds_layer,
     _norm,
+    _as_iter,
+    _iter_xy,
     load_gds,
     derive_base_scale_mm,
     is_bondable,
@@ -31,8 +34,11 @@ from .Color import (
 __all__ = [
     'parse_lyp',
     'parse_map',
+    'parse_ihp_map',
     'get_gds_layer',
     '_norm',
+    '_as_iter',
+    '_iter_xy',
     'load_gds',
     'derive_base_scale_mm',
     'is_bondable',

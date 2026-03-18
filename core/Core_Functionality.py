@@ -107,6 +107,9 @@ def parse_map(map_path):
         FreeCAD.Console.PrintError(f"Failed to parse MAP file '{map_path}': {e}\n")
         return {}
 
+# Alias for callers that use the older name
+parse_ihp_map = parse_map
+
 # ------------------------------------------------
 # Thickness & stacking helpers (simple defaults)
 # ------------------------------------------------
@@ -126,6 +129,26 @@ THICKNESS_UM = {
 # Default dielectric spacing (ILD) between stack levels [µm]
 ILD_SPACING_UM = 0.8
 
+
+def _as_iter(obj):
+    """Wrap None/scalar in a list so callers can always iterate."""
+    if obj is None:
+        return []
+    if isinstance(obj, (list, tuple)):
+        return obj
+    return [obj]
+
+def _iter_xy(seq):
+    """Yield (x, y) pairs from a numpy Nx2 array, list of pairs, or gdstk.Polygon."""
+    pts = getattr(seq, 'points', seq)
+    try:
+        for p in pts:
+            try:
+                yield float(p[0]), float(p[1])
+            except Exception:
+                continue
+    except TypeError:
+        return
 
 def _norm(s):
     return (s or "").upper()
@@ -225,24 +248,27 @@ def build_stack_mm(selected_layers, ihp_map, ild_um: float = ILD_SPACING_UM):
 
 def get_gds_layer(gds_path):
     """
-    Analyze GDS and return set of (layer_id, datatype) that contain polygons.
+    Analyze GDS and return set of (layer_id, datatype) that contain polygons or paths.
     """
     try:
         lib = gdstk.read_gds(gds_path)
         layer_set = set()
 
-        def process_cell(cell):
-            for polygon in cell.polygons:
+        for cell in _as_iter(getattr(lib, 'cells', [])):
+            for polygon in _as_iter(getattr(cell, 'polygons', [])):
                 layer_set.add((polygon.layer, polygon.datatype))
-            for ref in cell.references:
-                process_cell(ref.cell)
+            for path in _as_iter(getattr(cell, 'paths', [])):
+                layers_attr = getattr(path, 'layers', None)
+                dtypes_attr = getattr(path, 'datatypes', None)
+                if layers_attr:
+                    for i, lyr in enumerate(layers_attr):
+                        dt = dtypes_attr[i] if (dtypes_attr and i < len(dtypes_attr)) else 0
+                        layer_set.add((lyr, dt))
+                else:
+                    layer_set.add((getattr(path, 'layer', 0), getattr(path, 'datatype', 0)))
 
-        for cell in lib.cells:
-            process_cell(cell)
-
-        # FreeCAD.Console.PrintMessage(f"Found {len(layer_set)} layers in GDS file {gds_path}\n")
         return layer_set
-    
+
     except Exception as e:
         FreeCAD.Console.PrintError(f"Error reading GDSII file {gds_path}: {str(e)}\n")
         return set()
@@ -556,10 +582,10 @@ def style_for_material(edi_name: str, edi_types: set):
         return ("Metal fill / dielectric", (0.70, 0.85, 1.0), (0.25, 0.35, 0.45), 70)
 
     # Routing metals
-    if en.startswith("TOPMETAL") or en.startswith("METAL"):
+    if en.startswith("TOPMETAL") or en.startswith("METAL") or "METAL" in et:
         return ("Routing metal", (0.60, 0.60, 0.60), (0.12, 0.12, 0.12), 0)
 
-    if en.startswith("COMP") or en.startswith("DIEAREA"):
+    if en.startswith("COMP") or en.startswith("DIEAREA") or "DIE" in et:
         return ("Component/Die", (0.80, 0.90, 0.95), (0.25, 0.35, 0.45), 60)
 
     return ("Generic", (0.75, 0.75, 0.75), (0.10, 0.10, 0.10), 0)
@@ -569,14 +595,14 @@ def style_for_material(edi_name: str, edi_types: set):
 # .........................................
 
 def bbox_from_entries(entries):
-    if not entries:
-        return None
-    xmin = ymin = float("inf")
-    xmax = ymax = float("-inf")
-    for entry in entries:
-        bb = entry["shape"].BoundBox
-        xmin = min(xmin, bb.XMin)
-        ymin = min(ymin, bb.YMin)
-        xmax = max(xmax, bb.XMax)
-        ymax = max(ymax, bb.YMax)
-    return xmin, ymin, xmax, ymax
+    bb = None
+    for entry in (entries or []):
+        try:
+            b = entry["shape"].BoundBox
+        except Exception:
+            continue
+        if bb is None:
+            bb = [b.XMin, b.YMin, b.XMax, b.YMax]
+        else:
+            bb = [min(bb[0], b.XMin), min(bb[1], b.YMin), max(bb[2], b.XMax), max(bb[3], b.YMax)]
+    return tuple(bb) if bb else None

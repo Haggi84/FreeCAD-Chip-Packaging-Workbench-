@@ -107,12 +107,6 @@ def build_leadframe(config, doc=None, gds_objects=None):
                 lead_x_end = frame_x
                 lead_y_start = lead_y - lead_width / 2
                 lead_y_end = lead_y + lead_width / 2
-
-                new_lead_Y = left_lead_count + lead_y
-                if new_lead_Y < -(lead_y_start) :
-                    lead_y_start = new_lead_Y - (lead_width / 2)
-                    lead_y_end = new_lead_Y + (lead_width / 2)
-
                 add_leads(lead_x_start, lead_x_end, lead_y_start, lead_y_end, lead_sketch)
 
             # Add leads to right side
@@ -122,12 +116,6 @@ def build_leadframe(config, doc=None, gds_objects=None):
                 lead_x_end = frame_x + frame_length + lead_extension if frame_type == "QFP (Quad Flat Package)" else frame_x + frame_length + lead_width
                 lead_y_start = lead_y - lead_width / 2
                 lead_y_end = lead_y + lead_width / 2
-
-                new_lead_Y = right_lead_count + lead_y
-                if new_lead_Y < -(lead_y_start) :
-                    lead_y_start = new_lead_Y - (lead_width / 2)
-                    lead_y_end = new_lead_Y + (lead_width / 2)
-            
                 add_leads(lead_x_start, lead_x_end, lead_y_start, lead_y_end, lead_sketch)
 
             # Add leads to top side
@@ -137,12 +125,6 @@ def build_leadframe(config, doc=None, gds_objects=None):
                 lead_y_end = frame_y + frame_width + lead_extension if frame_type == "QFP (Quad Flat Package)" else frame_y + frame_width + lead_width
                 lead_x_start = lead_x - lead_width / 2
                 lead_x_end = lead_x + lead_width / 2
-
-                new_lead_X = top_lead_count + lead_x
-                if new_lead_X < -(lead_x_start) :
-                    lead_x_start = new_lead_X - (lead_width / 2)
-                    lead_x_end = new_lead_X + (lead_width / 2)
-
                 add_leads(lead_x_start, lead_x_end, lead_y_start, lead_y_end, lead_sketch)
 
             # Add leads to bottom side
@@ -152,12 +134,6 @@ def build_leadframe(config, doc=None, gds_objects=None):
                 lead_y_end = frame_y
                 lead_x_start = lead_x - lead_width / 2
                 lead_x_end = lead_x + lead_width / 2
-
-                new_lead_X = bottom_lead_count + lead_x
-                if new_lead_X < -(lead_x_start) :
-                    lead_x_start = new_lead_X - (lead_width / 2)
-                    lead_x_end = new_lead_X + (lead_width / 2)
-
                 add_leads(lead_x_start, lead_x_end, lead_y_start, lead_y_end, lead_sketch)
             
             # Extrude the lead (QFN pads are placed on the bottom of the frame)
