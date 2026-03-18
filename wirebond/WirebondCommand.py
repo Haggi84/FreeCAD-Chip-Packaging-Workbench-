@@ -3,7 +3,7 @@ import sys
 
 import FreeCAD
 import FreeCADGui
-from PySide2 import QtWidgets
+from PySide2 import QtWidgets, QtCore
 
 root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, root_path)
@@ -13,6 +13,9 @@ from wirebond.ManualWireBonding import manual_bonder  # Global instance
 from wirebond.Wirebon_Confi_Support import check_wirebond_prerequisites
 from wirebond.ContactPointTool import DefineContactPointsCommand
 from Get_Path import get_icon
+
+# Singleton panel instance — persisted across command activations
+_cp_panel = None
 
 
 class WirebondCommand:
@@ -110,8 +113,39 @@ class CancelWireBondingCommand:
         return True
 
 
+class ShowContactPointPanelCommand:
+    """Toggle the Contact Point Browser dock panel."""
+
+    def GetResources(self):
+        return {
+            "MenuText": "Contact Point Browser",
+            "ToolTip":  "Show/hide the Contact Point browser panel (hover to highlight in 3D)",
+            "Pixmap":   get_icon("ContactPoint_Browser.svg"),
+        }
+
+    def Activated(self):
+        global _cp_panel
+        main_win = FreeCADGui.getMainWindow()
+
+        if _cp_panel is None:
+            from wirebond.ContactPointPanel import ContactPointPanel
+            _cp_panel = ContactPointPanel(main_win)
+            main_win.addDockWidget(QtCore.Qt.RightDockWidgetArea, _cp_panel)
+
+        if _cp_panel.isVisible():
+            _cp_panel.hide()
+        else:
+            _cp_panel.populate()
+            _cp_panel.show()
+            _cp_panel.raise_()
+
+    def IsActive(self):
+        return FreeCAD.activeDocument() is not None
+
+
 # Register commands
 FreeCADGui.addCommand("WirebondCommand", WirebondCommand())
 FreeCADGui.addCommand("FinishWireBondingCommand", FinishWireBondingCommand())
 FreeCADGui.addCommand("CancelWireBondingCommand", CancelWireBondingCommand())
 FreeCADGui.addCommand("DefineContactPointsCommand", DefineContactPointsCommand())
+FreeCADGui.addCommand("ShowContactPointPanelCommand", ShowContactPointPanelCommand())

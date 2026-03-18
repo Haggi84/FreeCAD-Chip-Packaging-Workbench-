@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- Panel background -->
+  <rect x="2" y="2" width="28" height="28" rx="3" fill="#2a2a2e" stroke="#555" stroke-width="1"/>
+  <!-- Tree lines -->
+  <line x1="7" y1="9" x2="7" y2="25" stroke="#666" stroke-width="1"/>
+  <line x1="7" y1="13" x2="11" y2="13" stroke="#666" stroke-width="1"/>
+  <line x1="7" y1="19" x2="11" y2="19" stroke="#666" stroke-width="1"/>
+  <line x1="7" y1="25" x2="11" y2="25" stroke="#666" stroke-width="1"/>
+  <!-- Row labels -->
+  <rect x="12" y="11" width="14" height="3" rx="1" fill="#555"/>
+  <rect x="12" y="17" width="14" height="3" rx="1" fill="#555"/>
+  <rect x="12" y="23" width="14" height="3" rx="1" fill="#555"/>
+  <!-- Contact point dots: blue (leadframe) and orange (die) -->
+  <circle cx="10" cy="13" r="2.5" fill="#1A99E6"/>
+  <circle cx="10" cy="25" r="2.5" fill="#E64D1A"/>
+  <!-- Highlighted row (hover) -->
+  <rect x="5" y="17" width="23" height="5" rx="1" fill="#1a6e2e" opacity="0.6"/>
+  <circle cx="10" cy="19" r="2.5" fill="#1AE64D"/>
+</svg>
