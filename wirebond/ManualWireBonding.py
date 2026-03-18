@@ -292,7 +292,10 @@ class ManualWireBonding:
             wire_obj.StartCP    = cp1.Name
             wire_obj.EndCP      = cp2.Name
             wire_obj.NetName    = f"Net_{idx:03d}"
-            wire_obj.WireLength = shape.Length
+            # Use straight-line distance as a meaningful arc-length approximation.
+            # shape.Length on a swept solid returns total edge length (all profile
+            # circles included), which is not the wire arc length.
+            wire_obj.WireLength = start.distanceTo(end)
 
             doc.commitTransaction()
             doc.recompute()
@@ -319,7 +322,9 @@ class ManualWireBonding:
             from PySide2 import QtCore
             m = self.doc.addObject("Part::Sphere", "_SnapMarker")
             m.Radius = 0.06
-            m.Placement.Base = pos
+            # Must assign a new Placement object — modifying .Base in-place
+            # only changes a Python copy and has no effect on the actual object.
+            m.Placement = FreeCAD.Placement(pos, FreeCAD.Rotation(0, 0, 0, 1))
             m.ViewObject.ShapeColor = _COLOR_SNAP_VALID
             m.ViewObject.Transparency = 20
             self.doc.recompute()
