@@ -64,6 +64,16 @@ class WirebondConfigurator(QtWidgets.QDialog):
         layout.addWidget(button_box)
         self.setLayout(layout)
 
+    def accept(self):
+        if self.min_wire_length.value() >= self.max_wire_length.value():
+            QtWidgets.QMessageBox.warning(
+                self, "Invalid Configuration",
+                f"Minimum wire length ({self.min_wire_length.value()} mm) must be less than "
+                f"maximum wire length ({self.max_wire_length.value()} mm)."
+            )
+            return
+        super().accept()
+
     def get_config(self):
         """Return wire bonding configuration."""
         return {

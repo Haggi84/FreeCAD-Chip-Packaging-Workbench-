@@ -13,133 +13,131 @@ from Get_Path import get_icon
 
 def configuration(doc, gds_path, selected_layers, options, ihp_map, config, opts):
     # First pass — measure bbox at base scale
-        first_transform = {
-            "scale": None,
-            "rot_deg": opts["rot_deg"],
-            "mirror_y": opts["mirror_y"],
-            "tx": 0.0,
-            "ty": 0.0,
-            "z_thickness": 0.03
-        }
+    first_transform = {
+        "scale": None,
+        "rot_deg": opts["rot_deg"],
+        "mirror_y": opts["mirror_y"],
+        "tx": 0.0,
+        "ty": 0.0,
+        "z_thickness": 0.03
+    }
 
-        frame_length = config["frame_length"]
-        frame_width  = config["frame_width"]
-            
-        tmp_entries = Core_Functionality.load_gds(
-            gds_path, selected_layers, first_transform,
-            preview_2d=False, compound_per_layer=True,
-            min_area_mm2=0.0004, decimate_tol_mm=0.002, skip_fill_datatype=True
-        )
-        if not tmp_entries:
-            QtWidgets.QMessageBox.warning(None, "Warning", "No shapes produced during measurement pass.")
-            return
+    frame_length = config["frame_length"]
+    frame_width = config["frame_width"]
 
-        bb = Core_Functionality.bbox_from_entries(tmp_entries)
-        if not bb:
-            QtWidgets.QMessageBox.warning(None, "Warning", "Failed to compute bounding box for GDS shapes.")
-            return
-        xmin, ymin, xmax, ymax = bb
-        die_w = max(0.0, xmax - xmin)
-        die_h = max(0.0, ymax - ymin)
+    tmp_entries = Core_Functionality.load_gds(
+        gds_path, selected_layers, first_transform,
+        preview_2d=False, compound_per_layer=True,
+        min_area_mm2=0.0004, decimate_tol_mm=0.002, skip_fill_datatype=True
+    )
+    if not tmp_entries:
+        QtWidgets.QMessageBox.warning(None, "Warning", "No shapes produced during measurement pass.")
+        return
 
-        # Auto-fit scale
-        base_scale = Core_Functionality.derive_base_scale_mm(gds_path)
-        final_scale = base_scale
-        if opts["auto_fit"] and die_w > 0 and die_h > 0:
-            margin = max(0.0, opts["margin_pct"]) / 100.0
-            fit_w = frame_length * (1.0 - margin)
-            fit_h = frame_width * (1.0 - margin)
-            fit_factor = min(fit_w / die_w, fit_h / die_h)
-            if fit_factor < 1.0:
-                final_scale = base_scale * fit_factor
+    bb = Core_Functionality.bbox_from_entries(tmp_entries)
+    if not bb:
+        QtWidgets.QMessageBox.warning(None, "Warning", "Failed to compute bounding box for GDS shapes.")
+        return
+    xmin, ymin, xmax, ymax = bb
+    die_w = max(0.0, xmax - xmin)
+    die_h = max(0.0, ymax - ymin)
 
-        cx = (xmin + xmax) / 2.0
-        cy = (ymin + ymax) / 2.0
-        final_tx = -cx + opts["tx"]
-        final_ty = -cy + opts["ty"]
+    # Auto-fit scale
+    base_scale = Core_Functionality.derive_base_scale_mm(gds_path)
+    final_scale = base_scale
+    if opts["auto_fit"] and die_w > 0 and die_h > 0:
+        margin = max(0.0, opts["margin_pct"]) / 100.0
+        fit_w = frame_length * (1.0 - margin)
+        fit_h = frame_width * (1.0 - margin)
+        fit_factor = min(fit_w / die_w, fit_h / die_h)
+        if fit_factor < 1.0:
+            final_scale = base_scale * fit_factor
 
-        final_transform = {
-            "scale": final_scale,
-            "rot_deg": opts["rot_deg"],
-            "mirror_y": opts["mirror_y"],
-            "tx": final_tx,
-            "ty": final_ty,
-            "z_thickness": 0.03
-        }
+    cx = (xmin + xmax) / 2.0
+    cy = (ymin + ymax) / 2.0
+    final_tx = -cx + opts["tx"]
+    final_ty = -cy + opts["ty"]
 
-        # Build per-layer stack in mm (bottom Z + thickness)
-        stack = Core_Functionality.build_stack_mm(selected_layers, ihp_map, ild_um=Core_Functionality.ILD_SPACING_UM)
+    final_transform = {
+        "scale": final_scale,
+        "rot_deg": opts["rot_deg"],
+        "mirror_y": opts["mirror_y"],
+        "tx": final_tx,
+        "ty": final_ty,
+        "z_thickness": 0.03
+    }
 
-        # 3D Import parameters derived from options
-        match_klayout = bool(options.get("match_klayout", True))
-        highlight_bondable = bool(options.get("highlight_bondable", True))
-        skip_fill = not match_klayout
-        min_area = 0.0 if match_klayout else 0.0004
-        decimate = 0.0 if match_klayout else 0.002
+    # Build per-layer stack in mm (bottom Z + thickness)
+    stack = Core_Functionality.build_stack_mm(selected_layers, ihp_map, ild_um=Core_Functionality.ILD_SPACING_UM)
 
+    # 3D import parameters derived from options
+    match_klayout = bool(options.get("match_klayout", True))
+    highlight_bondable = bool(options.get("highlight_bondable", True))
+    skip_fill = not match_klayout
+    min_area = 0.0 if match_klayout else 0.0004
+    decimate = 0.0 if match_klayout else 0.002
 
-        shapes = Core_Functionality.load_gds(
-            gds_path,
-            selected_layers,
-            transform=final_transform,
-            preview_2d=False,
-            compound_per_layer=True,
-            min_area_mm2=min_area,
-            decimate_tol_mm=decimate,
-            skip_fill_datatype=skip_fill,
-            stack_mm=stack
-        )
-        if not shapes:
-            QtWidgets.QMessageBox.warning(None, "Warning", "No shapes found for the selected layers (final pass).")
-            return
+    shapes = Core_Functionality.load_gds(
+        gds_path,
+        selected_layers,
+        transform=final_transform,
+        preview_2d=False,
+        compound_per_layer=True,
+        min_area_mm2=min_area,
+        decimate_tol_mm=decimate,
+        skip_fill_datatype=skip_fill,
+        stack_mm=stack
+    )
+    if not shapes:
+        QtWidgets.QMessageBox.warning(None, "Warning", "No shapes found for the selected layers (final pass).")
+        return
 
-        layer_objects = {}
-        for layer in selected_layers:
-            layer_id = layer.get("layer_id", 0)
-            datatype = layer.get("datatype", 0)
-            layer_name = layer.get("name", "Unnamed")
+    layer_objects = {}
+    for layer in selected_layers:
+        layer_id = layer.get("layer_id", 0)
+        datatype = layer.get("datatype", 0)
+        layer_name = layer.get("name", "Unnamed")
 
-            map_entry = ihp_map.get((layer_id, datatype))
-            edi_name  = map_entry["edi_name"] if map_entry else ""
-            types     = map_entry["edi_types"] if map_entry else set()
+        map_entry = ihp_map.get((layer_id, datatype))
+        edi_name = map_entry["edi_name"] if map_entry else ""
+        types = map_entry["edi_types"] if map_entry else set()
 
-            # color decision
-            if match_klayout:
-                shape_rgb = hex_to_rgb(layer.get("fill-color", "#FFFFFF"))
-                line_rgb  = hex_to_rgb(layer.get("frame-color", "#000000"))
+        # Color decision
+        if match_klayout:
+            shape_rgb = hex_to_rgb(layer.get("fill-color", "#FFFFFF"))
+            line_rgb = hex_to_rgb(layer.get("frame-color", "#000000"))
+            tr = 0
+            if highlight_bondable and Core_Functionality.is_bondable(types):
+                shape_rgb = (0.90, 0.75, 0.20)
+                line_rgb = (0.25, 0.20, 0.10)
                 tr = 0
-                if highlight_bondable and Core_Functionality.is_bondable(types):
-                    shape_rgb = (0.90, 0.75, 0.20)
-                    line_rgb  = (0.25, 0.20, 0.10)
-                    tr = 0
-            else:
-                _, shape_rgb, line_rgb, tr = Core_Functionality.style_for_material(edi_name, types)
-                if not highlight_bondable and Core_Functionality.is_bondable(types):
-                    # neutralize highlight
-                    shape_rgb = hex_to_rgb(layer.get("fill-color", "#FFFFFF"))
-                    line_rgb  = hex_to_rgb(layer.get("frame-color", "#000000"))
-                    tr = 0
+        else:
+            _, shape_rgb, line_rgb, tr = Core_Functionality.style_for_material(edi_name, types)
+            if not highlight_bondable and Core_Functionality.is_bondable(types):
+                shape_rgb = hex_to_rgb(layer.get("fill-color", "#FFFFFF"))
+                line_rgb = hex_to_rgb(layer.get("frame-color", "#000000"))
+                tr = 0
 
-            shape = next((s for s in shapes if s["layer_id"] == layer_id and s["datatype"] == datatype), None)
-            if not shape:
-                continue
+        shape = next((s for s in shapes if s["layer_id"] == layer_id and s["datatype"] == datatype), None)
+        if not shape:
+            continue
 
-            obj = doc.addObject("Part::Feature", f"Layer_{layer_name}_{layer_id}")
-            obj.Shape = shape["shape"]
-            obj.ViewObject.ShapeColor = shape_rgb
-            obj.ViewObject.LineColor  = line_rgb
-            obj.ViewObject.Transparency = tr
+        obj = doc.addObject("Part::Feature", f"Layer_{layer_name}_{layer_id}_{datatype}")
+        obj.Shape = shape["shape"]
+        obj.ViewObject.ShapeColor = shape_rgb
+        obj.ViewObject.LineColor = line_rgb
+        obj.ViewObject.Transparency = tr
 
-            if not hasattr(obj, "Bondable"):
-                obj.addProperty("App::PropertyBool", "Bondable", "Technology", "Can be connected to the leadframe")
-            obj.Bondable = Core_Functionality.is_bondable(types) if highlight_bondable else False
+        if not hasattr(obj, "Bondable"):
+            obj.addProperty("App::PropertyBool", "Bondable", "Technology", "Can be connected to the leadframe")
+        obj.Bondable = Core_Functionality.is_bondable(types) if highlight_bondable else False
 
-            layer_objects.setdefault((layer_id,datatype), []).append(obj)
+        layer_objects.setdefault((layer_id, datatype), []).append(obj)
 
-        # Create the leadframe geometry in the same doc
-        create_leadframe(config, doc, layer_objects)
+    # Create the leadframe geometry in the same doc
+    create_leadframe(config, doc, layer_objects)
 
-        return doc, layer_objects
+    return doc, layer_objects
 
 def create_layer_on_leadframe():
     from ui.LayeronLeadframeConfigurator import LayeronLeadframeConfigurator

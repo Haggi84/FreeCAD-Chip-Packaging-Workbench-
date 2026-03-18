@@ -16,9 +16,9 @@ class ExtendedPropertyPanel(PropertyPanel):
     def modify_layer_selection(self):
         from ui.LayerSelector import LayerSelector
         from leadframe import LeadframeCommand
-        from gds.GDSCommand import configuration
-        from wirebond import WirebondCommand
+        from leadframe.LayeronLeadframe import configuration
         from wirebond.WirebondConfigurator import WirebondConfigurator
+        from wirebond.ManualWireBonding import manual_bonder
 
         """Override to allow modifying either layer selection or leadframe configuration."""
         if not self.gds_path or not self.lyp_path:
@@ -135,16 +135,22 @@ class ExtendedPropertyPanel(PropertyPanel):
             dialog = WirebondConfigurator()
             if dialog.exec_():
                 new_config = dialog.get_config()
-                self.wire_bond_config = new_config
-                for obj in doc.Objects:
+                self.wire_bonding_config = new_config
+                new_config["wire_style"] = "straight"
+                new_config["arc_height"] = 2.0
+                # Remove existing bond wires
+                for obj in list(doc.Objects):
                     if obj.Label.startswith("BondWire"):
                         doc.removeObject(obj.Name)
-                result = WirebondCommand.create_wire_bonds(new_config, self.layer_objects, self.leadframe_config)
-                if not result:
-                    QtWidgets.QMessageBox.warning(None, "Warning", "Failed to create wire bonds.")
-                    return
-                doc, wires = result
-                QtWidgets.QMessageBox.information(None, "Success", "Wire bonds updated successfully.")
+                # Start a fresh manual bonding session with the new config
+                manual_bonder.start_bonding_session(new_config)
+                QtWidgets.QMessageBox.information(
+                    None, "Wire Bonding Started",
+                    "Wire bonding session started with the new configuration.\n\n"
+                    "Click die pads and bond fingers to create bonds.\n"
+                    "Use 'Finish Wire Bonding' when done."
+                )
+                return
             else:
                 QtWidgets.QMessageBox.information(None, "Cancelled", "Wire bonds configuration cancelled.")
                 return
