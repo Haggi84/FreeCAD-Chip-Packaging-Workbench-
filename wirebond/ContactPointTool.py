@@ -13,6 +13,8 @@ Sub-element selection (vertex / edge / face) is still honoured when present,
 allowing finer placement on STEP models or custom geometry.
 """
 
+import os
+import sys
 from typing import List, Optional
 
 import FreeCAD
@@ -20,6 +22,9 @@ import FreeCADGui
 import Part
 from FreeCAD import Base
 from PySide2 import QtWidgets
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from Get_Path import get_icon
 
 
 # ── snap-point helpers ─────────────────────────────────────────────────────────
@@ -173,6 +178,7 @@ class DefineContactPointsCommand:
                 "Select GDS layer objects in the 3D view and run this command to place "
                 "a contact point at the centre of each pad's top face."
             ),
+            "Pixmap": get_icon("Define_Contact_Points.svg"),
         }
 
     def Activated(self):

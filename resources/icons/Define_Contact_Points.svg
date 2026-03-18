@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- Pad / bondable surface (gold rectangle, slight 3-D perspective) -->
+  <rect x="4" y="16" width="16" height="10" rx="1.5" fill="#E6B81A" stroke="#8a6a00" stroke-width="1"/>
+  <!-- Shading top edge to give depth -->
+  <rect x="4" y="16" width="16" height="2.5" rx="1.5" fill="#F5D040" opacity="0.7"/>
+
+  <!-- Crosshair lines emanating from the contact point -->
+  <line x1="12" y1="4"  x2="12" y2="10" stroke="#1A99E6" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="12" y1="14" x2="12" y2="16.5" stroke="#1A99E6" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="4"  y1="9"  x2="9"  y2="9"  stroke="#1A99E6" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="15" y1="9"  x2="20" y2="9"  stroke="#1A99E6" stroke-width="1.5" stroke-linecap="round"/>
+
+  <!-- Contact point dot (orange = die-side colour) -->
+  <circle cx="12" cy="17" r="3.2" fill="#E64D1A" stroke="#fff" stroke-width="1"/>
+
+  <!-- Plus / pin symbol inside dot -->
+  <line x1="12" y1="15.2" x2="12" y2="18.8" stroke="#fff" stroke-width="1.2" stroke-linecap="round"/>
+  <line x1="10.2" y1="17" x2="13.8" y2="17" stroke="#fff" stroke-width="1.2" stroke-linecap="round"/>
+
+  <!-- Second (leadframe-side) dot, blue, smaller, top-right to hint at pairing -->
+  <circle cx="24" cy="8" r="2.5" fill="#1A99E6" stroke="#fff" stroke-width="1"/>
+  <line x1="24" y1="6.5" x2="24" y2="9.5" stroke="#fff" stroke-width="1" stroke-linecap="round"/>
+  <line x1="22.5" y1="8" x2="25.5" y2="8" stroke="#fff" stroke-width="1" stroke-linecap="round"/>
+</svg>
