@@ -83,7 +83,12 @@ def load_gds_layers():
 
             # params derived from options
             match_klayout = bool(options.get("match_klayout", True))
-            skip_fill = not match_klayout
+            skip_fill = False   # filler layers are now always shown as a single bbox solid
+            # Collect (layer_id, datatype) pairs declared as FILL in the IHP map
+            fill_layer_keys = {
+                k for k, v in (ihp_map or {}).items()
+                if "FILL" in v.get("edi_types", set())
+            }
             min_area = 0.0 if match_klayout else 0.0004
             decimate = 0.0 if match_klayout else 0.002
             use_klayout_colors = match_klayout
@@ -137,7 +142,9 @@ def load_gds_layers():
                     compound_per_layer=True,
                     min_area_mm2=min_area,
                     decimate_tol_mm=decimate,
-                    skip_fill_datatype=skip_fill,
+                    skip_fill_datatype=False,
+                    fill_as_bbox=True,
+                    fill_layer_keys=fill_layer_keys,
                     stack_mm=stack_mm,
                     progress_callback=progress_callback
                 )

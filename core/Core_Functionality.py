@@ -335,7 +335,9 @@ def load_gds(gds_path,
              min_area_mm2=0.0,
              decimate_tol_mm=0.0,
              skip_fill_datatype=True,
-             stack_mm=None, # NEW: dict(layer_name, layer_datatype) -> {'t_mm', 'z0_mm'} for 3D stacking
+             fill_as_bbox=True,    # replace filler polygons with a single bounding-box solid
+             fill_layer_keys=None, # extra (layer_id, datatype) pairs to treat as filler
+             stack_mm=None,
              progress_callback=None
              ):
     """
@@ -373,6 +375,15 @@ def load_gds(gds_path,
 
         wanted = {(l.get("layer_id", 0), l.get("datatype", 0)) for l in selected_layers}
         by_layer = {key: [] for key in wanted}
+
+        # Filler detection: DT=22 convention + any explicitly declared fill keys
+        _fill_keys = set(fill_layer_keys or [])
+
+        def _is_filler(lyr, dt):
+            return dt == 22 or (lyr, dt) in _fill_keys
+
+        # Running bounding extents for filler layers — filled in bbox mode
+        fill_extents = {}   # (layer, dt) -> [xmin, ymin, xmax, ymax]
 
         top_cells = lib.top_level() or lib.cells
 
@@ -475,8 +486,8 @@ def load_gds(gds_path,
                 key = (layer, datatype)
                 if key not in wanted:
                     continue
-                if skip_fill_datatype and datatype == 22:
-                    continue
+                if _is_filler(layer, datatype):
+                    continue   # filler layers counted separately; don't inflate progress
                 progress_total += 1
             progress_total = max(progress_total, 1)
             progress_callback(0, progress_total, "Importing GDS layers...")
@@ -488,9 +499,24 @@ def load_gds(gds_path,
             key = (layer, datatype)
             if key not in wanted:
                 continue
-            if skip_fill_datatype and datatype == 22:
-                # many PDKs: datatype 22 == FILL
-                continue
+            if _is_filler(layer, datatype):
+                if fill_as_bbox:
+                    # Accumulate bounding extent; shape created after main loop
+                    pts2d_f = [_transform_point(p, s, rot_deg, mirror_y, tx, ty) for p in poly_pts]
+                    if pts2d_f:
+                        xs = [p[0] for p in pts2d_f]
+                        ys = [p[1] for p in pts2d_f]
+                        if key in fill_extents:
+                            e = fill_extents[key]
+                            e[0] = min(e[0], min(xs))
+                            e[1] = min(e[1], min(ys))
+                            e[2] = max(e[2], max(xs))
+                            e[3] = max(e[3], max(ys))
+                        else:
+                            fill_extents[key] = [min(xs), min(ys), max(xs), max(ys)]
+                elif skip_fill_datatype:
+                    pass   # skip entirely (legacy behaviour)
+                continue   # either way, not processed as an individual polygon
 
             pts2d = [_transform_point(p, s, rot_deg, mirror_y, tx, ty) for p in poly_pts]
             if decimate_tol_mm > 0.0:
@@ -527,6 +553,33 @@ def load_gds(gds_path,
                 if z0 != 0.0:
                     shp.translate(FreeCAD.Vector(0, 0, z0))
                 by_layer[key].append(shp)
+
+        # Build a single bounding-box shape for each filler layer
+        for key, (xmin, ymin, xmax, ymax) in fill_extents.items():
+            w = xmax - xmin
+            h = ymax - ymin
+            if w <= 0 or h <= 0:
+                continue
+            if preview_2d:
+                wire = Part.makePolygon([
+                    FreeCAD.Vector(xmin, ymin, 0),
+                    FreeCAD.Vector(xmax, ymin, 0),
+                    FreeCAD.Vector(xmax, ymax, 0),
+                    FreeCAD.Vector(xmin, ymax, 0),
+                    FreeCAD.Vector(xmin, ymin, 0),
+                ])
+                by_layer[key] = [wire]
+            else:
+                lid_f, dt_f = key
+                if stack_mm and key in stack_mm:
+                    t_mm = float(stack_mm[key]["t_mm"])
+                    z0   = float(stack_mm[key]["z0_mm"])
+                else:
+                    t_mm = default_t_mm
+                    z0   = 0.0
+                box = Part.makeBox(w, h, max(t_mm, 1e-4),
+                                   FreeCAD.Vector(xmin, ymin, z0))
+                by_layer[key] = [box]
 
         # one compound per layer
         results = []
