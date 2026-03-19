@@ -88,6 +88,7 @@ def load_gds_layers():
             decimate = 0.0 if match_klayout else 0.002
             use_klayout_colors = match_klayout
             highlight_bondable = bool(options.get("highlight_bondable", True))
+            extrude_3d = bool(options.get("extrude_3d", False))
 
             # Ensure a valid document is available
             doc = FreeCAD.activeDocument()
@@ -121,16 +122,22 @@ def load_gds_layers():
                     return False
                 return True
 
+            stack_mm = (
+                Core_Functionality.build_stack_mm(selected_layers, ihp_map)
+                if extrude_3d else None
+            )
+
             try:
                 shapes = Core_Functionality.load_gds(
                     gds_path,
                     selected_layers,
                     transform=None,
-                    preview_2d=True,
+                    preview_2d=not extrude_3d,
                     compound_per_layer=True,
                     min_area_mm2=min_area,
                     decimate_tol_mm=decimate,
                     skip_fill_datatype=skip_fill,
+                    stack_mm=stack_mm,
                     progress_callback=progress_callback
                 )
             finally:

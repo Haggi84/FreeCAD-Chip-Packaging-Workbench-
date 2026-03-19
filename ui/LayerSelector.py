@@ -18,7 +18,7 @@ class LayerSelector(QtWidgets.QDialog):
         self.layers = layers
         self.selected_layers = []
         self.selected_layers_prev = selected_layers or []
-        self.options = dict(options or {"match_klayout": True, "highlight_bondable": True})
+        self.options = dict(options or {"match_klayout": True, "highlight_bondable": True, "extrude_3d": False})
 
         layout = QtWidgets.QVBoxLayout(self)
 
@@ -29,8 +29,11 @@ class LayerSelector(QtWidgets.QDialog):
         self.check_match.setChecked(bool(self.options.get("match_klayout", True)))
         self.check_hl = QtWidgets.QCheckBox("Highlight bondable layers (gold)")
         self.check_hl.setChecked(bool(self.options.get("highlight_bondable", True)))
+        self.check_3d = QtWidgets.QCheckBox("Extrude layers to 3D volumes (uses PDK thickness table)")
+        self.check_3d.setChecked(bool(self.options.get("extrude_3d", False)))
         opt_top.addWidget(self.check_match)
         opt_top.addWidget(self.check_hl)
+        opt_top.addWidget(self.check_3d)
         layout.addLayout(opt_top)
 
         # Add selection control buttons
@@ -108,6 +111,7 @@ class LayerSelector(QtWidgets.QDialog):
         # options
         self.options["match_klayout"] = self.check_match.isChecked()
         self.options["highlight_bondable"] = self.check_hl.isChecked()
+        self.options["extrude_3d"] = self.check_3d.isChecked()
 
         if self.check_all_button.isChecked():
             self.selected_layers = list(self.layers)
