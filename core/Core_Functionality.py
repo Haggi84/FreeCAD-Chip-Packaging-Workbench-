@@ -615,6 +615,41 @@ def _resolve_edi_name(layer_id: int, datatype: int, ihp_map: dict,
     return f"Layer_{layer_id}"
 
 
+def _get_layer_polygons(cell, layer_id, datatype):
+    """
+    Return a list of Polygon objects for (layer_id, datatype) from *cell*,
+    flattening the full cell hierarchy.
+
+    Handles three gdstk API generations:
+      New  : cell.get_polygons(layer=L, datatype=DT) → list[Polygon]
+      Mid  : cell.get_polygons(by_spec=True)         → dict{(L,DT): list[Polygon]}
+      Old  : clone.flatten() + manual attribute filter
+    """
+    try:
+        return cell.get_polygons(layer=layer_id, datatype=datatype)
+    except TypeError:
+        pass
+    try:
+        spec_map = cell.get_polygons(by_spec=True)
+        if isinstance(spec_map, dict):
+            return spec_map.get((layer_id, datatype), [])
+        # flat list – filter by attributes
+        return [p for p in spec_map
+                if getattr(p, "layer", None) == layer_id
+                and getattr(p, "datatype", None) == datatype]
+    except TypeError:
+        pass
+    # Oldest gdstk: clone + flatten
+    try:
+        clone = cell.copy(name=f"__tmp_{cell.name}_{layer_id}_{datatype}")
+        clone.flatten()
+    except Exception:
+        return []
+    return [p for p in getattr(clone, "polygons", [])
+            if getattr(p, "layer", None) == layer_id
+            and getattr(p, "datatype", None) == datatype]
+
+
 def _find_pin_layer_keys(gds_path: str, ihp_map: dict,
                          selected_layers: list, top_n: int):
     """
@@ -775,8 +810,8 @@ def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
                     # ── DT=2 PIN marker strategy ──────────────────────────────
                     # Contact location  = centroid of DT=2 marker (accurate)
                     # Pad geometry      = DT=0 polygon containing that centroid
-                    pin_polys  = cell.get_polygons(layer=lid, datatype=2)
-                    draw_polys = cell.get_polygons(layer=lid, datatype=0)
+                    pin_polys  = _get_layer_polygons(cell, lid, 2)
+                    draw_polys = _get_layer_polygons(cell, lid, 0)
 
                     # Pre-build pad index: only keep pad-sized DT=0 polygons
                     pad_index = []   # [(pts_raw, (xlo,ylo,xhi,yhi))]
@@ -818,7 +853,7 @@ def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
                 else:
                     # ── DT=0 drawing layer strategy (S3 fallback) ─────────────
                     # Filter to pad-sized polygons; use polygon centroid for CP.
-                    draw_polys = cell.get_polygons(layer=lid, datatype=0)
+                    draw_polys = _get_layer_polygons(cell, lid, 0)
                     for p0 in draw_polys:
                         pts = p0.points
                         xs  = [float(p[0]) for p in pts]
