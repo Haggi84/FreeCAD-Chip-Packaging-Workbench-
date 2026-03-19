@@ -591,6 +591,219 @@ def style_for_material(edi_name: str, edi_types: set):
     return ("Generic", (0.75, 0.75, 0.75), (0.10, 0.10, 0.10), 0)
 
 # -----------------------------------------
+# Auto PIN pad detection & contact points
+# -----------------------------------------
+
+def _resolve_edi_name(layer_id: int, datatype: int, ihp_map: dict,
+                      selected_layers: list) -> str:
+    """
+    Best-effort EDI name for a (layer_id, datatype) pair.
+    Tries: map exact → map drawing DT → selected_layers by layer_id → fallback.
+    """
+    if ihp_map:
+        entry = ihp_map.get((layer_id, datatype))
+        if entry:
+            return entry["edi_name"]
+        # drawing entry often carries the layer name even when PIN uses DT!=0
+        draw = ihp_map.get((layer_id, 0))
+        if draw:
+            return draw["edi_name"]
+    if selected_layers:
+        for sl in selected_layers:
+            if sl.get("layer_id") == layer_id:
+                return sl.get("name", f"Layer_{layer_id}")
+    return f"Layer_{layer_id}"
+
+
+def _find_pin_layer_keys(gds_path: str, ihp_map: dict,
+                         selected_layers: list, top_n: int):
+    """
+    Return (candidates, strategy_label) where candidates is a list of
+    (layer_id, datatype, edi_name) tuples ordered best-first.
+
+    Three cascading strategies
+    --------------------------
+    S1 — IHP map PIN/LEFPIN types
+         Requires .map with is_bondable() entries that exist in the GDS.
+    S2 — DT=2 convention (Cadence/IHP: datatype 2 = PIN polygon)
+         Works without a map file. Covers ALL_LNA.gds and similar real
+         full-chip GDS files where DT=2 marks the exact bonding area.
+    S3 — Top drawing layers by stack rank / layer number
+         Last resort for simplified or custom GDS that only have DT=0.
+         Uses layer name from LYP (selected_layers) or map for ranking.
+    """
+    present = get_gds_layer(gds_path)   # set of (layer, dt) pairs in GDS
+
+    # ── Strategy 1: IHP map bondable types ──────────────────────────────────
+    if ihp_map:
+        s1 = [
+            (k[0], k[1], v["edi_name"])
+            for k, v in ihp_map.items()
+            if is_bondable(v.get("edi_types", set())) and k in present
+        ]
+        if s1:
+            s1.sort(key=lambda t: stack_rank_for_edi(t[2]), reverse=True)
+            return s1[:top_n], "IHP map PIN/LEFPIN types"
+
+    # ── Strategy 2: datatype-2 convention ───────────────────────────────────
+    dt2 = [(l, 2) for (l, d) in present if d == 2]
+    if dt2:
+        candidates = []
+        for (l, d) in dt2:
+            name = _resolve_edi_name(l, d, ihp_map, selected_layers)
+            candidates.append((l, d, name))
+        # Primary sort: stack rank (knows TopMetal2 > TopMetal1 > Metal5 ...)
+        # Secondary sort: layer number descending (IHP higher layer = higher metal)
+        candidates.sort(key=lambda t: (stack_rank_for_edi(t[2]), t[0]), reverse=True)
+        return candidates[:top_n], "DT=2 PIN polygon convention (Cadence/IHP)"
+
+    # ── Strategy 3: top drawing layers ──────────────────────────────────────
+    dt0 = [(l, 0) for (l, d) in present if d == 0]
+    candidates = []
+    for (l, d) in dt0:
+        name = _resolve_edi_name(l, d, ihp_map, selected_layers)
+        candidates.append((l, d, name))
+    candidates.sort(key=lambda t: (stack_rank_for_edi(t[2]), t[0]), reverse=True)
+    return candidates[:top_n], "top drawing layers by stack rank (no PIN type info)"
+
+
+def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
+                                selected_layers=None, top_n: int = 3) -> int:
+    """
+    Detect the top-N PIN/bond-pad layer-datatype pairs, extrude their
+    polygons to PDK thickness, create one compound 3D object per layer
+    (orange, tagged IsGDSPin), and place a ContactPoint marker at the
+    top-face centre of every individual pad.
+
+    Detection uses three cascading strategies (see _find_pin_layer_keys).
+    Returns the number of ContactPoint markers created.
+    """
+    candidates, strategy = _find_pin_layer_keys(
+        gds_path, ihp_map, selected_layers or [], top_n
+    )
+    if not candidates:
+        FreeCAD.Console.PrintWarning(
+            "Auto PIN detection: no candidate layers found in the GDS file.\n"
+        )
+        return 0
+
+    FreeCAD.Console.PrintMessage(
+        f"Auto PIN detection — strategy: {strategy}\n"
+        "  Candidate layers: "
+        + ", ".join(f"{name} ({lid}/{dt})" for lid, dt, name in candidates)
+        + "\n"
+    )
+
+    # ── build layer dicts with best-available EDI names for thickness ────────
+    pin_layer_dicts = [
+        {
+            "layer_id":    lid,
+            "datatype":    dt,
+            "name":        name,
+            "frame-color": "#FF8C00",
+            "fill-color":  "#FF8C00",
+        }
+        for lid, dt, name in candidates
+    ]
+    stack_mm = build_stack_mm(pin_layer_dicts, ihp_map)
+
+    # ── load extruded shapes ─────────────────────────────────────────────────
+    shapes = load_gds(
+        gds_path,
+        pin_layer_dicts,
+        preview_2d=False,
+        compound_per_layer=True,
+        stack_mm=stack_mm,
+        skip_fill_datatype=False,
+    )
+    if not shapes:
+        FreeCAD.Console.PrintWarning(
+            "Auto PIN detection: polygons were identified but no solid shapes "
+            "could be built (faces may be degenerate). Check the Python console.\n"
+        )
+        return 0
+
+    # ── helper: top-face centre of a solid ──────────────────────────────────
+    def _top_face_center(shape):
+        if shape.Faces:
+            top_face = max(shape.Faces, key=lambda f: f.CenterOfMass.z)
+            return Base.Vector(top_face.CenterOfMass)
+        bb = shape.BoundBox
+        return Base.Vector(
+            (bb.XMin + bb.XMax) / 2.0,
+            (bb.YMin + bb.YMax) / 2.0,
+            bb.ZMax,
+        )
+
+    _ORANGE = (0.90, 0.30, 0.10)   # die-side orange — matches ContactPointTool
+
+    # ── create FreeCAD objects ───────────────────────────────────────────────
+    doc.openTransaction("Auto PIN Contact Points")
+    try:
+        existing = sum(1 for o in doc.Objects if o.Name.startswith("ContactPoint_"))
+        cp_idx   = existing + 1
+        cp_count = 0
+
+        for entry in shapes:
+            compound  = entry["shape"]
+            layer_key = (entry["layer_id"], entry["datatype"])
+            edi_name  = _resolve_edi_name(
+                entry["layer_id"], entry["datatype"], ihp_map, selected_layers
+            )
+
+            # one display object for the whole PIN layer
+            pad_grp = doc.addObject("Part::Feature", f"GDS_PINs_{edi_name}")
+            pad_grp.Shape = compound
+            pad_grp.ViewObject.ShapeColor   = _ORANGE
+            pad_grp.ViewObject.Transparency = 0
+            pad_grp.addProperty("App::PropertyBool",   "IsGDSPin", "GDS",
+                                 "Auto-detected PIN pad layer")
+            pad_grp.addProperty("App::PropertyString", "EDIName",  "GDS",
+                                 "EDI layer name")
+            pad_grp.IsGDSPin = True
+            pad_grp.EDIName  = edi_name
+
+            # one ContactPoint per individual pad solid
+            solids = compound.Solids if compound.Solids else [compound]
+            for solid in solids:
+                snap_pt = _top_face_center(solid)
+                marker  = doc.addObject("Part::Feature", f"ContactPoint_{cp_idx:03d}")
+                marker.Shape = Part.Vertex(snap_pt.x, snap_pt.y, snap_pt.z)
+
+                marker.addProperty("App::PropertyVector", "ContactPoint", "Wirebond",
+                                    "Snap point for wire bonding")
+                marker.addProperty("App::PropertyString", "SourceObject",  "Wirebond",
+                                    "Source GDS pad object")
+                marker.addProperty("App::PropertyBool",   "IsContactPoint", "Wirebond",
+                                    "Wire-bond contact point marker")
+
+                marker.ContactPoint   = snap_pt
+                marker.SourceObject   = pad_grp.Name
+                marker.IsContactPoint = True
+
+                marker.ViewObject.PointSize   = 8
+                marker.ViewObject.PointColor  = _ORANGE
+                marker.ViewObject.DisplayMode = "Points"
+
+                cp_idx  += 1
+                cp_count += 1
+
+        doc.commitTransaction()
+        FreeCAD.Console.PrintMessage(
+            f"Auto PIN detection: created {cp_count} contact point(s) "
+            f"across {len(shapes)} layer(s).\n"
+        )
+        return cp_count
+
+    except Exception as e:
+        doc.abortTransaction()
+        FreeCAD.Console.PrintError(f"Auto PIN detection failed: {e}\n")
+        import traceback
+        FreeCAD.Console.PrintError(traceback.format_exc())
+        return 0
+
+
+# -----------------------------------------
 # Layer on Leadframe Configuration Support
 # .........................................
 

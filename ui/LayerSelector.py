@@ -18,7 +18,12 @@ class LayerSelector(QtWidgets.QDialog):
         self.layers = layers
         self.selected_layers = []
         self.selected_layers_prev = selected_layers or []
-        self.options = dict(options or {"match_klayout": True, "highlight_bondable": True, "extrude_3d": False})
+        self.options = dict(options or {
+            "match_klayout": True,
+            "highlight_bondable": True,
+            "extrude_3d": False,
+            "auto_pin_contacts": False,
+        })
 
         layout = QtWidgets.QVBoxLayout(self)
 
@@ -31,9 +36,14 @@ class LayerSelector(QtWidgets.QDialog):
         self.check_hl.setChecked(bool(self.options.get("highlight_bondable", True)))
         self.check_3d = QtWidgets.QCheckBox("Extrude layers to 3D volumes (uses PDK thickness table)")
         self.check_3d.setChecked(bool(self.options.get("extrude_3d", False)))
+        self.check_auto_pin = QtWidgets.QCheckBox(
+            "Auto-detect top PIN layers and create contact points"
+        )
+        self.check_auto_pin.setChecked(bool(self.options.get("auto_pin_contacts", False)))
         opt_top.addWidget(self.check_match)
         opt_top.addWidget(self.check_hl)
         opt_top.addWidget(self.check_3d)
+        opt_top.addWidget(self.check_auto_pin)
         layout.addLayout(opt_top)
 
         # Add selection control buttons
@@ -111,7 +121,8 @@ class LayerSelector(QtWidgets.QDialog):
         # options
         self.options["match_klayout"] = self.check_match.isChecked()
         self.options["highlight_bondable"] = self.check_hl.isChecked()
-        self.options["extrude_3d"] = self.check_3d.isChecked()
+        self.options["extrude_3d"]       = self.check_3d.isChecked()
+        self.options["auto_pin_contacts"] = self.check_auto_pin.isChecked()
 
         if self.check_all_button.isChecked():
             self.selected_layers = list(self.layers)

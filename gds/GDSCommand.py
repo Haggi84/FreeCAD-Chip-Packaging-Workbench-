@@ -88,7 +88,8 @@ def load_gds_layers():
             decimate = 0.0 if match_klayout else 0.002
             use_klayout_colors = match_klayout
             highlight_bondable = bool(options.get("highlight_bondable", True))
-            extrude_3d = bool(options.get("extrude_3d", False))
+            extrude_3d       = bool(options.get("extrude_3d", False))
+            auto_pin_contacts = bool(options.get("auto_pin_contacts", False))
 
             # Ensure a valid document is available
             doc = FreeCAD.activeDocument()
@@ -196,6 +197,29 @@ def load_gds_layers():
             doc.recompute()
 
             property_panel.update_properties(selected_layers, unique_colors, layer_objects)
+
+            # ── auto PIN pad detection ──────────────────────────────────────
+            if auto_pin_contacts:
+                cp_count = Core_Functionality.import_pin_pads_as_contacts(
+                    gds_path, ihp_map, doc,
+                    selected_layers=selected_layers,
+                    top_n=3,
+                )
+                if cp_count:
+                    QtWidgets.QMessageBox.information(
+                        None, "Auto PIN Detection",
+                        f"Created {cp_count} contact point(s) on the top PIN layers.\n"
+                        "Check the Python console for details on which layers were used.\n\n"
+                        "They are ready for use in manual wire bonding.",
+                    )
+                else:
+                    QtWidgets.QMessageBox.warning(
+                        None, "Auto PIN Detection",
+                        "No PIN pad shapes could be extracted from this GDS file.\n\n"
+                        "Check the Python console for details.\n"
+                        "Tip: load an IHP .map file for best results.",
+                    )
+
             FreeCADGui.activeDocument().activeView().viewIsometric()
             FreeCADGui.SendMsgToActiveView("ViewFit")
             # NOTE: return options as 7th element
