@@ -295,7 +295,7 @@ class ManualWireBonding:
             # Use straight-line distance as a meaningful arc-length approximation.
             # shape.Length on a swept solid returns total edge length (all profile
             # circles included), which is not the wire arc length.
-            wire_obj.WireLength = start.distanceTo(end)
+            wire_obj.WireLength = (start - end).Length
 
             doc.commitTransaction()
             doc.recompute()
@@ -362,10 +362,10 @@ class ManualWireBonding:
         if not self.bonds:
             FreeCAD.Console.PrintMessage("No bonds were created.\n")
             return
-        total = sum(b["start"].distanceTo(b["end"]) for b in self.bonds)
+        total = sum((b["start"] - b["end"]).Length for b in self.bonds)
         lines = [
             f"  Bond {i+1:03d}: {b['cp1'].Name} -> {b['cp2'].Name}"
-            f"  {b['start'].distanceTo(b['end']):.3f} mm"
+            f"  {(b['start'] - b['end']).Length:.3f} mm"
             for i, b in enumerate(self.bonds)
         ]
         FreeCAD.Console.PrintMessage(
