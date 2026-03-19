@@ -670,12 +670,25 @@ def _find_pin_layer_keys(gds_path: str, ihp_map: dict,
 def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
                                 selected_layers=None, top_n: int = 3) -> int:
     """
-    Detect the top-N PIN/bond-pad layer-datatype pairs, extrude their
-    polygons to PDK thickness, create one compound 3D object per layer
-    (orange, tagged IsGDSPin), and place a ContactPoint marker at the
-    top-face centre of every individual pad.
+    Detect the top-N PIN/bond-pad layers, extrude the actual pad metal geometry
+    to PDK thickness, and place a ContactPoint marker at every pin location.
 
-    Detection uses three cascading strategies (see _find_pin_layer_keys).
+    Key insight — IHP/Cadence layer convention
+    ------------------------------------------
+    DT=2  PIN markers  : tiny 2-5 µm shapes that mark *where* to bond.
+                         Used as contact point locations (accurate).
+    DT=0  drawing      : large physical metal shapes (bond pad + routing).
+                         Used as 3D pad geometry (visually meaningful).
+
+    For each DT=2 marker the function finds the DT=0 polygon that contains it
+    and extrudes that as the 3D pad.  When no DT=2 markers exist (S3 fallback)
+    large DT=0 polygons are used directly (min-dimension ≥ 10 µm).
+
+    GDS extraction uses gdstk's native layer/datatype C++ filter:
+      cell.get_polygons(layer=L, datatype=DT)
+    For a 4375-cell / 1.3 M-polygon GDS this is ~0.002 s per query vs ~0.5 s
+    for a full Python-side iteration.
+
     Returns the number of ContactPoint markers created.
     """
     candidates, strategy = _find_pin_layer_keys(
@@ -694,40 +707,44 @@ def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
         + "\n"
     )
 
-    # ── build layer dicts with best-available EDI names for thickness ────────
-    pin_layer_dicts = [
-        {
-            "layer_id":    lid,
-            "datatype":    dt,
-            "name":        name,
-            "frame-color": "#FF8C00",
-            "fill-color":  "#FF8C00",
-        }
-        for lid, dt, name in candidates
-    ]
-    stack_mm = build_stack_mm(pin_layer_dicts, ihp_map)
-
-    # ── load extruded shapes ─────────────────────────────────────────────────
-    shapes = load_gds(
-        gds_path,
-        pin_layer_dicts,
-        preview_2d=False,
-        compound_per_layer=True,
-        stack_mm=stack_mm,
-        skip_fill_datatype=False,
-    )
-    if not shapes:
-        FreeCAD.Console.PrintWarning(
-            "Auto PIN detection: polygons were identified but no solid shapes "
-            "could be built (faces may be degenerate). Check the Python console.\n"
-        )
+    # ── read GDS ─────────────────────────────────────────────────────────────
+    try:
+        lib = gdstk.read_gds(gds_path)
+    except Exception as e:
+        FreeCAD.Console.PrintError(f"Auto PIN detection: cannot read GDS: {e}\n")
         return 0
 
-    # ── helper: top-face centre of a solid ──────────────────────────────────
+    scale     = (lib.unit * 1000.0) if getattr(lib, "unit", None) else 0.001
+    top_cells = lib.top_level() or lib.cells
+
+    # ── ray-casting point-in-polygon (GDS units, avoids mm conversion) ───────
+    def _contains(poly_pts, px, py):
+        n       = len(poly_pts)
+        inside  = False
+        j       = n - 1
+        for i in range(n):
+            xi, yi = float(poly_pts[i][0]), float(poly_pts[i][1])
+            xj, yj = float(poly_pts[j][0]), float(poly_pts[j][1])
+            if ((yi > py) != (yj > py)) and px < (xj - xi) * (py - yi) / (yj - yi) + xi:
+                inside = not inside
+            j = i
+        return inside
+
+    # Minimum pad side in mm — keeps bond pads, drops routing wires
+    _MIN_PAD_MM = 0.010   # 10 µm
+
+    # ── stack info for Z position / thickness ─────────────────────────────────
+    stack_mm = build_stack_mm(
+        [{"layer_id": lid, "datatype": dt, "name": name} for lid, dt, name in candidates],
+        ihp_map,
+    )
+
+    # ── helper: top-face centre ────────────────────────────────────────────────
     def _top_face_center(shape):
         if shape.Faces:
-            top_face = max(shape.Faces, key=lambda f: f.CenterOfMass.z)
-            return Base.Vector(top_face.CenterOfMass)
+            return Base.Vector(
+                max(shape.Faces, key=lambda f: f.CenterOfMass.z).CenterOfMass
+            )
         bb = shape.BoundBox
         return Base.Vector(
             (bb.XMin + bb.XMax) / 2.0,
@@ -737,19 +754,118 @@ def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
 
     _ORANGE = (0.90, 0.30, 0.10)   # die-side orange — matches ContactPointTool
 
-    # ── create FreeCAD objects ───────────────────────────────────────────────
+    # ── create FreeCAD objects ────────────────────────────────────────────────
     doc.openTransaction("Auto PIN Contact Points")
     try:
         existing = sum(1 for o in doc.Objects if o.Name.startswith("ContactPoint_"))
         cp_idx   = existing + 1
         cp_count = 0
 
-        for entry in shapes:
-            compound  = entry["shape"]
-            layer_key = (entry["layer_id"], entry["datatype"])
-            edi_name  = _resolve_edi_name(
-                entry["layer_id"], entry["datatype"], ihp_map, selected_layers
+        for lid, dt, _ in candidates:
+            edi_name = _resolve_edi_name(lid, dt, ihp_map, selected_layers)
+            s_info   = stack_mm.get((lid, dt), {"t_mm": 0.001, "z0_mm": 0.0})
+            t_mm     = max(float(s_info["t_mm"]), 1e-4)
+            z0_mm    = float(s_info["z0_mm"])
+
+            # pad_pairs: list of (pad_pts_in_gds_units, contact_xy_mm)
+            pad_pairs = []
+
+            for cell in top_cells:
+                if dt == 2:
+                    # ── DT=2 PIN marker strategy ──────────────────────────────
+                    # Contact location  = centroid of DT=2 marker (accurate)
+                    # Pad geometry      = DT=0 polygon containing that centroid
+                    pin_polys  = cell.get_polygons(layer=lid, datatype=2)
+                    draw_polys = cell.get_polygons(layer=lid, datatype=0)
+
+                    # Pre-build pad index: only keep pad-sized DT=0 polygons
+                    pad_index = []   # [(pts_raw, (xlo,ylo,xhi,yhi))]
+                    for p0 in draw_polys:
+                        pts = p0.points
+                        xs  = [float(p[0]) for p in pts]
+                        ys  = [float(p[1]) for p in pts]
+                        w   = (max(xs) - min(xs)) * scale
+                        h   = (max(ys) - min(ys)) * scale
+                        if w >= _MIN_PAD_MM and h >= _MIN_PAD_MM:
+                            pad_index.append((pts, (min(xs), min(ys), max(xs), max(ys))))
+
+                    used_pads = set()
+                    for pp in pin_polys:
+                        pts2  = pp.points
+                        cx_g  = sum(float(p[0]) for p in pts2) / len(pts2)
+                        cy_g  = sum(float(p[1]) for p in pts2) / len(pts2)
+                        cx_mm = cx_g * scale
+                        cy_mm = cy_g * scale
+
+                        pad_found = None
+                        for idx, (pts_raw, (xlo, ylo, xhi, yhi)) in enumerate(pad_index):
+                            if idx in used_pads:
+                                continue
+                            # fast bbox pre-check
+                            if cx_g < xlo or cx_g > xhi or cy_g < ylo or cy_g > yhi:
+                                continue
+                            if _contains(pts_raw, cx_g, cy_g):
+                                pad_found = idx
+                                break
+
+                        if pad_found is not None:
+                            used_pads.add(pad_found)
+                            pad_pairs.append((pad_index[pad_found][0], (cx_mm, cy_mm)))
+                        else:
+                            # No large DT=0 pad found — fall back to DT=2 shape itself
+                            pad_pairs.append((pts2, (cx_mm, cy_mm)))
+
+                else:
+                    # ── DT=0 drawing layer strategy (S3 fallback) ─────────────
+                    # Filter to pad-sized polygons; use polygon centroid for CP.
+                    draw_polys = cell.get_polygons(layer=lid, datatype=0)
+                    for p0 in draw_polys:
+                        pts = p0.points
+                        xs  = [float(p[0]) for p in pts]
+                        ys  = [float(p[1]) for p in pts]
+                        w   = (max(xs) - min(xs)) * scale
+                        h   = (max(ys) - min(ys)) * scale
+                        if w >= _MIN_PAD_MM and h >= _MIN_PAD_MM:
+                            cx_mm = ((min(xs) + max(xs)) / 2.0) * scale
+                            cy_mm = ((min(ys) + max(ys)) / 2.0) * scale
+                            pad_pairs.append((pts, (cx_mm, cy_mm)))
+
+            if not pad_pairs:
+                FreeCAD.Console.PrintWarning(
+                    f"  No pads found for {edi_name} ({lid}/{dt}).\n"
+                )
+                continue
+
+            FreeCAD.Console.PrintMessage(
+                f"  ({lid}/{dt}) {edi_name}: {len(pad_pairs)} pad(s)\n"
             )
+
+            # ── extrude pad polygons → solids ─────────────────────────────────
+            solids   = []
+            contacts = []   # Base.Vector snap points (one per pad)
+
+            for pts_raw, (cx_mm, cy_mm) in pad_pairs:
+                pts2d = [(float(p[0]) * scale, float(p[1]) * scale) for p in pts_raw]
+                if len(pts2d) < 3:
+                    continue
+                try:
+                    wire  = Part.makePolygon(
+                        [(x, y, z0_mm) for (x, y) in (pts2d + [pts2d[0]])]
+                    )
+                    face  = Part.Face(wire)
+                    solid = face.extrude(FreeCAD.Vector(0, 0, t_mm))
+                    solids.append(solid)
+                    contacts.append(Base.Vector(cx_mm, cy_mm, z0_mm + t_mm))
+                except Exception:
+                    continue
+
+            if not solids:
+                FreeCAD.Console.PrintWarning(
+                    f"  No valid solids for {edi_name} ({lid}/{dt}).\n"
+                )
+                continue
+
+            compound = Part.makeCompound(solids) if len(solids) > 1 else solids[0]
 
             # one display object for the whole PIN layer
             pad_grp = doc.addObject("Part::Feature", f"GDS_PINs_{edi_name}")
@@ -763,11 +879,9 @@ def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
             pad_grp.IsGDSPin = True
             pad_grp.EDIName  = edi_name
 
-            # one ContactPoint per individual pad solid
-            solids = compound.Solids if compound.Solids else [compound]
-            for solid in solids:
-                snap_pt = _top_face_center(solid)
-                marker  = doc.addObject("Part::Feature", f"ContactPoint_{cp_idx:03d}")
+            # one ContactPoint marker per pad (at DT=2 centroid or poly centroid)
+            for snap_pt in contacts:
+                marker = doc.addObject("Part::Feature", f"ContactPoint_{cp_idx:03d}")
                 marker.Shape = Part.Vertex(snap_pt.x, snap_pt.y, snap_pt.z)
 
                 marker.addProperty("App::PropertyVector", "ContactPoint", "Wirebond",
@@ -791,7 +905,7 @@ def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
         doc.commitTransaction()
         FreeCAD.Console.PrintMessage(
             f"Auto PIN detection: created {cp_count} contact point(s) "
-            f"across {len(shapes)} layer(s).\n"
+            f"across {len(candidates)} layer(s).\n"
         )
         return cp_count
 
