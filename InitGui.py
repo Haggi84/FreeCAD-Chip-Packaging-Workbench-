@@ -38,12 +38,14 @@ class MyWorkbench(FreeCADGui.Workbench):
                 [
                     "GDSCommand",
                     "LeadframeCommand",
+                    "CenterLeadframeCommand",
                     "LeadframeLibraryCommand",
                     "HousingCommand",
                     "LayeronLeadframe",
                     "DefineContactPointsCommand",
                     "ShowContactPointPanelCommand",
                     "WirebondCommand",
+                    "CancelWireBondingCommand",
                     "HelpGuideCommand",
                 ],
             )

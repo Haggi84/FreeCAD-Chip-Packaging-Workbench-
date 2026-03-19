@@ -102,7 +102,8 @@ class CancelWireBondingCommand:
     def GetResources(self):
         return {
             "MenuText": "Cancel Wire Bonding",
-            "ToolTip": "Cancel current wire bonding session",
+            "ToolTip": "Exit the active wire bonding session without saving",
+            "Pixmap": get_icon("Cancel_Wirebonding.svg"),
         }
 
     def Activated(self):
@@ -110,7 +111,7 @@ class CancelWireBondingCommand:
         QtWidgets.QMessageBox.information(None, "Cancelled", "Wire bonding session cancelled.")
 
     def IsActive(self):
-        return True
+        return manual_bonder.is_active
 
 
 class ShowContactPointPanelCommand:
