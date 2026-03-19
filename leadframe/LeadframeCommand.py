@@ -112,6 +112,11 @@ def center_leadframe_on_gds(doc=None):
     try:
         offset = Base.Vector(dx, dy, 0.0)
         for o in lf_objects:
+            # GDS-derived contact points (SourceObject = "GDS_PINs_…") belong
+            # to the GDS geometry side and must NOT follow the leadframe.
+            if (o.Name.startswith("ContactPoint_")
+                    and getattr(o, "SourceObject", "").startswith("GDS_PINs_")):
+                continue
             pl      = o.Placement
             pl.Base = pl.Base + offset
             o.Placement = pl
