@@ -43,17 +43,11 @@ This is a Python AddIn for the open-source software [FreeCAD](https://www.freeca
 | Step | Tool | Details |
 |------|------|---------|
 | **1** | **Load GDSII** | Select `.gds` + `.lyp` (+ optional `.map`), choose layers, optionally enable Auto PIN Detection |
-| ↓ | | |
 | **2** | **Leadframe Configurator** or **Online Library** | Generate QFN / QFP / BGA leadframe, then run **Center Leadframe on GDS** |
-| ↓ | | |
 | **3** | **Layer on Leadframe** | Scale and rotate the GDS chip onto the die paddle |
-| ↓ | | |
 | **4** | **Housing Configurator** | Generate transparent mold compound body |
-| ↓ | | |
 | **5** | **Define Contact Points** | Manual contact point placement — skip if Auto PIN Detection was used in step 1 |
-| ↓ | | |
 | **6** | **Manual Wire Bonding** | Click die pad → click leadframe lead → 3D bond wire created; repeat per bond |
-| ↓ | | |
 | **7** | **Export** *(planned)* | Assembly export for thermal simulation |
 
 ---
