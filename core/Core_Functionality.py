@@ -505,7 +505,7 @@ def load_gds(gds_path,
 
             filtered_contact = []
             for key, items in staging.items():
-                items.sort(reverse=True)   # largest area first
+                items.sort(key=lambda x: x[0], reverse=True)   # sort by area only — avoids numpy array comparison fallthrough
                 kept = items[:max_polys_per_layer]
                 filtered_contact.extend((l, d, p) for _, l, d, p in kept)
                 FreeCAD.Console.PrintMessage(
