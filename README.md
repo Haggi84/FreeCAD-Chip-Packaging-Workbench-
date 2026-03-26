@@ -1,6 +1,6 @@
 # DI-PASSIONATE-FreeCAD
 
-![Version](https://img.shields.io/badge/version-0.1.0-green?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.7.0-green?style=flat-square)
 ![FreeCAD](https://img.shields.io/badge/FreeCAD-0.21%2B-blue?style=flat-square)
 ![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-informational?style=flat-square)
 
