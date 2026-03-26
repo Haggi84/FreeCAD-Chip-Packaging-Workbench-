@@ -335,11 +335,12 @@ def load_gds(gds_path,
              min_area_mm2=0.0,
              decimate_tol_mm=0.0,
              skip_fill_datatype=True,
-             fill_as_bbox=True,    # replace filler polygons with a single bounding-box solid
-             fill_layer_keys=None, # extra (layer_id, datatype) pairs to treat as filler
+             fill_as_bbox=True,       # replace filler polygons with a single bounding-box solid
+             fill_layer_keys=None,    # extra (layer_id, datatype) pairs to treat as filler
              stack_mm=None,
-             contacts_only_3d=False,   # render only contact_keys as full 3D; collapse rest to one body
-             contact_keys=None,        # set of (layer_id, datatype) to keep as full geometry
+             contacts_only_3d=False,  # render only contact_keys as full 3D; collapse rest to one body
+             contact_keys=None,       # set of (layer_id, datatype) to keep as full geometry
+             max_polys_per_layer=None,# cap on polygons per contact layer (sorted largest-area first)
              progress_callback=None
              ):
     """
@@ -483,6 +484,35 @@ def load_gds(gds_path,
                         yield layer, datatype, pts
 
         polygons = list(iter_polygons())
+
+        # ── contacts_only_3d: cap polygon count per contact layer ────────────
+        # Sort each contact layer's polygons by area (largest first) and keep
+        # only the top max_polys_per_layer entries.  This drops tiny routing
+        # wires and via fills while keeping the large bond pads.
+        if contacts_only_3d and _contact_keys and max_polys_per_layer and max_polys_per_layer > 0:
+            staging  = {}   # contact key → [(raw_area, layer, dt, pts), ...]
+            rest_out = []
+            for lyr, dt, pts in polygons:
+                key = (lyr, dt)
+                if key in _contact_keys:
+                    pts_arr = _points_array(pts)
+                    raw_xy  = [(float(p[0]) * s, float(p[1]) * s)
+                               for p in (pts_arr if hasattr(pts_arr, '__iter__') else [])]
+                    area    = _polygon_area_mm2(raw_xy) if len(raw_xy) >= 3 else 0.0
+                    staging.setdefault(key, []).append((area, lyr, dt, pts))
+                else:
+                    rest_out.append((lyr, dt, pts))
+
+            filtered_contact = []
+            for key, items in staging.items():
+                items.sort(reverse=True)   # largest area first
+                kept = items[:max_polys_per_layer]
+                filtered_contact.extend((l, d, p) for _, l, d, p in kept)
+                FreeCAD.Console.PrintMessage(
+                    f"  Poly-cap layer {key}: {len(items):,} polygons → "
+                    f"kept {len(kept):,} largest\n"
+                )
+            polygons = filtered_contact + rest_out
 
         # optional progress tracking based on fully-instantiated polygons
         progress_total = None

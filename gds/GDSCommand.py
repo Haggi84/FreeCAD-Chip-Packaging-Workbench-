@@ -1,5 +1,5 @@
 from PySide2 import QtWidgets, QtCore
-import os, sys
+import os, sys, time
 import FreeCAD, FreeCADGui
 
 root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -98,9 +98,17 @@ def load_gds_layers():
             contacts_only_3d     = bool(options.get("contacts_only_3d", False))
 
             # Pre-compute which layers to render as full geometry in contacts_only mode
-            contact_keys = None
+            contact_keys       = None
+            max_polys_per_layer = None
             if contacts_only_3d:
                 extrude_3d = True   # contacts-only always produces 3D output
+                # Aggressive area filter: bond pads are ≥ ~32×32 µm (0.001 mm²);
+                # smaller polygons are routing metal / via fill — skip them.
+                min_area = max(min_area, 0.001)
+                # Keep at most 3 000 polygons per contact layer (sorted largest first).
+                # A chip rarely has more than a few hundred bond pads.
+                max_polys_per_layer = 3000
+
                 top_keys, bottom_keys = Core_Functionality.identify_contact_layers(
                     selected_layers, ihp_map
                 )
@@ -110,6 +118,7 @@ def load_gds_layers():
                     f"full geometry, all others as one body solid.\n"
                     f"  Top keys:    {top_keys}\n"
                     f"  Bottom keys: {bottom_keys}\n"
+                    f"  min_area filter: {min_area} mm²  |  poly cap: {max_polys_per_layer}\n"
                 )
 
             # Ensure a valid document is available
@@ -130,14 +139,31 @@ def load_gds_layers():
             # users always see progress feedback.
             QtWidgets.QApplication.processEvents()
 
-            cancelled = False
+            cancelled  = False
+            _t_start   = time.time()
 
             def progress_callback(current, total, message=""):
                 nonlocal cancelled
-                total = max(int(total), 1)
+                total   = max(int(total), 1)
+                current = int(current)
                 progress_dialog.setMaximum(total)
-                progress_dialog.setValue(int(current))
-                progress_dialog.setLabelText(message or "Importing GDS layers...")
+                progress_dialog.setValue(current)
+
+                # ETA calculation
+                elapsed = time.time() - _t_start
+                if current > 0 and elapsed > 0.5:
+                    remaining = elapsed / current * (total - current)
+                    if remaining < 60:
+                        eta = f"~{int(remaining)}s remaining"
+                    elif remaining < 3600:
+                        eta = f"~{int(remaining / 60)}m {int(remaining % 60)}s remaining"
+                    else:
+                        eta = f"~{remaining / 3600:.1f}h remaining"
+                    label = f"{message or 'Importing GDS layers...'}\n{eta}"
+                else:
+                    label = message or "Importing GDS layers..."
+
+                progress_dialog.setLabelText(label)
                 QtWidgets.QApplication.processEvents()
                 if progress_dialog.wasCanceled():
                     cancelled = True
@@ -164,6 +190,7 @@ def load_gds_layers():
                     stack_mm=stack_mm,
                     contacts_only_3d=contacts_only_3d,
                     contact_keys=contact_keys,
+                    max_polys_per_layer=max_polys_per_layer,
                     progress_callback=progress_callback
                 )
             finally:
@@ -228,7 +255,34 @@ def load_gds_layers():
             except Exception:
                 pass
 
+            # ── render phase — show progress while FreeCAD tessellates shapes ──
+            total_faces = sum(
+                getattr(getattr(s, "Shape", None), "Faces", None) and
+                len(s.Shape.Faces) or 0
+                for s in (layer_objects.get(k, [None])[0]
+                          for k in layer_objects) if s
+            )
+            n_shapes = sum(len(v) for v in layer_objects.values())
+            render_dlg = QtWidgets.QProgressDialog(
+                f"Rendering {n_shapes} shape(s) in FreeCAD viewport…\n"
+                "FreeCAD is tessellating geometry for display.\n"
+                "Please wait — this window will close automatically.",
+                None, 0, 0,
+                FreeCADGui.getMainWindow()
+            )
+            render_dlg.setWindowTitle("Rendering")
+            render_dlg.setWindowModality(QtCore.Qt.ApplicationModal)
+            render_dlg.setMinimumDuration(0)
+            render_dlg.show()
+            QtWidgets.QApplication.processEvents()
+
+            _t_render = time.time()
             doc.recompute()
+            _render_elapsed = time.time() - _t_render
+            render_dlg.close()
+            FreeCAD.Console.PrintMessage(
+                f"Render (tessellation) completed in {_render_elapsed:.1f}s\n"
+            )
 
             property_panel.update_properties(selected_layers, unique_colors, layer_objects)
 
