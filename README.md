@@ -1,5 +1,9 @@
 # DI-PASSIONATE-FreeCAD
 
+![Version](https://img.shields.io/badge/version-0.1.0-green?style=flat-square)
+![FreeCAD](https://img.shields.io/badge/FreeCAD-0.21%2B-blue?style=flat-square)
+![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-informational?style=flat-square)
+
 **Development of a FreeCAD plugin for the BMBF project DI-Passionate to enable chip-packaging**
 
 This is a Python AddIn for the open-source software [FreeCAD](https://www.freecad.org/downloads.php). It provides a dedicated workbench for chip-packaging workflows: importing GDSII chip layouts, designing leadframes and housings, placing chips, planning bond wires, and preparing assemblies for simulation.

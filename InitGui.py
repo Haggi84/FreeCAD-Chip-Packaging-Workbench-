@@ -18,6 +18,7 @@ try:
     from leadframe import LayeronLeadframe
     from wirebond import WirebondCommand
     from help import HelpGuideCommand
+    from help import AboutCommand
 
     FreeCAD.Console.PrintMessage("Commands loaded successfully\n")
 except Exception as e:
@@ -47,6 +48,7 @@ class MyWorkbench(FreeCADGui.Workbench):
                     "WirebondCommand",
                     "CancelWireBondingCommand",
                     "HelpGuideCommand",
+                    "AboutCommand",
                 ],
             )
             FreeCAD.Console.PrintMessage("Toolbar initialized\n")

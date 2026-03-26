@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<package format="1" xmlns="https://wiki.freecad.org/Package_Metadata">
+  <name>DI-PASSIONATE-FreeCAD</name>
+  <description>FreeCAD workbench for chip-packaging workflows: GDSII import, leadframe design, wire bonding, and housing generation. Part of the BMBF DI-PASSIONATE project.</description>
+  <version>0.1.0</version>
+  <date>2026-03-26</date>
+  <maintainer email="">DI-PASSIONATE Team</maintainer>
+  <license>LGPL-2.1-or-later</license>
+  <url type="repository">https://github.com/Haggi84/DI-PASSIONATE-FreeCAD</url>
+  <content>
+    <workbench>
+      <classname>MyWorkbench</classname>
+      <subdirectory>./</subdirectory>
+    </workbench>
+  </content>
+  <freecadmin>0.21</freecadmin>
+</package>
