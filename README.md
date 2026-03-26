@@ -40,24 +40,21 @@ This is a Python AddIn for the open-source software [FreeCAD](https://www.freeca
 
 ## Typical Workflow
 
-```
-1. Load GDSII  →  select .gds + .lyp (+ optional .map)
-                   choose layers to import
-                   enable Auto PIN Detection to create contact points automatically
-
-2. Leadframe   →  Leadframe Configurator   (QFN / QFP / BGA)
-                   Center Leadframe on GDS  (auto-align)
-
-3. Chip placement →  Layer on Leadframe    (scale + rotate GDS chip onto die paddle)
-
-4. Housing     →  Housing Configurator     (transparent mold compound body)
-
-5. Wire bonding →  Define Contact Points  (manual, if not using Auto PIN Detection)
-                    Manual Wire Bonding    (click pad → click lead → bond wire created)
-                    Finish / Cancel session
-
-6. Export for simulation (planned)
-```
+| Step | Tool | Details |
+|------|------|---------|
+| **1** | **Load GDSII** | Select `.gds` + `.lyp` (+ optional `.map`), choose layers, optionally enable Auto PIN Detection |
+| ↓ | | |
+| **2** | **Leadframe Configurator** or **Online Library** | Generate QFN / QFP / BGA leadframe, then run **Center Leadframe on GDS** |
+| ↓ | | |
+| **3** | **Layer on Leadframe** | Scale and rotate the GDS chip onto the die paddle |
+| ↓ | | |
+| **4** | **Housing Configurator** | Generate transparent mold compound body |
+| ↓ | | |
+| **5** | **Define Contact Points** | Manual contact point placement — skip if Auto PIN Detection was used in step 1 |
+| ↓ | | |
+| **6** | **Manual Wire Bonding** | Click die pad → click leadframe lead → 3D bond wire created; repeat per bond |
+| ↓ | | |
+| **7** | **Export** *(planned)* | Assembly export for thermal simulation |
 
 ---
 
