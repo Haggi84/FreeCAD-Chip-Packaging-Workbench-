@@ -12,10 +12,11 @@ class LayerSelector(QtWidgets.QDialog):
       - Select All / Clear / Invert buttons
       - Ctrl+A shortcut to select all
     """
-    def __init__(self, layers, selected_layers=None, parent=None, options=None):
+    def __init__(self, layers, selected_layers=None, parent=None, options=None, ihp_map=None):
         super(LayerSelector, self).__init__(parent)
         self.setWindowTitle("Select Layers")
         self.layers = layers
+        self.ihp_map = ihp_map or {}
         self.selected_layers = []
         self.selected_layers_prev = selected_layers or []
         self.options = dict(options or {
@@ -23,6 +24,7 @@ class LayerSelector(QtWidgets.QDialog):
             "highlight_bondable": True,
             "extrude_3d": False,
             "auto_pin_contacts": False,
+            "contacts_only_3d": False,
         })
 
         layout = QtWidgets.QVBoxLayout(self)
@@ -40,10 +42,21 @@ class LayerSelector(QtWidgets.QDialog):
             "Auto-detect top PIN layers and create contact points"
         )
         self.check_auto_pin.setChecked(bool(self.options.get("auto_pin_contacts", False)))
+        self.check_contacts_only = QtWidgets.QCheckBox(
+            "Fast 3D: render contact pads + bottom surface only "
+            "(collapse all other layers to one body solid)"
+        )
+        self.check_contacts_only.setChecked(bool(self.options.get("contacts_only_3d", False)))
+        self.check_contacts_only.setToolTip(
+            "Renders only the top PIN/bondable layer(s) and the bottom contact surface as full "
+            "3D geometry.\nAll intermediate layers are merged into a single bounding-box solid.\n"
+            "Dramatically reduces import time for complex chips."
+        )
         opt_top.addWidget(self.check_match)
         opt_top.addWidget(self.check_hl)
         opt_top.addWidget(self.check_3d)
         opt_top.addWidget(self.check_auto_pin)
+        opt_top.addWidget(self.check_contacts_only)
         layout.addLayout(opt_top)
 
         # Add selection control buttons
@@ -90,6 +103,46 @@ class LayerSelector(QtWidgets.QDialog):
         self.setLayout(layout)
         self.toggle_all_mode(False)  # Start with 'Import All Layers' unchecked
 
+        # Wire up contacts-only pre-selection after the list is fully built
+        self.check_contacts_only.toggled.connect(self._on_contacts_only_toggled)
+        if self.check_contacts_only.isChecked():
+            self._on_contacts_only_toggled(True)
+
+    #--- Contacts-only preset -----------------------------------------------
+    def _on_contacts_only_toggled(self, checked):
+        """When Fast-3D contacts-only is enabled, force 3D and pre-select contact layers."""
+        if checked:
+            # Imply 3D extrusion
+            self.check_3d.setChecked(True)
+            self._select_contact_layers()
+
+    def _select_contact_layers(self):
+        """
+        Pre-select only the top PIN/bondable layers and the bottom contact-surface
+        layer.  Uses identify_contact_layers() from Core_Functionality when a map
+        is available; falls back to top/bottom layer_id heuristic otherwise.
+        """
+        try:
+            from core import Core_Functionality
+            top_keys, bottom_keys = Core_Functionality.identify_contact_layers(
+                self.layers, self.ihp_map
+            )
+        except Exception:
+            # Fallback: highest and lowest layer_id
+            ids = sorted({L.get("layer_id", 0) for L in self.layers})
+            top_keys    = {(ids[-1], 0)} if ids else set()
+            bottom_keys = {(ids[0],  0)} if ids else set()
+
+        contact_keys = top_keys | bottom_keys
+
+        for i in range(self.layer_list.count()):
+            item = self.layer_list.item(i)
+            layer = item.data(QtCore.Qt.UserRole)
+            key = (layer.get("layer_id", 0), layer.get("datatype", 0))
+            item.setCheckState(
+                QtCore.Qt.Checked if key in contact_keys else QtCore.Qt.Unchecked
+            )
+
     #--- Toggle All Mode ---
     def toggle_all_mode(self, enabled):
         self.layer_list.setDisabled(enabled)
@@ -119,10 +172,11 @@ class LayerSelector(QtWidgets.QDialog):
     # --- accept ---
     def accept(self):
         # options
-        self.options["match_klayout"] = self.check_match.isChecked()
+        self.options["match_klayout"]    = self.check_match.isChecked()
         self.options["highlight_bondable"] = self.check_hl.isChecked()
         self.options["extrude_3d"]       = self.check_3d.isChecked()
         self.options["auto_pin_contacts"] = self.check_auto_pin.isChecked()
+        self.options["contacts_only_3d"] = self.check_contacts_only.isChecked()
 
         if self.check_all_button.isChecked():
             self.selected_layers = list(self.layers)

@@ -70,7 +70,7 @@ def load_gds_layers():
         property_panel.update_properties([], unique_colors, {})
 
         # Layer selection (now with 'Import all layers')
-        dialog = LayerSelector(filtered_layers, options=property_panel.options)
+        dialog = LayerSelector(filtered_layers, options=property_panel.options, ihp_map=ihp_map)
         if dialog.exec_():
             selected_layers = dialog.selected_layers
             options = dialog.options
@@ -92,9 +92,25 @@ def load_gds_layers():
             min_area = 0.0 if match_klayout else 0.0004
             decimate = 0.0 if match_klayout else 0.002
             use_klayout_colors = match_klayout
-            highlight_bondable = bool(options.get("highlight_bondable", True))
-            extrude_3d       = bool(options.get("extrude_3d", False))
-            auto_pin_contacts = bool(options.get("auto_pin_contacts", False))
+            highlight_bondable   = bool(options.get("highlight_bondable", True))
+            extrude_3d           = bool(options.get("extrude_3d", False))
+            auto_pin_contacts    = bool(options.get("auto_pin_contacts", False))
+            contacts_only_3d     = bool(options.get("contacts_only_3d", False))
+
+            # Pre-compute which layers to render as full geometry in contacts_only mode
+            contact_keys = None
+            if contacts_only_3d:
+                extrude_3d = True   # contacts-only always produces 3D output
+                top_keys, bottom_keys = Core_Functionality.identify_contact_layers(
+                    selected_layers, ihp_map
+                )
+                contact_keys = top_keys | bottom_keys
+                FreeCAD.Console.PrintMessage(
+                    f"Contacts-only 3D: rendering {len(contact_keys)} contact layer(s) as "
+                    f"full geometry, all others as one body solid.\n"
+                    f"  Top keys:    {top_keys}\n"
+                    f"  Bottom keys: {bottom_keys}\n"
+                )
 
             # Ensure a valid document is available
             doc = FreeCAD.activeDocument()
@@ -146,6 +162,8 @@ def load_gds_layers():
                     fill_as_bbox=True,
                     fill_layer_keys=fill_layer_keys,
                     stack_mm=stack_mm,
+                    contacts_only_3d=contacts_only_3d,
+                    contact_keys=contact_keys,
                     progress_callback=progress_callback
                 )
             finally:
@@ -159,7 +177,16 @@ def load_gds_layers():
                 return None, None, None, None, None, None, None
 
             layer_objects = {}
-            
+
+            # ── body solid (contacts_only_3d mode) ──────────────────────────
+            body_entry = next((s for s in shapes if s.get("is_body_solid")), None)
+            if body_entry:
+                body_obj = doc.addObject("Part::Feature", "IC_Body_Solid")
+                body_obj.Shape = body_entry["shape"]
+                body_obj.ViewObject.ShapeColor = (0.55, 0.55, 0.55)
+                body_obj.ViewObject.LineColor   = (0.25, 0.25, 0.25)
+                body_obj.ViewObject.Transparency = 60
+
             for layer in selected_layers:
                 layer_id = layer.get("layer_id", 0)
                 datatype = layer.get("datatype", 0)

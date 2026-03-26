@@ -338,6 +338,8 @@ def load_gds(gds_path,
              fill_as_bbox=True,    # replace filler polygons with a single bounding-box solid
              fill_layer_keys=None, # extra (layer_id, datatype) pairs to treat as filler
              stack_mm=None,
+             contacts_only_3d=False,   # render only contact_keys as full 3D; collapse rest to one body
+             contact_keys=None,        # set of (layer_id, datatype) to keep as full geometry
              progress_callback=None
              ):
     """
@@ -384,6 +386,10 @@ def load_gds(gds_path,
 
         # Running bounding extents for filler layers — filled in bbox mode
         fill_extents = {}   # (layer, dt) -> [xmin, ymin, xmax, ymax]
+
+        # contacts_only_3d: accumulate ALL non-contact layers into one body bbox
+        _contact_keys = set(contact_keys or [])
+        _body_extents = None   # [xmin, ymin, xmax, ymax] for the combined body solid
 
         top_cells = lib.top_level() or lib.cells
 
@@ -499,6 +505,22 @@ def load_gds(gds_path,
             key = (layer, datatype)
             if key not in wanted:
                 continue
+
+            # contacts_only_3d: non-contact layers → body bbox accumulator, skip full geometry
+            if contacts_only_3d and key not in _contact_keys:
+                pts2d_b = [_transform_point(p, s, rot_deg, mirror_y, tx, ty) for p in poly_pts]
+                if pts2d_b:
+                    xs = [p[0] for p in pts2d_b]
+                    ys = [p[1] for p in pts2d_b]
+                    if _body_extents is None:
+                        _body_extents = [min(xs), min(ys), max(xs), max(ys)]
+                    else:
+                        _body_extents[0] = min(_body_extents[0], min(xs))
+                        _body_extents[1] = min(_body_extents[1], min(ys))
+                        _body_extents[2] = max(_body_extents[2], max(xs))
+                        _body_extents[3] = max(_body_extents[3], max(ys))
+                continue
+
             if _is_filler(layer, datatype):
                 if fill_as_bbox:
                     # Accumulate bounding extent; shape created after main loop
@@ -598,6 +620,27 @@ def load_gds(gds_path,
                 "fill_hex": layer.get("fill-color", "#FFFFFF"),
             })
 
+        # Build the combined body solid for contacts_only_3d mode
+        if contacts_only_3d and _body_extents is not None:
+            xmin, ymin, xmax, ymax = _body_extents
+            w = xmax - xmin
+            h = ymax - ymin
+            if w > 0 and h > 0:
+                if stack_mm:
+                    total_z = max(v["z0_mm"] + v["t_mm"] for v in stack_mm.values())
+                else:
+                    total_z = default_t_mm if default_t_mm > 0 else 0.008
+                total_z = max(total_z, 1e-4)
+                body_box = Part.makeBox(w, h, total_z, FreeCAD.Vector(xmin, ymin, 0))
+                results.append({
+                    "shape":        body_box,
+                    "layer_id":     -1,
+                    "datatype":     -1,
+                    "frame_hex":    "#555555",
+                    "fill_hex":     "#aaaaaa",
+                    "is_body_solid": True,
+                })
+
         if progress_callback and progress_total is not None:
             progress_callback(progress_total, progress_total, "Finalizing GDS shapes...")
         return results
@@ -612,6 +655,60 @@ def is_bondable(types: set) -> bool:
         return False
     T = {t.upper() for t in types}
     return any(t in T for t in ("PIN", "LEFPIN", "BUMP", "PAD"))
+
+
+def identify_contact_layers(selected_layers, ihp_map):
+    """
+    Return (top_keys, bottom_keys) as sets of (layer_id, datatype).
+
+    top_keys   — bondable / PIN layers at the highest stack rank
+                 (bond pads on TopMetal2/TopMetal1).
+    bottom_keys — lowest-rank non-via / non-fill layer
+                 (COMP / active-device surface).
+
+    If ihp_map is empty or None a simple heuristic based on layer_id
+    ordering is used as a fallback.
+    """
+    entries = []
+    for L in selected_layers:
+        lid = L.get("layer_id", 0)
+        dt  = L.get("datatype", 0)
+        key = (lid, dt)
+        m   = (ihp_map or {}).get(key)
+        edi   = m["edi_name"]  if m else ""
+        types = m["edi_types"] if m else set()
+        rank  = stack_rank_for_edi(edi)
+        entries.append((key, rank, is_bondable(types), edi, types))
+
+    if not entries:
+        return set(), set()
+
+    # ── top contacts ──────────────────────────────────────────────────────────
+    bondable = [(k, r) for k, r, b, *_ in entries if b]
+    if bondable:
+        max_rank = max(r for _, r in bondable)
+        # include all bondable layers within one metal tier of the top
+        top_keys = {k for k, r in bondable if r >= max_rank - 100}
+    else:
+        # no bondable info: pick the single highest-rank layer(s)
+        max_rank = max(r for _, r, *_ in entries)
+        top_keys = {k for k, r, *_ in entries if r == max_rank}
+
+    # ── bottom contacts ───────────────────────────────────────────────────────
+    non_via_fill = [
+        (k, r) for k, r, _, edi, types in entries
+        if "VIA" not in edi.upper()
+        and "FILL" not in {t.upper() for t in types}
+    ]
+    if non_via_fill:
+        min_rank = min(r for _, r in non_via_fill)
+        bottom_keys = {k for k, r in non_via_fill if r == min_rank}
+    else:
+        min_rank = min(r for _, r, *_ in entries)
+        bottom_keys = {k for k, r, *_ in entries if r == min_rank}
+
+    bottom_keys -= top_keys   # never overlap
+    return top_keys, bottom_keys
 
 def style_for_material(edi_name: str, edi_types: set):
     """
