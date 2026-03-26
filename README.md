@@ -32,6 +32,12 @@ This is a Python AddIn for the open-source software [FreeCAD](https://www.freeca
 
 ---
 
+## Workflow Overview
+
+![Chip-packaging workflow diagram](resources/workflow.svg)
+
+---
+
 ## Typical Workflow
 
 ```
