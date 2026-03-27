@@ -24,6 +24,12 @@ import FreeCADGui
 import Part
 from FreeCAD import Base
 
+import os, sys
+_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _root not in sys.path:
+    sys.path.insert(0, _root)
+from session.SessionManager import session_manager
+
 
 # ── colour constants ───────────────────────────────────────────────────────────
 _COLOR_WIRE       = (0.90, 0.75, 0.20)   # gold
@@ -305,6 +311,22 @@ class ManualWireBonding:
                 "start": start, "end": end,
                 "wire": wire_obj,
             })
+
+            # Update session record with the full cumulative bond list
+            session_manager.record_action("wirebond_placements", {
+                "config": self.config,
+                "bonds": [
+                    {
+                        "start":    [b["start"].x, b["start"].y, b["start"].z],
+                        "end":      [b["end"].x,   b["end"].y,   b["end"].z],
+                        "start_cp": b["cp1"].Name,
+                        "end_cp":   b["cp2"].Name,
+                        "net_name": getattr(b["wire"], "NetName", f"Net_{j+1:03d}"),
+                    }
+                    for j, b in enumerate(self.bonds)
+                ],
+            })
+
             FreeCAD.Console.PrintMessage(
                 f"  Bond {idx:03d}: {cp1.Name} -> {cp2.Name}  "
                 f"length={shape.Length:.3f} mm\n"

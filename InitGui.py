@@ -19,6 +19,8 @@ try:
     from wirebond import WirebondCommand
     from help import HelpGuideCommand
     from help import AboutCommand
+    from session import SaveSessionCommand
+    from session import LoadSessionCommand
 
     FreeCAD.Console.PrintMessage("Commands loaded successfully\n")
 except Exception as e:
@@ -47,6 +49,8 @@ class MyWorkbench(FreeCADGui.Workbench):
                     "ShowContactPointPanelCommand",
                     "WirebondCommand",
                     "CancelWireBondingCommand",
+                    "SaveSessionCommand",
+                    "LoadSessionCommand",
                     "HelpGuideCommand",
                     "AboutCommand",
                 ],

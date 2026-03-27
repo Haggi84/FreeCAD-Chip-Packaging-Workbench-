@@ -9,6 +9,7 @@ from gds.PropertyPanel import PropertyPanel
 from core import Core_Functionality
 from core.Color import hex_to_rgb
 from Get_Path import get_icon
+from session.SessionManager import session_manager
 
 # ----------------------------------------
 # Main flow: pick files, preview document
@@ -26,12 +27,12 @@ def load_gds_layers():
         gds_path, _ = QtWidgets.QFileDialog.getOpenFileName(None, "Select GDS File", "", "GDS Files (*.gds *.GDS)")
         if not gds_path or not os.path.exists(gds_path):
             QtWidgets.QMessageBox.critical(None, "Error", "GDS file not found or invalid path.")
-            return None, None, None, None, None, None, None
+            return None, None, None, None, None, None, None, None
 
         lyp_path, _ = QtWidgets.QFileDialog.getOpenFileName(None, "Select LYP File", "", "LYP Files (*.lyp *.LYP)")
         if not lyp_path or not os.path.exists(lyp_path):
             QtWidgets.QMessageBox.critical(None, "Error", "LYP file not found or invalid path.")
-            return None, None, None, None, None, None, None
+            return None, None, None, None, None, None, None, None
 
         # Optional: choose MAP (technology). If cancelled, try default.
         map_path, _ = QtWidgets.QFileDialog.getOpenFileName(None, "Select IHP MAP (optional)", "", "MAP Files (*.map *.MAP)")
@@ -43,18 +44,18 @@ def load_gds_layers():
         layers_with_colors = Core_Functionality.parse_lyp(lyp_path)
         if not layers_with_colors:
             QtWidgets.QMessageBox.critical(None, "Error", "No layers found in the LYP file.")
-            return None, None, None, None, None, None, None
+            return None, None, None, None, None, None, None, None
 
         layers, unique_colors = layers_with_colors
         gds_layers = Core_Functionality.get_gds_layer(gds_path)
         if not gds_layers:
             QtWidgets.QMessageBox.warning(None, "Warning", "No layers found in the GDS file.")
-            return None, None, None, None, None, None, None
+            return None, None, None, None, None, None, None, None
 
         filtered_layers = [layer for layer in layers if (layer.get("layer_id", 0), layer.get("datatype", 0)) in gds_layers]
         if not filtered_layers:
             QtWidgets.QMessageBox.warning(None, "Warning", "No matching layers found between LYP and GDS files.")
-            return None, None, None, None, None, None, None
+            return None, None, None, None, None, None, None, None
         
         doc = FreeCAD.newDocument("GDSII_Document")
 
@@ -76,7 +77,7 @@ def load_gds_layers():
             options = dialog.options
             if not selected_layers:
                 QtWidgets.QMessageBox.warning(None, "Warning", "No layers selected.")
-                return None, None, None, None, None, None, None
+                return None, None, None, None, None, None, None, None
 
              # save options to panel (needed for modify action)
             property_panel.options = dict(options)
@@ -198,10 +199,10 @@ def load_gds_layers():
 
             if cancelled:
                 QtWidgets.QMessageBox.information(None, "Cancelled", "GDS layer import cancelled.")
-                return None, None, None, None, None, None, None
+                return None, None, None, None, None, None, None, None
             if not shapes:
                 QtWidgets.QMessageBox.warning(None, "Warning", "No shapes found for the selected layers.")
-                return None, None, None, None, None, None, None
+                return None, None, None, None, None, None, None, None
 
             layer_objects = {}
 
@@ -310,17 +311,17 @@ def load_gds_layers():
 
             FreeCADGui.activeDocument().activeView().viewIsometric()
             FreeCADGui.SendMsgToActiveView("ViewFit")
-            # NOTE: return options as 7th element
-            return doc, layer_objects, selected_layers, unique_colors, gds_path, lyp_path, options
+            # NOTE: return options as 7th element, map_path as 8th element
+            return doc, layer_objects, selected_layers, unique_colors, gds_path, lyp_path, options, map_path
 
         else:
             QtWidgets.QMessageBox.information(None, "Cancelled", "Layer selection cancelled.")
-            return None, None, None, None, None, None, None
+            return None, None, None, None, None, None, None, None
 
     except Exception as e:
         FreeCAD.Console.PrintError(f"An error in GDSCommand: {str(e)}\n")
         QtWidgets.QMessageBox.critical(None, "Error", f"Failed to process files: {str(e)}")
-        return None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None
 
 
 # --------------------------
@@ -337,7 +338,14 @@ class GDSCommand:
     def Activated(self):
         result = load_gds_layers()
         if result and result[0]:  # Check if a document was created
-            doc, layer_objects, selected_layers, unique_colors, gds_path, lyp_path, options = result
+            doc, layer_objects, selected_layers, unique_colors, gds_path, lyp_path, options, map_path = result
+            session_manager.record_action("gds_import", {
+                "gds_path":        gds_path,
+                "lyp_path":        lyp_path,
+                "map_path":        map_path,
+                "selected_layers": selected_layers,
+                "options":         options,
+            })
             QtWidgets.QMessageBox.information(None, "Success", f"GDSII file loaded with layers displayed successfully.", QtWidgets.QMessageBox.Ok)
 
     def IsActive(self):
@@ -345,3 +353,160 @@ class GDSCommand:
 
 import FreeCADGui
 FreeCADGui.addCommand('GDSCommand', GDSCommand())
+
+
+# ---------------------------------------------------------------------------
+# Non-interactive import  (used by session replay)
+# ---------------------------------------------------------------------------
+
+def load_gds_with_params(gds_path, lyp_path, map_path, selected_layers, options):
+    """Import a GDS file without showing any dialogs.
+
+    Uses pre-specified *selected_layers* (list of layer dicts) and *options*
+    (import flags dict) directly, bypassing the LayerSelector dialog.
+
+    Returns the same 8-tuple as load_gds_layers(), or all-None on failure.
+    """
+    ihp_map = Core_Functionality.parse_map(map_path) if map_path else {}
+
+    layers_with_colors = Core_Functionality.parse_lyp(lyp_path)
+    if not layers_with_colors:
+        FreeCAD.Console.PrintError("load_gds_with_params: LYP parse failed.\n")
+        return (None,) * 8
+    layers, unique_colors = layers_with_colors
+
+    # Match saved layers against freshly parsed LYP (re-use saved if LYP changed)
+    saved_keys = {(l["layer_id"], l["datatype"]) for l in selected_layers}
+    filtered   = [l for l in layers
+                  if (l.get("layer_id", 0), l.get("datatype", 0)) in saved_keys]
+    if not filtered:
+        filtered = list(selected_layers)   # fall back to saved dicts
+
+    doc = FreeCAD.newDocument("GDSII_Document")
+    property_panel = PropertyPanel(FreeCADGui.getMainWindow())
+    property_panel.attach_to_document(doc)
+    property_panel.set_map(ihp_map, map_path)
+    FreeCADGui.getMainWindow().addDockWidget(
+        QtCore.Qt.RightDockWidgetArea, property_panel
+    )
+    property_panel.gds_path        = gds_path
+    property_panel.lyp_path        = lyp_path
+    property_panel.filtered_layers = filtered
+    property_panel.options         = dict(options)
+    property_panel.update_properties([], unique_colors, {})
+
+    # Derive import parameters from options (mirrors load_gds_layers logic)
+    match_klayout     = bool(options.get("match_klayout",     True))
+    highlight_bondable= bool(options.get("highlight_bondable",True))
+    extrude_3d        = bool(options.get("extrude_3d",        False))
+    auto_pin_contacts = bool(options.get("auto_pin_contacts", False))
+    contacts_only_3d  = bool(options.get("contacts_only_3d",  False))
+
+    fill_layer_keys = {
+        k for k, v in (ihp_map or {}).items()
+        if "FILL" in v.get("edi_types", set())
+    }
+    min_area = 0.0 if match_klayout else 0.0004
+    decimate = 0.0 if match_klayout else 0.002
+
+    contact_keys        = None
+    max_polys_per_layer = None
+    if contacts_only_3d:
+        extrude_3d   = True
+        min_area     = max(min_area, 0.001)
+        max_polys_per_layer = 3000
+        top_keys, bottom_keys = Core_Functionality.identify_contact_layers(
+            filtered, ihp_map
+        )
+        contact_keys = top_keys | bottom_keys
+
+    stack_mm = (
+        Core_Functionality.build_stack_mm(filtered, ihp_map)
+        if extrude_3d else None
+    )
+
+    try:
+        doc.openTransaction("Session Replay: GDS Import")
+    except Exception:
+        pass
+
+    shapes = Core_Functionality.load_gds(
+        gds_path, filtered,
+        transform=None, preview_2d=not extrude_3d, compound_per_layer=True,
+        min_area_mm2=min_area, decimate_tol_mm=decimate,
+        skip_fill_datatype=False, fill_as_bbox=True,
+        fill_layer_keys=fill_layer_keys, stack_mm=stack_mm,
+        contacts_only_3d=contacts_only_3d, contact_keys=contact_keys,
+        max_polys_per_layer=max_polys_per_layer,
+    )
+
+    if not shapes:
+        FreeCAD.Console.PrintWarning("load_gds_with_params: no shapes produced.\n")
+        return (None,) * 8
+
+    layer_objects = {}
+
+    body_entry = next((s for s in shapes if s.get("is_body_solid")), None)
+    if body_entry:
+        body_obj = doc.addObject("Part::Feature", "IC_Body_Solid")
+        body_obj.Shape = body_entry["shape"]
+        body_obj.ViewObject.ShapeColor  = (0.55, 0.55, 0.55)
+        body_obj.ViewObject.LineColor   = (0.25, 0.25, 0.25)
+        body_obj.ViewObject.Transparency = 60
+
+    for layer in filtered:
+        layer_id   = layer.get("layer_id", 0)
+        datatype   = layer.get("datatype",  0)
+        layer_name = layer.get("name", "Unknown Layer")
+
+        map_entry = ihp_map.get((layer_id, datatype))
+        types     = map_entry["edi_types"] if map_entry else set()
+
+        if match_klayout:
+            shape_rgb = hex_to_rgb(layer.get("fill-color",  "#FFFFFF"))
+            line_rgb  = hex_to_rgb(layer.get("frame-color", "#000000"))
+            tr = 0
+            if highlight_bondable and Core_Functionality.is_bondable(types):
+                shape_rgb = (0.90, 0.75, 0.20)
+                line_rgb  = (0.25, 0.20, 0.10)
+                tr = 0
+        else:
+            _, shape_rgb, line_rgb, tr = Core_Functionality.style_for_material(
+                map_entry["edi_name"] if map_entry else "", types
+            )
+            if not highlight_bondable and Core_Functionality.is_bondable(types):
+                shape_rgb = hex_to_rgb(layer.get("fill-color",  "#FFFFFF"))
+                line_rgb  = hex_to_rgb(layer.get("frame-color", "#000000"))
+                tr = 0
+
+        shape = next(
+            (s for s in shapes if s["layer_id"] == layer_id and s["datatype"] == datatype),
+            None,
+        )
+        if not shape:
+            continue
+
+        obj = doc.addObject("Part::Feature", f"Layer_{layer_name}_{layer_id}")
+        obj.Shape                    = shape["shape"]
+        obj.ViewObject.ShapeColor    = shape_rgb
+        obj.ViewObject.LineColor     = line_rgb
+        obj.ViewObject.Transparency  = tr
+        layer_objects.setdefault(layer_id, []).append(obj)
+
+    try:
+        doc.commitTransaction()
+    except Exception:
+        pass
+
+    doc.recompute()
+    property_panel.update_properties(filtered, unique_colors, layer_objects)
+
+    if auto_pin_contacts:
+        Core_Functionality.import_pin_pads_as_contacts(
+            gds_path, ihp_map, doc, selected_layers=filtered, top_n=3
+        )
+
+    FreeCADGui.activeDocument().activeView().viewIsometric()
+    FreeCADGui.SendMsgToActiveView("ViewFit")
+
+    return doc, layer_objects, filtered, unique_colors, gds_path, lyp_path, options, map_path

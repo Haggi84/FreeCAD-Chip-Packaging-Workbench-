@@ -13,6 +13,7 @@ from wirebond.ManualWireBonding import manual_bonder  # Global instance
 from wirebond.Wirebon_Confi_Support import check_wirebond_prerequisites
 from wirebond.ContactPointTool import DefineContactPointsCommand
 from Get_Path import get_icon
+from session.SessionManager import session_manager
 
 # Singleton panel instance — persisted across command activations
 _cp_panel = None
@@ -50,6 +51,7 @@ class WirebondCommand:
                 FreeCAD.newDocument("WireBonding")
 
             manual_bonder.start_bonding_session(config)
+            session_manager.record_action("wirebond_config", config)
 
             QtWidgets.QMessageBox.information(
                 None,

@@ -10,6 +10,7 @@ from leadframe.LeadframeCommand import create_leadframe, configure_leadframe
 from gds.GDSCommand import load_gds_layers
 from core.Color import hex_to_rgb
 from Get_Path import get_icon
+from session.SessionManager import session_manager
 
 def configuration(doc, gds_path, selected_layers, options, ihp_map, config, opts):
     # First pass — measure bbox at base scale
@@ -149,18 +150,22 @@ def create_layer_on_leadframe():
     from ui.ExtendedPropertyPanel import ExtendedPropertyPanel
 
     try:
-        # Pick + preview (fast 2D) -> returns options as 7th item
+        # Pick + preview (fast 2D) -> returns options as 7th item, map_path as 8th
         result = load_gds_layers()
         if not result or result[0] is None:
             FreeCAD.Console.PrintError("Failed to load GDS layers.\n")
             return
 
-        # backward compatible unpacking
-        if len(result) >= 7:
+        # Unpack (map_path added as 8th element)
+        if len(result) >= 8:
+            preview_doc, _, selected_layers, _, gds_path, lyp_path, options, map_path = result
+        elif len(result) >= 7:
             preview_doc, _, selected_layers, _, gds_path, lyp_path, options = result
+            map_path = None
         else:
             preview_doc, _, selected_layers, _, gds_path, lyp_path = result
-            options = {"match_klayout": True, "highlight_bondable": True}
+            options  = {"match_klayout": True, "highlight_bondable": True}
+            map_path = None
 
         if not selected_layers or not gds_path:
             FreeCAD.Console.PrintError("Missing selected layers or GDS path.\n")
@@ -182,9 +187,10 @@ def create_layer_on_leadframe():
             QtWidgets.QMessageBox.warning(None, "Warning", "No matching layers found between LYP and GDS files.")
             return
 
-        # IHP mapping (try default next to this module)
+        # IHP mapping — use the map chosen during GDS import, or the default
         default_map = os.path.join(os.path.dirname(__file__), "sg13g2.map")
-        ihp_map = Core_Functionality.parse_map(default_map) if os.path.exists(default_map) else {}
+        effective_map = map_path or (default_map if os.path.exists(default_map) else None)
+        ihp_map = Core_Functionality.parse_map(effective_map) if effective_map else {}
 
         # Leadframe configuration
         config = configure_leadframe()
@@ -208,7 +214,7 @@ def create_layer_on_leadframe():
 
         # Initialize PropertyPanel
         property_panel = ExtendedPropertyPanel(FreeCADGui.getMainWindow())
-        property_panel.set_map(ihp_map, default_map)
+        property_panel.set_map(ihp_map, effective_map)
         property_panel.gds_path = gds_path
         property_panel.lyp_path = lyp_path
         property_panel.filtered_layers = filtered_layers  # Initially, filtered_layers are the selected ones
@@ -236,6 +242,16 @@ def create_layer_on_leadframe():
         doc.recompute()
         FreeCADGui.activeDocument().activeView().viewIsometric()
         FreeCADGui.SendMsgToActiveView("ViewFit")
+
+        session_manager.record_action("layer_on_leadframe", {
+            "gds_path":        gds_path,
+            "lyp_path":        lyp_path,
+            "map_path":        effective_map,
+            "selected_layers": selected_layers,
+            "options":         options,
+            "leadframe_config": config,
+            "transform_opts":  opts,
+        })
 
         return doc
 
