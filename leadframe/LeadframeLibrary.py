@@ -3,7 +3,6 @@
 import os
 import re
 import tempfile
-import threading
 import urllib.request
 from typing import List, Optional
 from urllib.parse import urljoin
@@ -11,14 +10,12 @@ from urllib.parse import urljoin
 import FreeCAD
 import FreeCADGui
 import ImportGui
-import Part
 from PySide2 import QtCore, QtGui, QtWidgets
 
 from Get_Path import get_icon
 
 DEFAULT_LIBRARY_URL = "https://www.mirrorsemi.com/CAD.html"
 
-# All extensions the downloader will accept
 ACCEPTED_DOWNLOAD_EXTS = (
     ".stp",
     ".step",
@@ -34,7 +31,6 @@ ACCEPTED_DOWNLOAD_EXTS = (
 
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp")
 
-# Format groups shown in the filter combo
 FORMAT_GROUPS = {
     "All formats": None,
     "3D models (STEP / IGES)": (".stp", ".step", ".igs", ".iges"),
@@ -47,54 +43,80 @@ FORMAT_GROUPS = {
 class LeadframeEntry:
     """Simple data container for a leadframe library entry."""
 
-    def __init__(self, name: str, url: str, preview_url: Optional[str] = None):
+    def __init__(self, name: str, url: str, package_page_url: Optional[str] = None):
         self.name = name
         self.url = url
-        self.preview_url = preview_url
+        # URL of the per-package HTML detail page (e.g. https://…/M-QFN8W.65.html)
+        self.package_page_url = package_page_url
 
     def __repr__(self) -> str:  # pragma: no cover
-        return f"LeadframeEntry(name={self.name}, url={self.url}, preview={self.preview_url})"
-
-
-def _find_images(html: str, base_url: str) -> List[str]:
-    image_matches = re.findall(r"<img[^>]+src=\"([^\"]+)\"", html, flags=re.IGNORECASE)
-    return [urljoin(base_url, src) for src in image_matches]
+        return f"LeadframeEntry(name={self.name}, url={self.url})"
 
 
 def fetch_leadframe_entries(library_url: str = DEFAULT_LIBRARY_URL) -> List[LeadframeEntry]:
-    """Fetch the MirrorSemi CAD page and collect downloadable leadframe entries."""
+    """
+    Fetch the MirrorSemi CAD page and collect downloadable entries.
 
+    The page is a table where each row contains one package's HTML detail page
+    link plus all of its CAD file download links.  We parse row-by-row so that
+    every CAD entry keeps a reference to its package detail page (used later for
+    photo previews).
+    """
     with urllib.request.urlopen(library_url, timeout=15) as response:
         html_bytes = response.read()
     html = html_bytes.decode("utf-8", errors="ignore")
 
-    images = _find_images(html, library_url)
     entries: List[LeadframeEntry] = []
 
-    for match in re.finditer(r"href=\"([^\"]+)\"", html, flags=re.IGNORECASE):
-        href = match.group(1)
-        if not href:
-            continue
-        lower_href = href.lower().split("?")[0]
-        if not lower_href.endswith(ACCEPTED_DOWNLOAD_EXTS):
-            continue
-        full_url = urljoin(library_url, href)
-        file_name = os.path.basename(lower_href) or "leadframe"
-        base_name, _ = os.path.splitext(file_name)
-        preview_url = None
-        for img in images:
-            if base_name and base_name.lower() in img.lower():
-                preview_url = img
-                break
-        entries.append(LeadframeEntry(name=file_name, url=full_url, preview_url=preview_url))
+    for row in re.findall(r"<tr\b[^>]*>(.*?)</tr>", html, re.IGNORECASE | re.DOTALL):
+        all_hrefs = re.findall(r'href="([^"]+)"', row, re.IGNORECASE)
 
-    if not entries and images:
-        for img in images:
-            file_name = os.path.basename(img.split("?")[0]) or "leadframe-preview"
-            if any(file_name.lower().endswith(ext) for ext in IMAGE_EXTS):
-                entries.append(LeadframeEntry(name=file_name, url=img, preview_url=img))
+        # CAD file links in this row
+        cad_hrefs = [
+            h for h in all_hrefs
+            if h.lower().split("?")[0].endswith(ACCEPTED_DOWNLOAD_EXTS)
+        ]
+        if not cad_hrefs:
+            continue
+
+        # Package detail page link in the same row (local *.html, not external)
+        html_hrefs = [
+            h for h in all_hrefs
+            if h.lower().endswith(".html") and not h.startswith("http")
+        ]
+        package_page_url = urljoin(library_url, html_hrefs[0]) if html_hrefs else None
+
+        for href in cad_hrefs:
+            full_url = urljoin(library_url, href)
+            file_name = os.path.basename(href.split("?")[0]) or "leadframe"
+            entries.append(LeadframeEntry(
+                name=file_name,
+                url=full_url,
+                package_page_url=package_page_url,
+            ))
 
     return entries
+
+
+def _fetch_package_photos(package_page_url: str) -> List[str]:
+    """
+    Fetch a per-package detail page and return absolute URLs of product photos.
+
+    Photos are <img> elements whose src contains the package name (as opposed to
+    generic site chrome like arrows, icons, etc.).  The package name is derived
+    from the page URL stem (e.g. 'M-QFN8W.65' from 'M-QFN8W.65.html').
+    """
+    pkg_stem = os.path.splitext(os.path.basename(package_page_url.split("?")[0]))[0]
+
+    with urllib.request.urlopen(package_page_url, timeout=15) as resp:
+        html = resp.read().decode("utf-8", errors="ignore")
+
+    srcs = re.findall(r'<img[^>]+src="([^"]+)"', html, re.IGNORECASE)
+    photos: List[str] = []
+    for src in srcs:
+        if pkg_stem.lower() in src.lower() and any(src.lower().endswith(e) for e in IMAGE_EXTS):
+            photos.append(urljoin(package_page_url, src))
+    return photos
 
 
 _DOWNLOAD_TIMEOUT_S = 30
@@ -120,17 +142,13 @@ def _center_at_origin(doc, objects_before):
     if not new_objects:
         return
 
-    # Compute combined bounding box over all new objects that have one
     bbox = None
     for obj in new_objects:
         try:
             bb = obj.Shape.BoundBox
             if not bb.isValid():
                 continue
-            if bbox is None:
-                bbox = bb
-            else:
-                bbox.add(bb)
+            bbox = bb if bbox is None else (bbox.add(bb) or bbox)
         except Exception:
             continue
 
@@ -139,7 +157,7 @@ def _center_at_origin(doc, objects_before):
 
     cx, cy, cz = bbox.Center.x, bbox.Center.y, bbox.Center.z
     if abs(cx) < 1e-6 and abs(cy) < 1e-6 and abs(cz) < 1e-6:
-        return  # already at origin
+        return
 
     offset = FreeCAD.Vector(-cx, -cy, -cz)
     for obj in new_objects:
@@ -173,23 +191,7 @@ def _import_into_freecad(file_path: str):
 # ---------------------------------------------------------------------------
 
 class _FetchWorker(QtCore.QThread):
-    finished = QtCore.Signal(list)   # list[LeadframeEntry]
-    failed = QtCore.Signal(str)      # error message
-
-    def __init__(self, url: str, parent=None):
-        super().__init__(parent)
-        self._url = url
-
-    def run(self):
-        try:
-            entries = fetch_leadframe_entries(self._url)
-            self.finished.emit(entries)
-        except Exception as exc:
-            self.failed.emit(str(exc))
-
-
-class _PreviewWorker(QtCore.QThread):
-    loaded = QtCore.Signal(bytes)   # raw image bytes
+    finished = QtCore.Signal(list)
     failed = QtCore.Signal(str)
 
     def __init__(self, url: str, parent=None):
@@ -198,15 +200,17 @@ class _PreviewWorker(QtCore.QThread):
 
     def run(self):
         try:
-            with urllib.request.urlopen(self._url, timeout=10) as resp:
-                data = resp.read()
-            self.loaded.emit(data)
+            self.finished.emit(fetch_leadframe_entries(self._url))
         except Exception as exc:
             self.failed.emit(str(exc))
 
 
-class _DownloadWorker(QtCore.QThread):
-    finished = QtCore.Signal(str)   # local file path
+class _PreviewWorker(QtCore.QThread):
+    """
+    Fetches the package detail page, picks the best product photo, then
+    downloads it.  Emits either loaded(bytes) or failed(str).
+    """
+    loaded = QtCore.Signal(bytes)
     failed = QtCore.Signal(str)
 
     def __init__(self, entry: LeadframeEntry, parent=None):
@@ -215,8 +219,39 @@ class _DownloadWorker(QtCore.QThread):
 
     def run(self):
         try:
-            path = _download_to_temp(self._entry)
-            self.finished.emit(path)
+            if not self._entry.package_page_url:
+                self.failed.emit("No package detail page available.")
+                return
+
+            photos = _fetch_package_photos(self._entry.package_page_url)
+            if not photos:
+                self.failed.emit("No product photos found on the package page.")
+                return
+
+            # Prefer a "Top" view; fall back to the first photo found
+            preferred = next(
+                (p for p in photos if "_top_" in p.lower()),
+                photos[0],
+            )
+
+            with urllib.request.urlopen(preferred, timeout=10) as resp:
+                data = resp.read()
+            self.loaded.emit(data)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class _DownloadWorker(QtCore.QThread):
+    finished = QtCore.Signal(str)
+    failed = QtCore.Signal(str)
+
+    def __init__(self, entry: LeadframeEntry, parent=None):
+        super().__init__(parent)
+        self._entry = entry
+
+    def run(self):
+        try:
+            self.finished.emit(_download_to_temp(self._entry))
         except Exception as exc:
             self.failed.emit(str(exc))
 
@@ -226,7 +261,7 @@ class _DownloadWorker(QtCore.QThread):
 # ---------------------------------------------------------------------------
 
 class LeadframeLibraryDialog(QtWidgets.QDialog):
-    """Dialog that shows online leadframes with optional previews."""
+    """Dialog that shows online leadframes with product photo previews."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -235,6 +270,7 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
 
         self.entries: List[LeadframeEntry] = []
         self._all_entries: List[LeadframeEntry] = []
+        self._preview_cache: dict = {}   # package_page_url → QPixmap (or None)
         self._preview_worker: Optional[_PreviewWorker] = None
         self._fetch_worker: Optional[_FetchWorker] = None
         self._download_worker: Optional[_DownloadWorker] = None
@@ -298,7 +334,7 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
         self.refresh_entries()
 
     # ------------------------------------------------------------------
-    # Fetch
+    # Fetch catalog
     # ------------------------------------------------------------------
 
     def refresh_entries(self):
@@ -307,9 +343,9 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
         self.list_widget.clear()
         self._all_entries = []
         self.entries = []
+        self._preview_cache.clear()
 
-        url = DEFAULT_LIBRARY_URL
-        self._fetch_worker = _FetchWorker(url, parent=self)
+        self._fetch_worker = _FetchWorker(DEFAULT_LIBRARY_URL, parent=self)
         self._fetch_worker.finished.connect(self._on_fetch_done)
         self._fetch_worker.failed.connect(self._on_fetch_failed)
         self._fetch_worker.start()
@@ -335,7 +371,7 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
     def _apply_filter(self):
         text = self.search_edit.text().lower()
         label = self.format_combo.currentText()
-        allowed_exts = FORMAT_GROUPS.get(label)  # None means all
+        allowed_exts = FORMAT_GROUPS.get(label)
 
         self.list_widget.clear()
         self.entries = []
@@ -379,41 +415,73 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
         self._show_preview(entry)
 
     def _show_preview(self, entry: LeadframeEntry):
-        preview_url = entry.preview_url or entry.url
-        if not any(preview_url.lower().split("?")[0].endswith(ext) for ext in IMAGE_EXTS):
-            ext = os.path.splitext(entry.name.lower())[1]
+        pkg_url = entry.package_page_url
+        if not pkg_url:
             self.preview_label.setPixmap(QtGui.QPixmap())
-            self.preview_label.setText(f"No image preview available.\n\nFile type: {ext or 'unknown'}")
+            self.preview_label.setText("No package detail page available.")
+            return
+
+        # Serve from cache if available
+        if pkg_url in self._preview_cache:
+            cached = self._preview_cache[pkg_url]
+            if cached is not None:
+                self._display_pixmap(cached)
+            else:
+                self.preview_label.setPixmap(QtGui.QPixmap())
+                self.preview_label.setText("No product photos available.")
             return
 
         self.preview_label.setText("Loading preview…")
         self.preview_label.setPixmap(QtGui.QPixmap())
 
-        # Cancel previous in-flight preview request
+        # Cancel previous in-flight request
         if self._preview_worker and self._preview_worker.isRunning():
-            self._preview_worker.finished.disconnect()
-            self._preview_worker.failed.disconnect()
+            try:
+                self._preview_worker.loaded.disconnect()
+                self._preview_worker.failed.disconnect()
+            except Exception:
+                pass
 
-        self._preview_worker = _PreviewWorker(preview_url, parent=self)
-        self._preview_worker.loaded.connect(self._on_preview_loaded)
-        self._preview_worker.failed.connect(self._on_preview_failed)
+        self._preview_worker = _PreviewWorker(entry, parent=self)
+        self._preview_worker.loaded.connect(
+            lambda data, url=pkg_url: self._on_preview_loaded(data, url)
+        )
+        self._preview_worker.failed.connect(
+            lambda msg, url=pkg_url: self._on_preview_failed(msg, url)
+        )
         self._preview_worker.start()
 
-    def _on_preview_loaded(self, data: bytes):
+    def _on_preview_loaded(self, data: bytes, pkg_url: str):
         pixmap = QtGui.QPixmap()
         if pixmap.loadFromData(data):
-            scaled = pixmap.scaled(
-                self.preview_label.size(),
-                QtCore.Qt.KeepAspectRatio,
-                QtCore.Qt.SmoothTransformation,
-            )
-            self.preview_label.setPixmap(scaled)
-            self.preview_label.setText("")
+            self._preview_cache[pkg_url] = pixmap
+            # Only display if the selection hasn't changed
+            current = self.list_widget.currentItem()
+            if current:
+                entry: LeadframeEntry = current.data(QtCore.Qt.UserRole)
+                if entry.package_page_url == pkg_url:
+                    self._display_pixmap(pixmap)
         else:
+            self._preview_cache[pkg_url] = None
             self.preview_label.setText("Unable to decode preview image.")
 
-    def _on_preview_failed(self, msg: str):
-        self.preview_label.setText("Preview could not be downloaded.")
+    def _on_preview_failed(self, msg: str, pkg_url: str):
+        self._preview_cache[pkg_url] = None
+        current = self.list_widget.currentItem()
+        if current:
+            entry: LeadframeEntry = current.data(QtCore.Qt.UserRole)
+            if entry.package_page_url == pkg_url:
+                self.preview_label.setPixmap(QtGui.QPixmap())
+                self.preview_label.setText("No product photos available.")
+
+    def _display_pixmap(self, pixmap: QtGui.QPixmap):
+        scaled = pixmap.scaled(
+            self.preview_label.size(),
+            QtCore.Qt.KeepAspectRatio,
+            QtCore.Qt.SmoothTransformation,
+        )
+        self.preview_label.setPixmap(scaled)
+        self.preview_label.setText("")
 
     # ------------------------------------------------------------------
     # Import
