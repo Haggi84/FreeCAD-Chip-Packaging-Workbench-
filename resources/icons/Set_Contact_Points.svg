@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Package top face (yellow rectangle) -->
+  <rect x="8" y="20" width="48" height="24" rx="3" ry="3"
+        fill="#f5c518" stroke="#b8860b" stroke-width="2"/>
+  <!-- Top surface highlight line -->
+  <rect x="8" y="20" width="48" height="6" rx="3" ry="3"
+        fill="#ffe566" stroke="#b8860b" stroke-width="2"/>
+  <!-- Contact point dots on top surface -->
+  <circle cx="22" cy="23" r="4" fill="#1aaa50" stroke="#0d7a38" stroke-width="1.5"/>
+  <circle cx="42" cy="23" r="4" fill="#1aaa50" stroke="#0d7a38" stroke-width="1.5"/>
+  <!-- Cursor arrow pointing at a dot -->
+  <polyline points="50,8 44,20 48,18 50,24 52,18 56,20"
+            fill="#222" stroke="#222" stroke-width="1"
+            stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

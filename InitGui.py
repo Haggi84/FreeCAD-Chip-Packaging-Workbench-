@@ -17,6 +17,7 @@ try:
     from housing import HousingCommand
     from leadframe import LayeronLeadframe
     from wirebond import WirebondCommand
+    from wirebond import SetContactPointsOnFaceCommand
     from help import HelpGuideCommand
     from help import AboutCommand
     from session import SaveSessionCommand
@@ -46,6 +47,7 @@ class MyWorkbench(FreeCADGui.Workbench):
                     "HousingCommand",
                     "LayeronLeadframe",
                     "DefineContactPointsCommand",
+                    "SetContactPointsOnFaceCommand",
                     "ShowContactPointPanelCommand",
                     "WirebondCommand",
                     "CancelWireBondingCommand",

@@ -136,30 +136,69 @@ def _download_to_temp(entry: LeadframeEntry) -> str:
     return target_path
 
 
-def _center_at_origin(doc, objects_before):
-    """Move newly imported objects so their combined bounding-box centre is at the origin."""
-    new_objects = [o for o in doc.Objects if o not in objects_before]
-    if not new_objects:
-        return
-
-    bbox = None
-    for obj in new_objects:
+def _bbox_of(objects):
+    """
+    Return (xmin, ymin, zmin, xmax, ymax, zmax) for a collection of FreeCAD
+    objects, or None if no valid bounding box could be found.
+    """
+    xmin = ymin = zmin = float("inf")
+    xmax = ymax = zmax = float("-inf")
+    found = False
+    for obj in objects:
         try:
             bb = obj.Shape.BoundBox
             if not bb.isValid():
                 continue
-            bbox = bb if bbox is None else (bbox.add(bb) or bbox)
+            xmin = min(xmin, bb.XMin); xmax = max(xmax, bb.XMax)
+            ymin = min(ymin, bb.YMin); ymax = max(ymax, bb.YMax)
+            zmin = min(zmin, bb.ZMin); zmax = max(zmax, bb.ZMax)
+            found = True
         except Exception:
             continue
+    return (xmin, ymin, zmin, xmax, ymax, zmax) if found else None
 
-    if bbox is None or not bbox.isValid():
+
+def _place_imported_package(doc, objects_before):
+    """
+    Translate newly imported package objects so that:
+    - Their XY centre aligns with the XY centre of any existing scene geometry
+      (GDS layers, leadframe, etc.).  Falls back to (0, 0) when the scene is
+      empty.
+    - Their bottom face (ZMin) rests at Z = 0, so the package sits on the same
+      plane as the die and leadframe rather than being centred through Z = 0.
+    """
+    new_objects = [o for o in doc.Objects if o not in objects_before]
+    if not new_objects:
         return
 
-    cx, cy, cz = bbox.Center.x, bbox.Center.y, bbox.Center.z
-    if abs(cx) < 1e-6 and abs(cy) < 1e-6 and abs(cz) < 1e-6:
+    pkg_bb = _bbox_of(new_objects)
+    if pkg_bb is None:
+        return
+    xmin, ymin, zmin, xmax, ymax, zmax = pkg_bb
+    pkg_cx = (xmin + xmax) / 2
+    pkg_cy = (ymin + ymax) / 2
+
+    # XY target: centre of existing scene objects (ignore contact-point markers)
+    existing = [
+        o for o in objects_before
+        if not getattr(o, "IsContactPoint", False)
+    ]
+    scene_bb = _bbox_of(existing)
+    if scene_bb is not None:
+        sx1, sy1, _, sx2, sy2, _ = scene_bb
+        target_cx = (sx1 + sx2) / 2
+        target_cy = (sy1 + sy2) / 2
+    else:
+        target_cx = target_cy = 0.0
+
+    dx = target_cx - pkg_cx
+    dy = target_cy - pkg_cy
+    dz = -zmin           # lift bottom to Z = 0
+
+    if abs(dx) < 1e-6 and abs(dy) < 1e-6 and abs(dz) < 1e-6:
         return
 
-    offset = FreeCAD.Vector(-cx, -cy, -cz)
+    offset = FreeCAD.Vector(dx, dy, dz)
     for obj in new_objects:
         try:
             pl = obj.Placement
@@ -178,7 +217,7 @@ def _import_into_freecad(file_path: str):
     ImportGui.insert(file_path, doc.Name)
     doc.recompute()
 
-    _center_at_origin(doc, objects_before)
+    _place_imported_package(doc, objects_before)
     doc.recompute()
 
     if FreeCADGui.activeDocument():
