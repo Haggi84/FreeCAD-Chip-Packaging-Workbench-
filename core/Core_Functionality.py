@@ -319,9 +319,12 @@ def _simplify_poly(points, eps):
         # distance to previous point
         if (x1 - x0) ** 2 + (y1 - y0) ** 2 < eps * eps:
             continue
-        # collinearity check via cross-product magnitude
+        # Perpendicular distance from (x1,y1) to line (x0,y0)→(x2,y2) < eps.
+        # cross has units mm²; dividing by edge length (mm) gives mm — correct.
+        # Equivalent to: cross² < eps² * edge_len_sq  (avoids sqrt).
         cross = abs((x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0))
-        if cross < eps:
+        edge_len_sq = (x2 - x0) ** 2 + (y2 - y0) ** 2
+        if edge_len_sq > 0 and cross * cross < eps * eps * edge_len_sq:
             continue
         out.append((x1, y1))
     out.append(points[-1])
@@ -587,12 +590,22 @@ def load_gds(gds_path,
             # build wire/face
             wire = Part.makePolygon([(x, y, 0.0) for (x, y) in (pts2d + [pts2d[0]])])
             if preview_2d:
-                by_layer[key].append(wire)
+                # Use a face so ShapeColor is applied in the FreeCAD viewport;
+                # fall back to the bare wire for degenerate polygons.
+                try:
+                    by_layer[key].append(Part.Face(wire))
+                except Exception:
+                    by_layer[key].append(wire)
             else:
                 try:
                     face = Part.Face(wire)
                 except Exception:
-                    continue
+                    # Attempt a wire repair before giving up
+                    try:
+                        wire = Part.Wire(wire.Edges)
+                        face = Part.Face(wire)
+                    except Exception:
+                        continue
                 # pick thickness & offset for this layer
                 if stack_mm and key in stack_mm:
                     t_mm = float(stack_mm[key]["t_mm"])
@@ -613,14 +626,17 @@ def load_gds(gds_path,
             if w <= 0 or h <= 0:
                 continue
             if preview_2d:
-                wire = Part.makePolygon([
+                bbox_wire = Part.makePolygon([
                     FreeCAD.Vector(xmin, ymin, 0),
                     FreeCAD.Vector(xmax, ymin, 0),
                     FreeCAD.Vector(xmax, ymax, 0),
                     FreeCAD.Vector(xmin, ymax, 0),
                     FreeCAD.Vector(xmin, ymin, 0),
                 ])
-                by_layer[key] = [wire]
+                try:
+                    by_layer[key] = [Part.Face(bbox_wire)]
+                except Exception:
+                    by_layer[key] = [bbox_wire]
             else:
                 lid_f, dt_f = key
                 if stack_mm and key in stack_mm:
