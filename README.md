@@ -221,11 +221,7 @@ A possible target UI showing a configuration module for chip-packaging elements:
 
 An example for a bonded Chip looks within a package looks like this:
 
-![PXL_20260401_131358805](https://github.com/user-attachments/assets/49d8373b-136f-4cf7-80d6-4976a90abba1)
-
-![PXL_20260401_131401381](https://github.com/user-attachments/assets/59d32864-7f0b-452e-8055-ff854130013b)
-
-
+<img width="230" height="300" alt="bonded chip 1" src="https://github.com/user-attachments/assets/49d8373b-136f-4cf7-80d6-4976a90abba1" /> <img width="230" height="300" alt="bonded chip 1" src="https://github.com/user-attachments/assets/59d32864-7f0b-452e-8055-ff854130013b" />
 
 ---
 
