@@ -30,8 +30,8 @@ except Exception as e:
 class MyWorkbench(FreeCADGui.Workbench):
 
     from Get_Path import get_icon
-    MenuText = "GDSII Workbench"
-    ToolTip = "FreeCAD GDSII Workbench"
+    MenuText = "Chip-Packaging Workbench"
+    ToolTip = "FreeCAD Chip-Packaging Workbench"
     Icon = get_icon("my_icon.svg")
 
 

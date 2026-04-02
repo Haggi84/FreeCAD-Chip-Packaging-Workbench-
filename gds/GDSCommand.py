@@ -309,8 +309,9 @@ def load_gds_layers():
                         "Tip: load an IHP .map file for best results.",
                     )
 
-            FreeCADGui.activeDocument().activeView().viewIsometric()
-            FreeCADGui.SendMsgToActiveView("ViewFit")
+            view = FreeCADGui.activeDocument().activeView()
+            view.viewIsometric()
+            view.fitAll()
             # NOTE: return options as 7th element, map_path as 8th element
             return doc, layer_objects, selected_layers, unique_colors, gds_path, lyp_path, options, map_path
 
@@ -506,7 +507,8 @@ def load_gds_with_params(gds_path, lyp_path, map_path, selected_layers, options)
             gds_path, ihp_map, doc, selected_layers=filtered, top_n=3
         )
 
-    FreeCADGui.activeDocument().activeView().viewIsometric()
-    FreeCADGui.SendMsgToActiveView("ViewFit")
+    view = FreeCADGui.activeDocument().activeView()
+    view.viewIsometric()
+    view.fitAll()
 
     return doc, layer_objects, filtered, unique_colors, gds_path, lyp_path, options, map_path

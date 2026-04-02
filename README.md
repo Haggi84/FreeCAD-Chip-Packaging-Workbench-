@@ -1,12 +1,15 @@
 # DI-PASSIONATE-FreeCAD
 
-![Version](https://img.shields.io/badge/version-0.7.0-green?style=flat-square)
-![FreeCAD](https://img.shields.io/badge/FreeCAD-0.21%2B-blue?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.5.0-green?style=flat-square)
+![FreeCAD](https://img.shields.io/badge/FreeCAD-1.0-blue?style=flat-square)
+![Python](https://img.shields.io/badge/Python-3.11-yellow?style=flat-square)
 ![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-informational?style=flat-square)
 
-**Development of a FreeCAD plugin for the BMBF project DI-Passionate to enable chip-packaging**
+**A FreeCAD workbench for chip-packaging workflows, developed as part of the BMBF project DI-Passionate.**
 
-This is a Python AddIn for the open-source software [FreeCAD](https://www.freecad.org/downloads.php). It provides a dedicated workbench for chip-packaging workflows: importing GDSII chip layouts, designing leadframes and housings, placing chips, planning bond wires, and preparing assemblies for simulation.
+This Python AddIn for [FreeCAD](https://www.freecad.org/downloads.php) provides a dedicated **Chip-Packaging Workbench** covering the full chip-assembly design flow: importing GDSII chip layouts, designing leadframes and housings, placing chips, planning bond wires, managing contact points, and saving/restoring sessions.
+
+> For detailed setup instructions see **[INSTALL.md](INSTALL.md)**.
 
 ---
 
@@ -16,17 +19,21 @@ This is a Python AddIn for the open-source software [FreeCAD](https://www.freeca
 
 | Tool | Description |
 |---|---|
-| **Load GDSII** | Import GDS files with layer colours from a KLayout `.lyp` file and optional IHP `.map` technology file |
+| **Load GDSII** | Import `.gds` files with layer colours from a KLayout `.lyp` file and optional IHP `.map` technology file |
 | **Leadframe Configurator** | Parametrically generate QFN, QFP, or BGA leadframes with configurable body size, lead count, and material |
 | **Center Leadframe on GDS** | Auto-align the leadframe centre to the bounding box of the imported GDS geometry |
-| **Leadframe Online Library** | Browse, preview, and download STEP/IGES/DXF packages from the MirrorSemi CAD catalogue |
+| **Leadframe Online Library** | Browse, preview real product photos, and download STEP/IGES/DXF packages from the MirrorSemi CAD catalogue |
 | **Layer on Leadframe** | Scale and place selected GDS layers on an existing leadframe with rotation and mirror options |
-| **Housing Configurator** | Generate a transparent IC housing body around the leadframe |
+| **Housing Configurator** | Generate a transparent IC housing/mold-compound body around the leadframe |
 | **Define Contact Points** | Place bondable contact-point markers on selected GDS layer objects |
-| **Contact Point Browser** | Dock panel to list and highlight all contact points in the 3D view |
-| **Manual Wire Bonding** | Interactive session: click a die-pad contact point, then a leadframe contact point — a 3D bond wire is created |
+| **Set Contact Points on Face** | Interactive: select a package body, highlight its top surface in yellow, click to place contact points at exact positions |
+| **Contact Point Browser** | Dock panel listing and highlighting all contact points in the 3D view |
+| **Manual Wire Bonding** | Interactive session — click a die-pad contact point, then a leadframe contact point; a 3D bond wire is created |
 | **Cancel Wire Bonding** | Exit an active wire-bonding session without saving |
+| **Save Session** | Persist all design actions and parameters to a `.dipas` JSON file |
+| **Load Session** | Restore a previous design session from a `.dipas` file |
 | **Help Guide** | In-app help dialog with Overview, Quick Start, Tools, Workflows, and Troubleshooting tabs |
+| **About** | Version and project information dialog |
 
 ### Planned / In Progress
 
@@ -50,9 +57,10 @@ This is a Python AddIn for the open-source software [FreeCAD](https://www.freeca
 | **2** | **Leadframe Configurator** or **Online Library** | Generate QFN / QFP / BGA leadframe, then run **Center Leadframe on GDS** |
 | **3** | **Layer on Leadframe** | Scale and rotate the GDS chip onto the die paddle |
 | **4** | **Housing Configurator** | Generate transparent mold compound body |
-| **5** | **Define Contact Points** | Manual contact point placement — skip if Auto PIN Detection was used in step 1 |
+| **5** | **Define Contact Points** or **Set Contact Points on Face** | Manual contact point placement — skip if Auto PIN Detection was used in step 1 |
 | **6** | **Manual Wire Bonding** | Click die pad → click leadframe lead → 3D bond wire created; repeat per bond |
-| **7** | **Export** *(planned)* | Assembly export for thermal simulation |
+| **7** | **Save Session** | Save all parameters to a `.dipas` file so the session can be resumed later |
+| **8** | **Export** *(planned)* | Assembly export for thermal simulation |
 
 ---
 
@@ -67,9 +75,7 @@ When loading a GDSII file the **Layer Selector** dialog exposes several import o
 | **3D extrusion** | Extrude each layer to its real Z-height using the `.map` stack definition |
 | **Auto PIN contact detection** | Automatically create `ContactPoint` markers on the top PIN layers |
 
-Filler layers (marked `FILL` in the `.map` file) are represented as a single bounding-box solid to keep import performance high.
-
-A progress dialog with a **Cancel** button is shown during import.
+Filler layers (marked `FILL` in the `.map` file) are represented as a single bounding-box solid to keep import performance high. A progress dialog with a **Cancel** button is shown during import.
 
 ---
 
@@ -81,94 +87,21 @@ A progress dialog with a **Cancel** button is shown during import.
 | `.lyp` | KLayout layer properties — defines layer colours and visibility |
 | `.map` | IHP technology map — layer names, EDI types, Z-stack heights |
 
-The IHP Open PDK (including sample `.map` files) can be downloaded from:
+The IHP Open PDK (including sample `.map` files) is available at:
 <https://github.com/IHP-GmbH/IHP-Open-PDK>
 
----
-
-## Setup
-
-### 1. Install the AddIn
-
-Clone the repository into the FreeCAD `Mod` directory:
-
-```bash
-# Windows
-git clone <repository-url> "C:/Users/%USERPROFILE%/AppData/Roaming/FreeCAD/Mod/DI-PASSIONATE-FreeCAD"
-
-# Linux
-git clone <repository-url> ~/.local/share/FreeCAD/Mod/DI-PASSIONATE-FreeCAD
-```
-
-Restart FreeCAD. The **GDSII Workbench** will appear in the workbench selector.
-
-### 2. Python dependencies
-
-The AddIn uses `gdstk` for reading GDS files. Install it into FreeCAD's Python environment:
-
-```bash
-# Windows (adjust path to match your FreeCAD version)
-"C:/Program Files/FreeCAD 1.0/bin/python.exe" -m pip install gdstk
-
-# Linux
-freecad-python3 -m pip install gdstk
-```
+A sample `.gds` file for testing is included at `resources/gds/ALL_LNA.gds`.
 
 ---
 
-## Developer Setup (VSCode)
+## Session Files (`.dipas`)
 
-1. Clone the repository into the FreeCAD `Mod` folder (see above).
-2. Open the project folder in VSCode.
-3. Create `.vscode/settings.json` with the extra Python paths so IntelliSense resolves FreeCAD modules:
+Each time you run **Save Session** the workbench writes a `.dipas` JSON file containing:
 
-**Windows**
+- All design actions in order (GDS import paths, leadframe config, housing config, wire-bond config, …)
+- Timestamps and the associated FreeCAD document path
 
-```json
-{
-    "python.analysis.extraPaths": [
-        "C:/Program Files/FreeCAD 1.0/bin",
-        "C:/Users/%USERNAME%/AppData/Roaming/Python/Python311/site-packages",
-        "C:/Program Files/FreeCAD 1.0/bin/Lib/site-packages"
-    ]
-}
-```
-
-**Ubuntu / Linux**
-
-```json
-{
-    "python.analysis.extraPaths": [
-        "/home/%USER%/usr/lib",
-        "/home/%USER%/usr/lib/python3.11/site-packages"
-    ]
-}
-```
-
-> Replace `%USERNAME%` / `%USER%` with your actual home-directory name.
-
-### Remote debugging with debugpy
-
-Set the environment variable `FREECAD_DEBUGPY=1` before launching FreeCAD. The workbench will listen on `localhost:5678` and wait for VS Code to attach before continuing.
-
-```bash
-# Windows PowerShell
-$env:FREECAD_DEBUGPY = "1"; & "C:\Program Files\FreeCAD 1.0\bin\FreeCAD.exe"
-
-# Linux / macOS
-FREECAD_DEBUGPY=1 freecad
-```
-
-Add a **Python: Remote Attach** launch configuration in `.vscode/launch.json`:
-
-```json
-{
-    "name": "Attach to FreeCAD",
-    "type": "python",
-    "request": "attach",
-    "connect": { "host": "localhost", "port": 5678 }
-}
-```
+Reopen a session with **Load Session** to restore parameters and re-apply them.
 
 ---
 
@@ -177,6 +110,7 @@ Add a **Python: Remote Attach** launch configuration in `.vscode/launch.json`:
 ```
 DI-PASSIONATE-FreeCAD/
 ├── InitGui.py                  # Workbench registration & toolbar definition
+├── version.py                  # Single source of truth for the version number
 ├── Get_Path.py                 # Path helpers (icons, HTML resources)
 ├── core/
 │   ├── Core_Functionality.py   # GDS parsing, shape building, layer styling
@@ -200,18 +134,53 @@ DI-PASSIONATE-FreeCAD/
 │   ├── ManualWireBonding.py    # Interactive bonding session logic
 │   ├── ContactPointTool.py     # "Define Contact Points" command
 │   ├── ContactPointPanel.py    # Contact Point Browser dock panel
+│   ├── SetContactPointsOnFaceCommand.py  # Interactive top-face contact point placement
 │   └── Wirebon_Confi_Support.py# Prerequisite checks
+├── session/
+│   ├── SessionManager.py       # Session record/persist/restore logic (.dipas)
+│   ├── SaveSessionCommand.py   # "Save Session" toolbar command
+│   └── LoadSessionCommand.py   # "Load Session" toolbar command
 ├── ui/
 │   ├── LayerSelector.py        # Layer selection dialog (used during GDS import)
 │   ├── ExtendedPropertyPanel.py
 │   └── LayeronLeadframeConfigurator.py
-└── help/
-    └── HelpGuideCommand.py     # In-app help guide (HTML tabs)
+├── help/
+│   ├── HelpGuideCommand.py     # In-app help guide (HTML tabs)
+│   └── AboutCommand.py         # About dialog
+└── resources/
+    ├── gds/ALL_LNA.gds         # Sample GDS file for testing
+    ├── icons/                  # SVG/PNG toolbar icons
+    ├── html/                   # HTML content for the in-app help guide
+    └── workflow.svg            # Workflow overview diagram
 ```
 
 ---
 
-## Mindmap / Design Notes
+## Quick Setup
+
+See **[INSTALL.md](INSTALL.md)** for the full step-by-step guide covering:
+
+- Installing FreeCAD 1.0
+- Installing the `gdstk` Python dependency
+- Cloning the workbench into the correct `Mod` folder
+- Developer setup (VS Code IntelliSense + `debugpy` remote debugging)
+- Troubleshooting common problems
+
+**Short version:**
+
+```bash
+# Clone into FreeCAD's user Mod folder (Windows)
+git clone <repository-url> "%APPDATA%/FreeCAD/Mod/DI-PASSIONATE-FreeCAD"
+
+# Install the gdstk dependency into FreeCAD's Python
+"C:/Program Files/FreeCAD 1.0/bin/python.exe" -m pip install gdstk
+```
+
+Restart FreeCAD — the **Chip-Packaging Workbench** will appear in the workbench selector.
+
+---
+
+## Design Notes / Mindmap
 
 <https://lucid.app/lucidspark/ebb96ac9-c6d3-408a-9ead-51c1aa83efa1/edit?invitationId=inv_3ef9b6cf-fcc6-4717-8b34-9a1598ceaaf7>
 
