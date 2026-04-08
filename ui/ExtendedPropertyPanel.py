@@ -1,7 +1,11 @@
 from gds.PropertyPanel import PropertyPanel
 from PySide2 import QtWidgets
-import FreeCAD, FreeCADGui
-from core import Core_Functionality
+import FreeCAD, FreeCADGui, os, sys
+
+root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, root_path)
+
+from core.Core_Functionality import parse_lyp
 
 # Extend PropertyPanel to support leadframe modification, wire bonding modification
 class ExtendedPropertyPanel(PropertyPanel):
@@ -15,13 +19,13 @@ class ExtendedPropertyPanel(PropertyPanel):
 
     def modify_layer_selection(self):
         from ui.LayerSelector import LayerSelector
-        from leadframe import LeadframeCommand
-        from gds.GDSCommand import configuration
-        from wirebond import WirebondCommand
+        from leadframe.LeadframeCommand import configure_leadframe
+        from leadframe.LayeronLeadframe import configuration
+        from wirebond.ManualWireBonding import manual_bonder  # Global instance
         from wirebond.WirebondConfigurator import WirebondConfigurator
 
         """Override to allow modifying either layer selection or leadframe configuration."""
-        if not self.gds_path or not self.lyp_path:
+        if not self.gds_path:
             QtWidgets.QMessageBox.critical(None, "Error", "Cannot modify: Missing file paths or layer data.")
             return
 
@@ -100,13 +104,24 @@ class ExtendedPropertyPanel(PropertyPanel):
 
                 doc, layer_objects = result
 
-                # Update PropertyPanel
                 self.selected_layers = selected_layers
-                self.update_properties(self.selected_layers, Core_Functionality.parse_lyp(self.lyp_path)[1], layer_objects)
+
+                if self.lyp_path:
+                    unique_colors = parse_lyp(self.lyp_path)[1]
+
+                else:
+                    unique_colors = set()
+                    for layer in self.selected_layers:
+                        frame_color = layer.get("frame-color", "#000000")
+                        fill_color = layer.get("fill-color", "#FFFFFF")
+                    unique_colors.add((frame_color, fill_color))
+
+                # Update PropertyPanel
+                self.update_properties(self.selected_layers, unique_colors, layer_objects)
 
         elif modify_type[0] == "leadframe":
             # Modify leadframe configuration
-            new_config = LeadframeCommand.configure_leadframe()
+            new_config = configure_leadframe()
             if not new_config:
                 QtWidgets.QMessageBox.information(None, "Cancelled", "Leadframe configuration cancelled.")
                 return
@@ -128,23 +143,43 @@ class ExtendedPropertyPanel(PropertyPanel):
 
             doc, layer_objects = result
 
+            if self.lyp_path:
+                unique_colors = parse_lyp(self.lyp_path)[1]
+
+            else:
+                unique_colors = set()
+                for layer in self.selected_layers:
+                    frame_color = layer.get("frame-color", "#000000")
+                    fill_color = layer.get("fill-color", "#FFFFFF")
+                    unique_colors.add((frame_color, fill_color))
+
             # Update PropertyPanel
-            self.update_properties(self.selected_layers, Core_Functionality.parse_lyp(self.lyp_path)[1], layer_objects)
+            self.update_properties(self.selected_layers, unique_colors, layer_objects)
 
         elif modify_type[0] == "wire_bonds":
             dialog = WirebondConfigurator()
             if dialog.exec_():
                 new_config = dialog.get_config()
-                self.wire_bond_config = new_config
+
                 for obj in doc.Objects:
                     if obj.Label.startswith("BondWire"):
                         doc.removeObject(obj.Name)
-                result = WirebondCommand.create_wire_bonds(new_config, self.layer_objects, self.leadframe_config)
-                if not result:
-                    QtWidgets.QMessageBox.warning(None, "Warning", "Failed to create wire bonds.")
-                    return
-                doc, wires = result
-                QtWidgets.QMessageBox.information(None, "Success", "Wire bonds updated successfully.")
+
+                # Add 2D-specific settings
+                new_config['wire_style'] = 'arc'
+                new_config['arc_height'] = new_config.get('loop_height', 0.5)
+
+                manual_bonder.start_bonding_session(new_config)
+
+                #Show instructions
+                QtWidgets.QMessageBox.information(None, "Manual 2D Wire Bonding", 
+                    "Manual 2D Wire Bonding Started!\n\n"
+                    "INSTRUCTIONS:\n"
+                    "1. Click on START point (die pad)\n"
+                    "2. Click on END point (bond finger)\n" 
+                    "3. Repeat for each bond\n"
+                    "4. Use 'Finish Wire Bonding' command to complete\n\n"
+                    "Look for green/red temporary markers!")
             else:
                 QtWidgets.QMessageBox.information(None, "Cancelled", "Wire bonds configuration cancelled.")
                 return

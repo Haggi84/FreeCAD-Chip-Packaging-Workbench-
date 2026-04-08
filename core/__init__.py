@@ -3,7 +3,7 @@ Core module for DI-PASSIONATE FreeCAD Workbench
 Contains fundamental utilities for GDS processing and geometry operations
 """
 
-from .Core_Functionality import (
+from core.Core_Functionality import (
     parse_lyp,
     parse_map,
     get_gds_layer,
@@ -23,7 +23,7 @@ from .Core_Functionality import (
     ILD_SPACING_UM
 )
 
-from .Color import (
+from core.Color import (
     hex_to_rgb,
     hex_to_qcolor
 )

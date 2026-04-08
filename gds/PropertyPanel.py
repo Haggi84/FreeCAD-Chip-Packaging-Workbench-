@@ -70,7 +70,7 @@ class PropertyPanel(QtWidgets.QDockWidget):
         self.hide()
 
         self.doc_observer = self.make_doc_observer()
-        FreeCADGui.addDocumentObserver(self.doc_observer)
+        FreeCAD.addDocumentObserver(self.doc_observer)
 
     def attach_to_document(self, doc):
         self.attached_doc = doc
@@ -78,12 +78,13 @@ class PropertyPanel(QtWidgets.QDockWidget):
     def make_doc_observer(self):
         panel = self
         class Observer:
-            def DeletedDocument(self, doc):
-                if panel.attached_doc and doc == panel.attached_doc:
+            def slotDeletedDocument(self, doc):
+                if panel.attached_doc and doc.Name == panel.attached_doc.Name:
                    try:
                        # Close and delete the property panel
                        panel.setParent(None)
                        panel.close()
+                       FreeCAD.removeDocumentObserver(self)
                    except Exception as e:
                        FreeCAD.Console.PrintError(f"Error closing property panel: {str(e)}\n")
         return Observer()
@@ -178,7 +179,8 @@ class PropertyPanel(QtWidgets.QDockWidget):
         from core import Core_Functionality
 
         """Reopen the layer selection dialog to modify selected layers."""
-        if not self.gds_path or not self.lyp_path or not self.filtered_layers:
+        if not self.gds_path or not self.filtered_layers:
+            FreeCAD.Console.PrintError("Cannot modify layers: Missing file paths or layer data.\n")
             QtWidgets.QMessageBox.critical(None, "Error", "Cannot modify layers: Missing file paths or layer data.")
             return
 
@@ -187,6 +189,7 @@ class PropertyPanel(QtWidgets.QDockWidget):
             selected_layers = dialog.selected_layers
             options = dialog.options
             if not selected_layers:
+                FreeCAD.Console.PrintError("No layers selected.\n")
                 QtWidgets.QMessageBox.warning(None, "Warning", "No layers selected.")
                 return
 
@@ -221,6 +224,7 @@ class PropertyPanel(QtWidgets.QDockWidget):
                 skip_fill_datatype=skip_fill
             )
             if not shapes:
+                FreeCAD.Console.PrintError("No shapes found for the selected layers.\n")
                 QtWidgets.QMessageBox.warning(None, "Warning", "No shapes found for the selected layers.")
                 return
             
@@ -283,7 +287,18 @@ class PropertyPanel(QtWidgets.QDockWidget):
                 pass
 
             doc.recompute()
-            self.update_properties(selected_layers, parse_lyp(self.lyp_path)[1], layer_objects)
+
+            if self.lyp_path:
+                unique_colors = parse_lyp(self.lyp_path)[1]
+
+            else:
+                unique_colors = set()
+                for layer in selected_layers:
+                    frame_color = layer.get("frame-color", "#000000")
+                    fill_color = layer.get("fill-color", "#FFFFFF")
+                    unique_colors.add((frame_color, fill_color))
+                    
+            self.update_properties(selected_layers, unique_colors, layer_objects)
             FreeCADGui.activeDocument().activeView().viewIsometric()
             FreeCADGui.SendMsgToActiveView("ViewFit")
 

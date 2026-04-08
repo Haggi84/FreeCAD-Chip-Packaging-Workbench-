@@ -9,6 +9,8 @@ from wirebond.ManualWireBonding import manual_bonder  # Global instance
 from wirebond.Wirebon_Confi_Support import check_wirebond_prerequisites
 from Get_Path import get_icon
 
+Wire_Bonding_Active = False  # Global flag to track bonding session state
+
 class WirebondCommand:
     def GetResources(self):
         return {
@@ -18,6 +20,8 @@ class WirebondCommand:
         }
 
     def Activated(self):
+        global Wire_Bonding_Active
+
         # Check prerequisites
         can_bond, message = check_wirebond_prerequisites()
         
@@ -39,8 +43,8 @@ class WirebondCommand:
             config = dialog.get_config()
             
             # Add 2D-specific settings
-            config['wire_style'] = 'straight'  # Options: 'straight' or 'arc'
-            config['arc_height'] = 2.0
+            config['wire_style'] = 'arc' 
+            config['arc_height'] = config.get('loop_height', 0.5)
             
             # Ensure we have a document
             doc = FreeCAD.activeDocument()
@@ -49,6 +53,8 @@ class WirebondCommand:
             
             # Start manual bonding using the global instance
             manual_bonder.start_bonding_session(config)
+
+            Wire_Bonding_Active = True
             
             # Show instructions
             QtWidgets.QMessageBox.information(None, "Manual 2D Wire Bonding", 
@@ -75,31 +81,45 @@ class FinishWireBondingCommand:
         return {
             "MenuText": "Finish Wire Bonding",
             "ToolTip": "Finish manual wire bonding session and generate report",
+            "Pixmap": get_icon("Finish_Wire_bonding.png")
         }
 
     def Activated(self):
+        global Wire_Bonding_Active
+        
         bond_count = manual_bonder.finish_session()
+
+        Wire_Bonding_Active = False
+
         QtWidgets.QMessageBox.information(None, "Finished", 
             f"Manual wire bonding completed!\n\n"
             f"Created {bond_count} bond wires.\n"
             f"Check report in Python Console.")
 
     def IsActive(self):
-        return True
+        global Wire_Bonding_Active
+        return Wire_Bonding_Active
 
 class CancelWireBondingCommand:
     def GetResources(self):
         return {
             "MenuText": "Cancel Wire Bonding", 
             "ToolTip": "Cancel current wire bonding session",
+            "Pixmap": get_icon("Cancel_Wire_bonding.png")
         }
 
     def Activated(self):
+        global Wire_Bonding_Active
+
         manual_bonder.cancel_session()
+
+        Wire_Bonding_Active = False
+        
         QtWidgets.QMessageBox.information(None, "Cancelled", "Wire bonding session cancelled.")
 
     def IsActive(self):
-        return True
+        global Wire_Bonding_Active
+        return Wire_Bonding_Active
 
 # Register commands
 FreeCADGui.addCommand('WirebondCommand', WirebondCommand())

@@ -74,7 +74,7 @@ class TransparentHousingConfigurator(QtWidgets.QDialog):
 
         # Material Selection (transparent materials)
         self.material_combo = QtWidgets.QComboBox()
-        self.material_combo.addItems(["Polycarbonate", "Acrylic", "Transparent ABS"])
+        self.material_combo.addItems(["Polycarbonate", "Acrylic", "Transparent ABS", "Black Epoxy"])
         layout.addRow("Material:", self.material_combo)
 
         # Transparency Slider (0 = fully transparent, 100 = fully opaque)
@@ -94,18 +94,89 @@ class TransparentHousingConfigurator(QtWidgets.QDialog):
         self.setLayout(layout)
         self.leadframe_config = None
 
+        self.auto_detect_leadframe()
+
     def open_leadframe_config(self):
         dialog = LeadframeConfigurator()
         if dialog.exec_():
             self.leadframe_config = dialog.get_config()
             self.update_leadframe_display()
 
+    def auto_detect_leadframe(self):
+        import FreeCAD
+        doc = FreeCAD.activeDocument()
+        if not doc:
+            return
+
+        # 1. Find the 3D leadframe objects
+        lf_objects = []
+        for obj in doc.Objects:
+            name = obj.Name.lower()
+            if "leadframeleads" in name or "diepaddle" in name or "bga_substrate" in name:
+                lf_objects.append(obj)
+
+        if not lf_objects:
+            return
+
+        # 2. Detect the exact leadframe type
+        detected_type = "Unknown Leadframe"
+        if any("bga_substrate" in obj.Name.lower() for obj in lf_objects):
+            detected_type = "BGA (Ball Grid Array)"
+        else:
+            # Look at the leads to tell QFP apart from QFN
+            leads_obj = next((obj for obj in lf_objects if "leadframeleads" in obj.Name.lower()), None)
+            if leads_obj and hasattr(leads_obj, "Shape") and not leads_obj.Shape.isNull():
+                # QFP leads bend down, making them tall in the Z-axis (usually > 0.4mm)
+                # QFN leads are flat pads (usually < 0.3mm)
+                if leads_obj.Shape.BoundBox.ZLength > 0.4:
+                    detected_type = "QFP (Quad Flat Package)"
+                else:
+                    detected_type = "QFN (Quad Flat No-lead)"
+
+        # 3. Measure their absolute max dimensions
+        xmin = ymin = zmin = float('inf')
+        xmax = ymax = zmax = float('-inf')
+
+        for obj in lf_objects:
+            if hasattr(obj, "Shape") and not obj.Shape.isNull():
+                bb = obj.Shape.BoundBox
+                xmin = min(xmin, bb.XMin)
+                ymin = min(ymin, bb.YMin)
+                zmin = min(zmin, bb.ZMin)
+                xmax = max(xmax, bb.XMax)
+                ymax = max(ymax, bb.YMax)
+                zmax = max(zmax, bb.ZMax)
+
+        if xmin != float('inf'):
+            length = round(xmax - xmin, 2)
+            width = round(ymax - ymin, 2)
+            thickness = round(zmax - zmin, 2)
+
+            # 4. Auto-fill the configuration dictionary
+            self.leadframe_config = {
+                "frame_type": detected_type,
+                "frame_length": length - 1.0,
+                "frame_width": width - 1.0,
+                "frame_thickness": thickness - 0.6,
+                "material": "Auto-Detected"
+            }
+            
+            # 5. Visual feedback
+            self.leadframe_config_button.setText("Leadframe Auto-Detected!")
+            self.leadframe_config_button.setStyleSheet("background-color: #a8e6cf; color: black; font-weight: bold;")
+            
+            self.update_leadframe_display()
+
     def update_leadframe_display(self):
         if self.leadframe_config:
+            leadframe_length = self.leadframe_config.get("frame_length", 0.0)
+            leadframe_width = self.leadframe_config.get("frame_width", 0.0)
+            leadframe_thickness = self.leadframe_config.get("frame_thickness", 0.0)
+
             self.frame_type_label.setText(self.leadframe_config["frame_type"])
-            self.leadframe_length_label.setText(f"{self.leadframe_config['frame_length']} mm")
-            self.leadframe_width_label.setText(f"{self.leadframe_config['frame_width']} mm")
-            self.leadframe_thickness_label.setText(f"{self.leadframe_config['frame_thickness']} mm")
+            self.leadframe_length_label.setText(f"{leadframe_length:0.2f} mm")
+            self.leadframe_width_label.setText(f"{leadframe_width:0.2f} mm")
+            self.leadframe_thickness_label.setText(f"{leadframe_thickness:0.2f} mm")
 
     def get_config(self):
         if not self.leadframe_config:

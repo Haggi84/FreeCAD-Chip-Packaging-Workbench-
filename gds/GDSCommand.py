@@ -5,58 +5,47 @@ import FreeCAD, FreeCADGui
 root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, root_path)
 
+from Get_Path import get_icon
 from gds.PropertyPanel import PropertyPanel
+from gds.Get_GDS_Path import get_gds_path
 from core import Core_Functionality
 from core.Color import hex_to_rgb
-from Get_Path import get_icon
 
-# ----------------------------------------
 # Main flow: pick files, preview document
-# ----------------------------------------
 
 def load_gds_layers():
-    from ui.LayerSelector import LayerSelector
 
     """
-    Interactively pick GDS + LYP (+ optional MAP), select visible layers present
     in the GDS, create a fast preview document, and return:
         (doc, layer_objects, selected_layers, unique_colors, gds_path, lyp_path)
     """
     try:
-        gds_path, _ = QtWidgets.QFileDialog.getOpenFileName(None, "Select GDS File", "", "GDS Files (*.gds *.GDS)")
-        if not gds_path or not os.path.exists(gds_path):
-            QtWidgets.QMessageBox.critical(None, "Error", "GDS file not found or invalid path.")
-            return None, None, None, None, None, None, None
+        gds_path, lyp_path, layers, unique_colors, map_path, ihp_map = get_gds_path()
 
-        lyp_path, _ = QtWidgets.QFileDialog.getOpenFileName(None, "Select LYP File", "", "LYP Files (*.lyp *.LYP)")
-        if not lyp_path or not os.path.exists(lyp_path):
-            QtWidgets.QMessageBox.critical(None, "Error", "LYP file not found or invalid path.")
-            return None, None, None, None, None, None, None
 
-        # Optional: choose MAP (technology). If cancelled, try default.
-        map_path, _ = QtWidgets.QFileDialog.getOpenFileName(None, "Select IHP MAP (optional)", "", "MAP Files (*.map *.MAP)")
-        if not map_path:
-            FreeCAD.Console.PrintWarning("No MAP file selected, proceeding without layer mapping.\n")
-            map_path = None
-        ihp_map = Core_Functionality.parse_map(map_path) if map_path else {}
-
-        layers_with_colors = Core_Functionality.parse_lyp(lyp_path)
-        if not layers_with_colors:
-            QtWidgets.QMessageBox.critical(None, "Error", "No layers found in the LYP file.")
-            return None, None, None, None, None, None, None
-
-        layers, unique_colors = layers_with_colors
         gds_layers = Core_Functionality.get_gds_layer(gds_path)
         if not gds_layers:
             QtWidgets.QMessageBox.warning(None, "Warning", "No layers found in the GDS file.")
-            return None, None, None, None, None, None, None
+            return None, None, None, None, None, None, None, None, None
+        
+        if not layers:
+            # No LYP file provided or no valid layers found, create default layer list from GDS
+            layers = [{"name": f"Layer_{layer_id}_{datatype}", "layer_id": layer_id, "datatype": datatype, "fill-color": "#CCCCCC", "frame-color": "#000000", "visible": True} for (layer_id, datatype) in sorted(gds_layers)]
+            unique_colors.add(("#000000", "#CCCCCC"))
 
         filtered_layers = [layer for layer in layers if (layer.get("layer_id", 0), layer.get("datatype", 0)) in gds_layers]
+
         if not filtered_layers:
-            QtWidgets.QMessageBox.warning(None, "Warning", "No matching layers found between LYP and GDS files.")
-            return None, None, None, None, None, None, None
+            QtWidgets.QMessageBox.warning(None, "Warning", "No matching layers found between GDS and LYP files.")
+            filtered_layers = [{"name": f"Layer_{lid}_{dt}", "layer_id": lid, "datatype": dt, "fill-color": "#CCCCCC", "frame-color": "#000000", "visible": True} for (lid, dt) in sorted(gds_layers)]
+            unique_colors.add(("#000000", "#CCCCCC"))
         
-        doc = FreeCAD.newDocument("GDSII_Document")
+        if not FreeCAD.activeDocument():
+            doc = FreeCAD.newDocument("GDSII_Document")
+        else:
+            doc = FreeCAD.activeDocument()
+            for obj in doc.Objects:
+                    doc.removeObject(obj.Name)
 
         # Property panel and preview doc
         property_panel = PropertyPanel(FreeCADGui.getMainWindow())
@@ -69,6 +58,8 @@ def load_gds_layers():
         property_panel.filtered_layers = filtered_layers
         property_panel.update_properties([], unique_colors, {})
 
+        from ui.LayerSelector import LayerSelector
+
         # Layer selection (now with 'Import all layers')
         dialog = LayerSelector(filtered_layers, options=property_panel.options)
         if dialog.exec_():
@@ -76,7 +67,7 @@ def load_gds_layers():
             options = dialog.options
             if not selected_layers:
                 QtWidgets.QMessageBox.warning(None, "Warning", "No layers selected.")
-                return None, None, None, None, None, None, None
+                return None, None, None, None, None, None, None, None, None
 
              # save options to panel (needed for modify action)
             property_panel.options = dict(options)
@@ -109,7 +100,7 @@ def load_gds_layers():
             )
             if not shapes:
                 QtWidgets.QMessageBox.warning(None, "Warning", "No shapes found for the selected layers.")
-                return None, None, None, None, None, None, None
+                return None, None, None, None, None, None, None, None, None
 
             layer_objects = {}
             
@@ -159,22 +150,20 @@ def load_gds_layers():
             property_panel.update_properties(selected_layers, unique_colors, layer_objects)
             FreeCADGui.activeDocument().activeView().viewIsometric()
             FreeCADGui.SendMsgToActiveView("ViewFit")
-            # NOTE: return options as 7th element
-            return doc, layer_objects, selected_layers, unique_colors, gds_path, lyp_path, options
+            # NOTE: return options as 9th element
+            return doc, layer_objects, selected_layers, unique_colors, gds_path, lyp_path, map_path, ihp_map, options
 
         else:
             QtWidgets.QMessageBox.information(None, "Cancelled", "Layer selection cancelled.")
-            return None, None, None, None, None, None, None
+            return None, None, None, None, None, None, None, None, None
 
     except Exception as e:
         FreeCAD.Console.PrintError(f"An error in GDSCommand: {str(e)}\n")
+        import traceback
+        FreeCAD.Console.PrintError(traceback.format_exc() + "\n")
         QtWidgets.QMessageBox.critical(None, "Error", f"Failed to process files: {str(e)}")
-        return None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None, None
 
-
-# --------------------------
-# Command registration
-# --------------------------
 class GDSCommand:
     def GetResources(self):
         return {
@@ -186,7 +175,7 @@ class GDSCommand:
     def Activated(self):
         result = load_gds_layers()
         if result and result[0]:  # Check if a document was created
-            doc, layer_objects, selected_layers, unique_colors, gds_path, lyp_path, options = result
+            doc, layer_objects, selected_layers, unique_colors, gds_path, lyp_path, map_path, ihp_map, options = result
             QtWidgets.QMessageBox.information(None, "Success", f"GDSII file loaded with layers displayed successfully.", QtWidgets.QMessageBox.Ok)
 
     def IsActive(self):

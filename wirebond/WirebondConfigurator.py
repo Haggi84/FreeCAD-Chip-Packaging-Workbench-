@@ -16,13 +16,16 @@ class WirebondConfigurator(QtWidgets.QDialog):
         # Wire parameters
         self.loop_height = QtWidgets.QDoubleSpinBox()
         self.loop_height.setRange(0.1, 5.0)
+        self.loop_height.setSingleStep(0.1)
         self.loop_height.setValue(0.5)
         self.loop_height.setSuffix(" mm")
         layout.addWidget(QtWidgets.QLabel("Loop Height:"))
         layout.addWidget(self.loop_height)
 
         self.diameter = QtWidgets.QDoubleSpinBox()
-        self.diameter.setRange(0.01, 0.1)
+        self.diameter.setRange(0.001, 0.1)
+        self.diameter.setDecimals(3)
+        self.diameter.setSingleStep(0.005)
         self.diameter.setValue(0.025)
         self.diameter.setSuffix(" mm")
         layout.addWidget(QtWidgets.QLabel("Wire Diameter:"))
@@ -31,6 +34,7 @@ class WirebondConfigurator(QtWidgets.QDialog):
         # Design rule constraints
         self.min_wire_spacing = QtWidgets.QDoubleSpinBox()
         self.min_wire_spacing.setRange(0.05, 1.0)
+        self.min_wire_spacing.setSingleStep(0.05)
         self.min_wire_spacing.setValue(0.1)
         self.min_wire_spacing.setSuffix(" mm")
         layout.addWidget(QtWidgets.QLabel("Minimum Wire-to-Wire Spacing:"))
@@ -38,6 +42,7 @@ class WirebondConfigurator(QtWidgets.QDialog):
 
         self.min_wire_length = QtWidgets.QDoubleSpinBox()
         self.min_wire_length.setRange(0.1, 10.0)
+        self.min_wire_length.setSingleStep(0.1)
         self.min_wire_length.setValue(0.5)
         self.min_wire_length.setSuffix(" mm")
         layout.addWidget(QtWidgets.QLabel("Minimum Wire Length:"))
@@ -45,6 +50,7 @@ class WirebondConfigurator(QtWidgets.QDialog):
 
         self.max_wire_length = QtWidgets.QDoubleSpinBox()
         self.max_wire_length.setRange(0.5, 20.0)
+        self.max_wire_length.setSingleStep(0.5)
         self.max_wire_length.setValue(5.0)
         self.max_wire_length.setSuffix(" mm")
         layout.addWidget(QtWidgets.QLabel("Maximum Wire Length:"))
@@ -52,6 +58,7 @@ class WirebondConfigurator(QtWidgets.QDialog):
 
         self.bond_finger_margin = QtWidgets.QDoubleSpinBox()
         self.bond_finger_margin.setRange(0.01, 0.5)
+        self.bond_finger_margin.setSingleStep(0.01)
         self.bond_finger_margin.setValue(0.05)
         self.bond_finger_margin.setSuffix(" mm")
         layout.addWidget(QtWidgets.QLabel("Bond Finger Margin:"))

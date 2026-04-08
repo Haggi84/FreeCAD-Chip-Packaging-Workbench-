@@ -33,7 +33,7 @@ class MyWorkbench(FreeCADGui.Workbench):
 
     def Initialize(self):
         try:
-            self.appendToolbar("GDSII Tools", ["GDSCommand", "LeadframeCommand", "HousingCommand", "LayeronLeadframe", "WirebondCommand", "HelpGuideCommand"])
+            self.appendToolbar("GDSII Tools", ["GDSCommand", "LeadframeCommand", "HousingCommand", "LayeronLeadframe", "WirebondCommand", "FinishWireBondingCommand", "CancelWireBondingCommand", "HelpGuideCommand"])
             FreeCAD.Console.PrintMessage("✔ Toolbar initialized\n")
         except Exception as e:
             FreeCAD.Console.PrintError(f"❌ Toolbar initialization failed: {str(e)}\n")

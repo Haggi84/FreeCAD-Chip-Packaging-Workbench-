@@ -1,16 +1,16 @@
 """Wire bonding functionality"""
 
-from .WirebondCommand import (
+from wirebond.WirebondCommand import (
     WirebondCommand,
     FinishWireBondingCommand,
     CancelWireBondingCommand
 )
 
-from .WirebondConfigurator import WirebondConfigurator
+from wirebond.WirebondConfigurator import WirebondConfigurator
 
-from .Wirebon_Confi_Support import check_wirebond_prerequisites
+from wirebond.Wirebon_Confi_Support import check_wirebond_prerequisites
 
-from .ManualWireBonding import ManualWireBonding, manual_bonder
+from wirebond.ManualWireBonding import ManualWireBonding, manual_bonder
 
 __all__ = [
     'WirebondCommand',

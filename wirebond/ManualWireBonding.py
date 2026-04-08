@@ -325,7 +325,7 @@ class ManualWireBonding:
         total_length = 0
         
         for i, bond in enumerate(self.selected_objects):
-            length = bond['die_point'].distanceTo(bond['bond_point'])
+            length = (bond['die_point'] - bond['bond_point']).Length
             total_length += length
             report += f"Bond {i+1}: {bond['die_pad'].Name} → {bond['bond_finger'].Name} | Length: {length:.3f} mm\n"
         

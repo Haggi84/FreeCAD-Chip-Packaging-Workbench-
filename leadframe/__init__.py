@@ -1,18 +1,20 @@
 """Leadframe design and configuration"""
 
-from .LeadframeCommand import (
+from leadframe.LeadframeCommand import (
     LeadframeCommand,
     create_leadframe,
     configure_leadframe
 )
 
-from .LeadframeConfigurator import LeadframeConfigurator
+from leadframe.LeadframeConfigurator import LeadframeConfigurator
 
-from .LayeronLeadframe import (
+from leadframe.LayeronLeadframe import (
     LayeronLeadframe,
     create_layer_on_leadframe,
     configuration
 )
+
+from leadframe.LayeronLeadframeConfigurator import LayeronLeadframeConfigurator
 
 __all__ = [
     'LeadframeCommand',
@@ -21,5 +23,6 @@ __all__ = [
     'LeadframeConfigurator',
     'LayeronLeadframe',
     'create_layer_on_leadframe',
-    'configuration'
+    'configuration',
+    'LayeronLeadframeConfigurator'
 ]
