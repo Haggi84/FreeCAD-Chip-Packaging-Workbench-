@@ -99,6 +99,8 @@ The workbench must be placed inside FreeCAD's **user `Mod` folder** — not the 
 
 If the `Mod` folder does not exist yet, create it.
 
+It's also possible for **Windows** to choose a path like e.g. `C:\Program Files\FreeCAD 1.0\Mod\DI-PASSIONATE\`
+
 ### Clone the repository
 
 **Windows (Command Prompt):**
