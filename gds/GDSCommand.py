@@ -90,6 +90,25 @@ def load_gds_layers():
                 k for k, v in (ihp_map or {}).items()
                 if "FILL" in v.get("edi_types", set())
             }
+            # PIN layers: always flat 2D, never extruded.
+            # A layer is a pure pin-marker layer when its EDI types are exclusively
+            # PIN/LEFPIN with no physical-layer types (NET, SPNET, VIA, DRAWING).
+            # Drawing layers share the PIN/LEFPIN tags but also carry NET/SPNET/VIA,
+            # so they must NOT be flattened.
+            _pin_only  = {"PIN", "LEFPIN"}
+            _non_pin   = {"NET", "SPNET", "VIA", "DRAWING"}
+            flat_layer_keys = {
+                k for k, v in (ihp_map or {}).items()
+                if _pin_only & v.get("edi_types", set())
+                and not (_non_pin & v.get("edi_types", set()))
+            }
+            if not flat_layer_keys:
+                # Fallback without MAP: LYP layer names ending with ".pin"
+                flat_layer_keys = {
+                    (l["layer_id"], l["datatype"])
+                    for l in (selected_layers or [])
+                    if l.get("name", "").lower().endswith(".pin")
+                }
             min_area = 0.0 if match_klayout else 0.0004
             decimate = 0.0 if match_klayout else 0.002
             use_klayout_colors = match_klayout
@@ -188,6 +207,7 @@ def load_gds_layers():
                     skip_fill_datatype=False,
                     fill_as_bbox=True,
                     fill_layer_keys=fill_layer_keys,
+                    flat_layer_keys=flat_layer_keys,
                     stack_mm=stack_mm,
                     contacts_only_3d=contacts_only_3d,
                     contact_keys=contact_keys,
@@ -286,6 +306,16 @@ def load_gds_layers():
             )
 
             property_panel.update_properties(selected_layers, unique_colors, layer_objects)
+
+            # ── pin cell instances (GDS cells named "pin") ─────────────────
+            pin_shape = Core_Functionality.load_pin_cell_shapes(gds_path)
+            if pin_shape:
+                pin_obj = doc.addObject("Part::Feature", "GDS_Pin_Instances")
+                pin_obj.Shape = pin_shape
+                pin_obj.ViewObject.ShapeColor   = (0.20, 0.80, 0.20)
+                pin_obj.ViewObject.LineColor    = (0.10, 0.50, 0.10)
+                pin_obj.ViewObject.Transparency = 30
+                FreeCAD.Console.PrintMessage("GDS pin cell instances imported as flat 2D shapes.\n")
 
             # ── auto PIN pad detection ──────────────────────────────────────
             if auto_pin_contacts:
@@ -407,6 +437,19 @@ def load_gds_with_params(gds_path, lyp_path, map_path, selected_layers, options)
         k for k, v in (ihp_map or {}).items()
         if "FILL" in v.get("edi_types", set())
     }
+    _pin_only = {"PIN", "LEFPIN"}
+    _non_pin  = {"NET", "SPNET", "VIA", "DRAWING"}
+    flat_layer_keys = {
+        k for k, v in (ihp_map or {}).items()
+        if _pin_only & v.get("edi_types", set())
+        and not (_non_pin & v.get("edi_types", set()))
+    }
+    if not flat_layer_keys:
+        flat_layer_keys = {
+            (l["layer_id"], l["datatype"])
+            for l in (filtered or [])
+            if l.get("name", "").lower().endswith(".pin")
+        }
     min_area = 0.0 if match_klayout else 0.0004
     decimate = 0.0 if match_klayout else 0.002
 
@@ -436,7 +479,8 @@ def load_gds_with_params(gds_path, lyp_path, map_path, selected_layers, options)
         transform=None, preview_2d=not extrude_3d, compound_per_layer=True,
         min_area_mm2=min_area, decimate_tol_mm=decimate,
         skip_fill_datatype=False, fill_as_bbox=True,
-        fill_layer_keys=fill_layer_keys, stack_mm=stack_mm,
+        fill_layer_keys=fill_layer_keys, flat_layer_keys=flat_layer_keys,
+        stack_mm=stack_mm,
         contacts_only_3d=contacts_only_3d, contact_keys=contact_keys,
         max_polys_per_layer=max_polys_per_layer,
     )
@@ -501,6 +545,15 @@ def load_gds_with_params(gds_path, lyp_path, map_path, selected_layers, options)
 
     doc.recompute()
     property_panel.update_properties(filtered, unique_colors, layer_objects)
+
+    pin_shape = Core_Functionality.load_pin_cell_shapes(gds_path)
+    if pin_shape:
+        pin_obj = doc.addObject("Part::Feature", "GDS_Pin_Instances")
+        pin_obj.Shape = pin_shape
+        pin_obj.ViewObject.ShapeColor   = (0.20, 0.80, 0.20)
+        pin_obj.ViewObject.LineColor    = (0.10, 0.50, 0.10)
+        pin_obj.ViewObject.Transparency = 30
+        FreeCAD.Console.PrintMessage("GDS pin cell instances imported as flat 2D shapes.\n")
 
     if auto_pin_contacts:
         Core_Functionality.import_pin_pads_as_contacts(

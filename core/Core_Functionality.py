@@ -344,6 +344,7 @@ def load_gds(gds_path,
              contacts_only_3d=False,  # render only contact_keys as full 3D; collapse rest to one body
              contact_keys=None,       # set of (layer_id, datatype) to keep as full geometry
              max_polys_per_layer=None,# cap on polygons per contact layer (sorted largest-area first)
+             flat_layer_keys=None,    # (layer_id, datatype) always rendered as flat 2D face (never extruded)
              progress_callback=None
              ):
     """
@@ -384,6 +385,8 @@ def load_gds(gds_path,
 
         # Filler detection: DT=22 convention + any explicitly declared fill keys
         _fill_keys = set(fill_layer_keys or [])
+        # PIN layers: always rendered as flat 2D faces, never extruded
+        _flat_keys = set(flat_layer_keys or [])
 
         def _is_filler(lyr, dt):
             return dt == 22 or (lyr, dt) in _fill_keys
@@ -589,9 +592,8 @@ def load_gds(gds_path,
 
             # build wire/face
             wire = Part.makePolygon([(x, y, 0.0) for (x, y) in (pts2d + [pts2d[0]])])
-            if preview_2d:
-                # Use a face so ShapeColor is applied in the FreeCAD viewport;
-                # fall back to the bare wire for degenerate polygons.
+            if preview_2d or (_flat_keys and key in _flat_keys):
+                # Flat 2D face: preview mode OR explicitly declared PIN/flat layer.
                 try:
                     by_layer[key].append(Part.Face(wire))
                 except Exception:
@@ -695,6 +697,140 @@ def load_gds(gds_path,
         FreeCAD.Console.PrintError(f"Error loading GDS file {gds_path}: {str(e)}\n")
         return []
     
+
+def _apply_gds_ref_transform(pts, origin, rotation_rad, magnification, x_reflection):
+    """
+    Apply a single GDS reference transform to a list of (x, y) points.
+    GDS transform order: magnify → x_reflect → rotate → translate.
+    """
+    ox  = float(origin[0]) if origin else 0.0
+    oy  = float(origin[1]) if origin else 0.0
+    mag = float(magnification) if magnification else 1.0
+    rot = float(rotation_rad)  if rotation_rad  else 0.0
+    xr  = bool(x_reflection)
+
+    if rot != 0.0:
+        cos_r = math.cos(rot)
+        sin_r = math.sin(rot)
+    else:
+        cos_r, sin_r = 1.0, 0.0
+
+    result = []
+    for p in pts:
+        x = float(p[0]) * mag
+        y = float(p[1]) * mag
+        if xr:
+            y = -y
+        if rot != 0.0:
+            x, y = x * cos_r - y * sin_r, x * sin_r + y * cos_r
+        result.append((x + ox, y + oy))
+    return result
+
+
+def load_pin_cell_shapes(gds_path, transform=None):
+    """
+    Recursively walk the full GDS cell-reference hierarchy and collect all
+    instances of cells named exactly 'pin' (case-insensitive).
+
+    Returns a flat 2D Part.Shape compound (faces at Z=0), or None if nothing found.
+    These shapes are intentionally never extruded.
+
+    The recursive walk is needed because 'pin' cells are often referenced from
+    sub-cells rather than directly from the top-level cell.  Each level of
+    ancestor transforms is tracked and composed to produce correct absolute
+    coordinates.
+    """
+    try:
+        lib = gdstk.read_gds(gds_path)
+        if transform is None:
+            transform = {}
+
+        s        = transform.get("scale", None)
+        if s is None:
+            s = (lib.unit * 1000.0) if hasattr(lib, "unit") and lib.unit else 0.001
+        rot_deg  = float(transform.get("rot_deg",  0.0))
+        mirror_y = bool(transform.get("mirror_y", False))
+        tx       = float(transform.get("tx", 0.0))
+        ty       = float(transform.get("ty", 0.0))
+
+        pin_cell_names = {c.name.lower() for c in lib.cells if c.name.lower() == "pin"}
+        if not pin_cell_names:
+            FreeCAD.Console.PrintMessage("load_pin_cell_shapes: no cell named 'pin' found in GDS library.\n")
+            return None
+
+        top_cells = lib.top_level() or lib.cells
+
+        def collect(cell, ancestor_transforms, visited):
+            """
+            ancestor_transforms: list of (origin, rotation_rad, magnification, x_reflection)
+            built from the outermost ancestor down to the current cell.
+            ref.get_polygons() returns coords in the *current cell's* coordinate space.
+            To reach top-cell space we apply ancestor_transforms in reverse order
+            (innermost → outermost).
+            """
+            if id(cell) in visited:
+                return []
+            visited.add(id(cell))
+
+            raw_pts_list = []
+            for ref in getattr(cell, "references", []):
+                ref_cell = getattr(ref, "cell", None)
+                if ref_cell is None:
+                    continue
+
+                ref_origin  = getattr(ref, "origin",        (0.0, 0.0))
+                ref_rot     = float(getattr(ref, "rotation",       0.0) or 0.0)
+                ref_mag     = float(getattr(ref, "magnification",  1.0) or 1.0)
+                ref_xr      = bool(getattr(ref,  "x_reflection",  False))
+
+                if ref_cell.name.lower() in pin_cell_names:
+                    # ref.get_polygons() gives coords in THIS cell's (parent) space,
+                    # already including ref's own transform.
+                    try:
+                        raw_polys = ref.get_polygons()
+                    except Exception:
+                        continue
+                    for poly in raw_polys:
+                        pts = list(poly.points if hasattr(poly, "points") else poly)
+                        # Walk up through ancestors to reach top-cell space.
+                        for (a_orig, a_rot, a_mag, a_xr) in reversed(ancestor_transforms):
+                            pts = _apply_gds_ref_transform(pts, a_orig, a_rot, a_mag, a_xr)
+                        raw_pts_list.append(pts)
+                else:
+                    new_ancestors = ancestor_transforms + [(ref_origin, ref_rot, ref_mag, ref_xr)]
+                    raw_pts_list.extend(collect(ref_cell, new_ancestors, visited))
+
+            return raw_pts_list
+
+        all_raw = []
+        for cell in top_cells:
+            all_raw.extend(collect(cell, [], set()))
+
+        faces = []
+        for pts in all_raw:
+            pts2d = [_transform_point(p, s, rot_deg, mirror_y, tx, ty) for p in pts]
+            if len(pts2d) < 3:
+                continue
+            try:
+                wire = Part.makePolygon(
+                    [FreeCAD.Vector(x, y, 0.0) for (x, y) in pts2d]
+                    + [FreeCAD.Vector(pts2d[0][0], pts2d[0][1], 0.0)]
+                )
+                faces.append(Part.Face(wire))
+            except Exception:
+                pass
+
+        FreeCAD.Console.PrintMessage(
+            f"load_pin_cell_shapes: found {len(faces)} pin shape(s) across full hierarchy.\n"
+        )
+        if not faces:
+            return None
+        return Part.makeCompound(faces) if len(faces) > 1 else faces[0]
+
+    except Exception as e:
+        FreeCAD.Console.PrintError(f"load_pin_cell_shapes: {e}\n")
+        return None
+
 
 def is_bondable(types: set) -> bool:
     if not types:

@@ -96,6 +96,10 @@ class AboutDialog(QtWidgets.QDialog):
             "github.com/Haggi84/DI-PASSIONATE-FreeCAD",
             url="https://github.com/Haggi84/DI-PASSIONATE-FreeCAD",
         )
+        _row(
+            "Authors",
+            "Haggi84 (github.com/Haggi84) · FreeCAD community contributors",
+        )
 
         layout.addLayout(grid)
 
