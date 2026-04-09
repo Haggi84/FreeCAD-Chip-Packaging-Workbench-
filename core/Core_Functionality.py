@@ -111,6 +111,61 @@ def parse_map(map_path):
 parse_ihp_map = parse_map
 
 # ------------------------------------------------
+# Stackup XML parser (KLayout / IHP format)
+# ------------------------------------------------
+
+def parse_stackup_xml(xml_path):
+    """
+    Parse a stackup XML file (KLayout/IHP ELayers format) and return a lookup dict.
+
+    The dict is keyed both by layer name (upper-case str) and by GDS layer number (int):
+        "METAL1"  -> { 'zmin_um', 'zmax_um', 'thickness_um', 'gds_layer', 'type' }
+        8         -> { same }   (gds_layer == 8 for Metal1 in SG13G2)
+
+    'type' is one of 'conductor', 'via', 'dielectric'.
+    Returns {} on any error so callers can safely fall back to hard-coded defaults.
+    """
+    try:
+        tree = ET.parse(xml_path)
+        root = tree.getroot()
+        result = {}
+        for layer in root.findall(".//Layer"):
+            name      = layer.get("Name", "").strip()
+            ltype     = layer.get("Type", "conductor").lower()
+            try:
+                zmin_um = float(layer.get("Zmin", 0))
+                zmax_um = float(layer.get("Zmax", 0))
+            except ValueError:
+                continue
+            gds_layer_str = layer.get("Layer", "")
+            gds_layer = int(gds_layer_str) if gds_layer_str.isdigit() else -1
+            entry = {
+                "zmin_um":      zmin_um,
+                "zmax_um":      zmax_um,
+                "thickness_um": abs(zmax_um - zmin_um),
+                "gds_layer":    gds_layer,
+                "type":         ltype,
+            }
+            if name:
+                result[name.upper()] = entry
+            if gds_layer >= 0:
+                result[gds_layer] = entry
+        FreeCAD.Console.PrintMessage(
+            f"Loaded stackup XML '{xml_path}': {sum(isinstance(k, str) for k in result)} layers.\n"
+        )
+        return result
+    except FileNotFoundError:
+        FreeCAD.Console.PrintError(f"Stackup XML '{xml_path}' not found.\n")
+        return {}
+    except ET.ParseError as e:
+        FreeCAD.Console.PrintError(f"Stackup XML parse error in '{xml_path}': {e}\n")
+        return {}
+    except Exception as e:
+        FreeCAD.Console.PrintError(f"Failed to load stackup XML '{xml_path}': {e}\n")
+        return {}
+
+
+# ------------------------------------------------
 # Thickness & stacking helpers (simple defaults)
 # ------------------------------------------------
 
@@ -241,6 +296,55 @@ def build_stack_mm(selected_layers, ihp_map, ild_um: float = ILD_SPACING_UM):
                 z_current_um += ild_um
 
     return out
+
+
+def build_stack_mm_from_xml(selected_layers, ihp_map, stackup_data):
+    """
+    Build a per-layer stacking dictionary using absolute Z positions from a
+    parsed stackup XML (see parse_stackup_xml()).
+
+    Returns the same format as build_stack_mm():
+        (layer_id, datatype) -> {'t_mm': float, 'z0_mm': float}
+
+    Lookup order for each layer:
+      1. By GDS layer number (exact match in stackup_data)
+      2. By EDI name from ihp_map (case-insensitive)
+      3. Fall back to build_stack_mm() heuristics for anything not found.
+    """
+    if not stackup_data:
+        return build_stack_mm(selected_layers, ihp_map)
+
+    out = {}
+    fallback_layers = []
+
+    for L in selected_layers:
+        lid = L.get("layer_id", 0)
+        dt  = L.get("datatype",  0)
+        key = (lid, dt)
+
+        # 1. Match by GDS layer number
+        entry = stackup_data.get(lid)
+
+        # 2. Match by EDI name
+        if entry is None:
+            m = ihp_map.get(key)
+            if m:
+                entry = stackup_data.get(m["edi_name"].upper())
+
+        if entry is not None:
+            out[key] = {
+                "t_mm":  entry["thickness_um"] / 1000.0,
+                "z0_mm": entry["zmin_um"]       / 1000.0,
+            }
+        else:
+            fallback_layers.append(L)
+
+    # Layers not present in the XML fall back to rank-based defaults
+    if fallback_layers:
+        out.update(build_stack_mm(fallback_layers, ihp_map))
+
+    return out
+
 
 # ------------------------------------------------
 # GDS inspection & geometry creation helpers

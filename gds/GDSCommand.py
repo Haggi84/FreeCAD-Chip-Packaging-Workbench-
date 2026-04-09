@@ -41,6 +41,15 @@ def load_gds_layers():
             map_path = None
         ihp_map = Core_Functionality.parse_map(map_path) if map_path else {}
 
+        # Optional: choose stackup XML (provides accurate Zmin/Zmax per layer).
+        xml_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            None, "Select Stackup XML (optional)", "", "XML Files (*.xml *.XML)"
+        )
+        if not xml_path:
+            FreeCAD.Console.PrintWarning("No stackup XML selected, using built-in thickness defaults.\n")
+            xml_path = None
+        stackup_data = Core_Functionality.parse_stackup_xml(xml_path) if xml_path else {}
+
         layers_with_colors = Core_Functionality.parse_lyp(lyp_path)
         if not layers_with_colors:
             QtWidgets.QMessageBox.critical(None, "Error", "No layers found in the LYP file.")
@@ -81,6 +90,8 @@ def load_gds_layers():
 
              # save options to panel (needed for modify action)
             property_panel.options = dict(options)
+            # store xml_path so session replay can reconstruct the stackup
+            property_panel.options["xml_path"] = xml_path
 
             # params derived from options
             match_klayout = bool(options.get("match_klayout", True))
@@ -191,7 +202,7 @@ def load_gds_layers():
                 return True
 
             stack_mm = (
-                Core_Functionality.build_stack_mm(selected_layers, ihp_map)
+                Core_Functionality.build_stack_mm_from_xml(selected_layers, ihp_map, stackup_data)
                 if extrude_3d else None
             )
 
@@ -464,8 +475,10 @@ def load_gds_with_params(gds_path, lyp_path, map_path, selected_layers, options)
         )
         contact_keys = top_keys | bottom_keys
 
+    xml_path     = options.get("xml_path", None)
+    stackup_data = Core_Functionality.parse_stackup_xml(xml_path) if xml_path else {}
     stack_mm = (
-        Core_Functionality.build_stack_mm(filtered, ihp_map)
+        Core_Functionality.build_stack_mm_from_xml(filtered, ihp_map, stackup_data)
         if extrude_3d else None
     )
 
