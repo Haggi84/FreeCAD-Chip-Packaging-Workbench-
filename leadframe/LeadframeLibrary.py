@@ -208,21 +208,649 @@ def _place_imported_package(doc, objects_before):
             pass
 
 
+# ---------------------------------------------------------------------------
+# Package-orientation helpers & interactive panel
+# ---------------------------------------------------------------------------
+
+def _find_gds_document() -> Optional[str]:
+    """
+    Return the name of the open GDS document, or None if none is found.
+    Prefers 'GDSII_Document'; falls back to any document whose objects
+    start with 'Layer_' (the GDS import naming convention).
+    """
+    docs = FreeCAD.listDocuments()
+    if "GDSII_Document" in docs:
+        return "GDSII_Document"
+    for name, doc in docs.items():
+        if any(o.Name.startswith("Layer_") for o in doc.Objects):
+            return name
+    return None
+
+
+def _doc_combined_bbox(doc) -> Optional[object]:
+    """
+    Return a FreeCAD BoundBox spanning all valid shape objects in *doc*,
+    or None if the document has no renderable geometry.
+    """
+    bb = None
+    for obj in doc.Objects:
+        try:
+            if hasattr(obj, "Shape") and obj.Shape and not obj.Shape.isNull():
+                candidate = obj.Shape.BoundBox
+                if candidate.isValid():
+                    bb = candidate if bb is None else bb.united(candidate)
+        except Exception:
+            continue
+    return bb
+
+
+def _rotate_pkg_doc(doc, rotation: "FreeCAD.Rotation"):
+    """
+    Apply *rotation* to every shape object in *doc*, pivoting around the
+    combined bounding-box centre.  Afterwards, translate the model so its
+    new ZMin sits exactly at Z = 0 (bottom face on the ground plane).
+    """
+    bb = _doc_combined_bbox(doc)
+    if bb is None:
+        return
+
+    center = bb.Center
+    shape_objs = [
+        o for o in doc.Objects
+        if hasattr(o, "Shape") and o.Shape and not o.Shape.isNull()
+    ]
+    for obj in shape_objs:
+        pl = obj.Placement
+        new_base = rotation.multVec(pl.Base - center) + center
+        new_rot  = rotation.multiply(pl.Rotation)
+        obj.Placement = FreeCAD.Placement(new_base, new_rot)
+
+    doc.recompute()
+
+    # Lift so bottom rests at Z = 0
+    bb2 = _doc_combined_bbox(doc)
+    if bb2 and abs(bb2.ZMin) > 1e-6:
+        dz = -bb2.ZMin
+        for obj in shape_objs:
+            pl = obj.Placement
+            pl.Base = pl.Base + FreeCAD.Vector(0.0, 0.0, dz)
+            obj.Placement = pl
+        doc.recompute()
+
+
+def _compute_rotation_to_z(normal: "FreeCAD.Vector") -> "FreeCAD.Rotation":
+    """
+    Return the FreeCAD Rotation that maps *normal* onto the Z+ axis (0,0,1).
+    Handles the degenerate anti-parallel case with a 180° flip around X.
+    """
+    import math
+    n = FreeCAD.Vector(normal).normalize()
+    z = FreeCAD.Vector(0.0, 0.0, 1.0)
+    dot = max(-1.0, min(1.0, n.dot(z)))
+
+    if abs(dot - 1.0) < 1e-6:          # already Z+
+        return FreeCAD.Rotation()
+    if abs(dot + 1.0) < 1e-6:          # exactly Z- → flip 180° around X
+        return FreeCAD.Rotation(FreeCAD.Vector(1.0, 0.0, 0.0), 180.0)
+
+    axis  = n.cross(z).normalize()
+    angle = math.degrees(math.acos(dot))
+    return FreeCAD.Rotation(axis, angle)
+
+
+_COLOR_FACE_PICK = (1.0, 0.55, 0.0, 1.0)   # orange — picked-face highlight
+
+
+class _FaceSelectionObserver:
+    """
+    Thin FreeCAD Selection observer that fires *callback(obj, sub_name, face)*
+    whenever the user selects a face sub-element in the 3D view.
+    """
+
+    def __init__(self, callback):
+        self._cb = callback
+
+    def addSelection(self, doc_name, obj_name, sub_name, _pnt):
+        if not sub_name.startswith("Face"):
+            return
+        try:
+            doc = FreeCAD.getDocument(doc_name)
+            obj = doc.getObject(obj_name) if doc else None
+            if obj and hasattr(obj, "Shape"):
+                idx = int(sub_name[4:]) - 1     # "Face3" → index 2
+                if 0 <= idx < len(obj.Shape.Faces):
+                    self._cb(obj, sub_name, obj.Shape.Faces[idx])
+        except Exception as exc:
+            FreeCAD.Console.PrintWarning(f"[FaceObserver] {exc}\n")
+
+    def removeSelection(self, *_): pass
+    def setSelection(self, *_):    pass
+    def clearSelection(self, *_):  pass
+
+
+_COLOR_CONTACT_FACE = (0.0, 0.55, 1.0, 1.0)   # blue — die-attach face highlight
+
+
+class _PackageOrientationPanel:
+    """
+    FreeCAD Task-Panel — three-step package setup:
+
+    Step 1  Pick the top face → defines Z+ orientation.
+            Press "Apply Rotation" to align the model.
+    Step 2  (Optional) Pick the die-attach face → the face of the housing
+            that will physically touch the bottom of the GDS chip layout.
+            Only available after rotation is applied.
+    Step 3  Choose destination: merge into the GDS document (aligned so
+            the die-attach face meets the GDS bottom layer) or keep here.
+            Cancel discards the package document.
+    """
+
+    # ── picking modes ─────────────────────────────────────────────────────────
+    _MODE_TOP     = "top"
+    _MODE_CONTACT = "contact"
+
+    def __init__(self, pkg_doc_name: str, gds_doc_name: Optional[str]):
+        self._pkg_doc_name  = pkg_doc_name
+        self._gds_doc_name  = gds_doc_name
+
+        # top-face state
+        self._sel_obj       = None
+        self._sel_sub       = None
+        self._sel_face      = None
+        self._sel_normal    = None
+        self._orig_diffuse  = None          # saved colours for top-face highlight
+        self._rotation_done = False
+
+        # die-attach (contact) face state
+        self._contact_obj_name  = None      # name of the FreeCAD object
+        self._contact_face_idx  = None      # 0-based face index
+        self._contact_face_z    = None      # world-space Z of face centre (pkg_doc)
+        self._contact_diffuse   = None      # saved colours for contact-face highlight
+
+        # current picking mode
+        self._pick_mode = self._MODE_TOP
+
+        self._observer = _FaceSelectionObserver(self._on_face_selected)
+        FreeCADGui.Selection.addObserver(self._observer)
+        self._build_form()
+
+    # ── form ─────────────────────────────────────────────────────────────────
+
+    def _build_form(self):
+        self.form = QtWidgets.QWidget()
+        root = QtWidgets.QVBoxLayout(self.form)
+        root.setSpacing(6)
+
+        # ── Step 1: top face ──────────────────────────────────────────────────
+        root.addWidget(self._section("Step 1 — Pick the top face"))
+        h1 = QtWidgets.QLabel(
+            "Click any face on the package model.\n"
+            "Its outward normal will become the new Z+ direction.\n"
+            "The selected face is highlighted in orange."
+        )
+        h1.setWordWrap(True)
+        root.addWidget(h1)
+
+        self._face_lbl = QtWidgets.QLabel("<i>No face selected yet.</i>")
+        self._face_lbl.setWordWrap(True)
+        root.addWidget(self._face_lbl)
+
+        self._apply_btn = QtWidgets.QPushButton("Apply Rotation")
+        self._apply_btn.setEnabled(False)
+        self._apply_btn.clicked.connect(self._apply_rotation)
+        root.addWidget(self._apply_btn)
+
+        self._rot_lbl = QtWidgets.QLabel("")
+        self._rot_lbl.setWordWrap(True)
+        root.addWidget(self._rot_lbl)
+
+        # ── Step 2: die-attach face (optional) ───────────────────────────────
+        sep1 = QtWidgets.QFrame(); sep1.setFrameShape(QtWidgets.QFrame.HLine)
+        root.addWidget(sep1)
+        root.addWidget(self._section("Step 2 — Pick die-attach face  (optional)"))
+
+        h2 = QtWidgets.QLabel(
+            "Click the face of the housing that should physically touch\n"
+            "the bottom layer of the GDS chip layout when merged.\n"
+            "The selected face is highlighted in blue.\n"
+            "Only available after rotation is applied."
+        )
+        h2.setWordWrap(True)
+        root.addWidget(h2)
+
+        self._contact_lbl = QtWidgets.QLabel("<i>No die-attach face selected.</i>")
+        self._contact_lbl.setWordWrap(True)
+        root.addWidget(self._contact_lbl)
+
+        # Toggle button to enter contact-face picking mode
+        self._pick_contact_btn = QtWidgets.QPushButton("Pick Die-Attach Face")
+        self._pick_contact_btn.setCheckable(True)
+        self._pick_contact_btn.setEnabled(False)
+        self._pick_contact_btn.toggled.connect(self._on_contact_btn_toggled)
+        root.addWidget(self._pick_contact_btn)
+
+        self._clear_contact_btn = QtWidgets.QPushButton("Clear Die-Attach Face")
+        self._clear_contact_btn.setEnabled(False)
+        self._clear_contact_btn.clicked.connect(self._clear_contact_face)
+        root.addWidget(self._clear_contact_btn)
+
+        # ── Step 3: destination ───────────────────────────────────────────────
+        sep2 = QtWidgets.QFrame(); sep2.setFrameShape(QtWidgets.QFrame.HLine)
+        root.addWidget(sep2)
+        root.addWidget(self._section("Step 3 — Choose destination"))
+
+        gds_txt = (
+            f"Merge into GDS document  ({self._gds_doc_name})"
+            if self._gds_doc_name else "Merge into GDS document  (none open)"
+        )
+        self._radio_merge = QtWidgets.QRadioButton(gds_txt)
+        self._radio_merge.setEnabled(bool(self._gds_doc_name))
+        self._radio_keep  = QtWidgets.QRadioButton("Keep model in this document")
+
+        if self._gds_doc_name:
+            self._radio_merge.setChecked(True)
+        else:
+            self._radio_keep.setChecked(True)
+
+        root.addWidget(self._radio_merge)
+        root.addWidget(self._radio_keep)
+        root.addStretch()
+
+    @staticmethod
+    def _section(text: str) -> QtWidgets.QLabel:
+        return QtWidgets.QLabel(f"<b>{text}</b>")
+
+    def getStandardButtons(self):
+        return int(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+
+    # ── picking mode toggle ───────────────────────────────────────────────────
+
+    def _on_contact_btn_toggled(self, checked: bool):
+        if checked:
+            self._pick_mode = self._MODE_CONTACT
+            self._pick_contact_btn.setText("Picking… click a face on the model")
+        else:
+            self._pick_mode = self._MODE_TOP
+            self._pick_contact_btn.setText("Pick Die-Attach Face")
+
+    def _clear_contact_face(self):
+        self._restore_contact_highlight()
+        self._contact_obj_name = None
+        self._contact_face_idx = None
+        self._contact_face_z   = None
+        self._contact_lbl.setText("<i>No die-attach face selected.</i>")
+        self._clear_contact_btn.setEnabled(False)
+
+    # ── unified face-selection callback ──────────────────────────────────────
+
+    def _on_face_selected(self, obj, sub_name: str, face):
+        if self._pick_mode == self._MODE_CONTACT:
+            self._receive_contact_face(obj, sub_name, face)
+        else:
+            self._receive_top_face(obj, sub_name, face)
+
+    # ── top-face branch ───────────────────────────────────────────────────────
+
+    def _receive_top_face(self, obj, sub_name: str, face):
+        self._restore_highlight()
+
+        self._sel_obj  = obj
+        self._sel_sub  = sub_name
+        self._sel_face = face
+        try:
+            pr = face.ParameterRange
+            u  = (pr[0] + pr[1]) / 2.0
+            v  = (pr[2] + pr[3]) / 2.0
+            self._sel_normal = face.normalAt(u, v)
+        except Exception:
+            try:
+                self._sel_normal = face.normalAt(0.0, 0.0)
+            except Exception:
+                self._sel_normal = FreeCAD.Vector(0.0, 0.0, 1.0)
+
+        n = self._sel_normal
+        self._face_lbl.setText(
+            f"<b>Face:</b> {sub_name}  ({obj.Label})<br>"
+            f"<b>Normal:</b> ({n.x:.4f},&nbsp;{n.y:.4f},&nbsp;{n.z:.4f})"
+        )
+        self._apply_btn.setEnabled(True)
+        self._rotation_done = False
+        self._apply_btn.setText("Apply Rotation")
+        self._rot_lbl.setText("")
+        self._highlight_face(obj, sub_name)
+
+    def _highlight_face(self, obj, sub_name: str):
+        """Highlight top-face selection in orange."""
+        try:
+            gui_doc = FreeCADGui.getDocument(self._pkg_doc_name)
+            if not gui_doc:
+                return
+            vobj = gui_doc.getObject(obj.Name)
+            n    = len(obj.Shape.Faces)
+            dc   = list(getattr(vobj, "DiffuseColor", []))
+            if len(dc) != n:
+                base = dc[0] if dc else (0.8, 0.8, 0.8, 1.0)
+                dc   = [base] * n
+            self._orig_diffuse = list(dc)
+            idx = int(sub_name[4:]) - 1
+            if 0 <= idx < n:
+                dc[idx] = _COLOR_FACE_PICK
+            vobj.DiffuseColor = dc
+        except Exception as exc:
+            FreeCAD.Console.PrintWarning(f"[PackageOrientation] top highlight: {exc}\n")
+
+    def _restore_highlight(self):
+        try:
+            if self._sel_obj and self._orig_diffuse is not None:
+                gui_doc = FreeCADGui.getDocument(self._pkg_doc_name)
+                if gui_doc:
+                    vobj = gui_doc.getObject(self._sel_obj.Name)
+                    if vobj and hasattr(vobj, "DiffuseColor"):
+                        vobj.DiffuseColor = self._orig_diffuse
+        except Exception:
+            pass
+
+    # ── contact-face branch ───────────────────────────────────────────────────
+
+    def _receive_contact_face(self, obj, sub_name: str, face):
+        """Store the die-attach face and exit contact-picking mode."""
+        self._restore_contact_highlight()
+
+        idx = int(sub_name[4:]) - 1
+        self._contact_obj_name = obj.Name
+        self._contact_face_idx = idx
+
+        # World-space Z of the face centre (BoundBox is world-space after recompute).
+        # Use the face's own CenterOfMass which matches the BoundBox coordinate system.
+        self._contact_face_z = face.CenterOfMass.z
+
+        self._contact_lbl.setText(
+            f"<b>Face:</b> {sub_name}  ({obj.Label})<br>"
+            f"<b>Z position:</b> {self._contact_face_z:.4f} mm  "
+            f"<i>(world space in package doc)</i>"
+        )
+
+        # Highlight in blue
+        self._highlight_contact_face(obj, sub_name)
+
+        self._clear_contact_btn.setEnabled(True)
+
+        # Auto-exit contact-picking mode
+        self._pick_contact_btn.setChecked(False)   # triggers _on_contact_btn_toggled
+
+        FreeCAD.Console.PrintMessage(
+            f"[PackageOrientation] Die-attach face: {sub_name} on '{obj.Label}', "
+            f"Z = {self._contact_face_z:.4f} mm\n"
+        )
+
+    def _highlight_contact_face(self, obj, sub_name: str):
+        """Highlight contact-face selection in blue."""
+        try:
+            gui_doc = FreeCADGui.getDocument(self._pkg_doc_name)
+            if not gui_doc:
+                return
+            vobj = gui_doc.getObject(obj.Name)
+            n    = len(obj.Shape.Faces)
+            dc   = list(getattr(vobj, "DiffuseColor", []))
+            if len(dc) != n:
+                base = dc[0] if dc else (0.8, 0.8, 0.8, 1.0)
+                dc   = [base] * n
+            self._contact_diffuse = list(dc)
+            idx = int(sub_name[4:]) - 1
+            if 0 <= idx < n:
+                dc[idx] = _COLOR_CONTACT_FACE
+            vobj.DiffuseColor = dc
+        except Exception as exc:
+            FreeCAD.Console.PrintWarning(f"[PackageOrientation] contact highlight: {exc}\n")
+
+    def _restore_contact_highlight(self):
+        try:
+            if self._contact_obj_name and self._contact_diffuse is not None:
+                pkg_doc = FreeCAD.getDocument(self._pkg_doc_name)
+                gui_doc = FreeCADGui.getDocument(self._pkg_doc_name)
+                if pkg_doc and gui_doc:
+                    obj  = pkg_doc.getObject(self._contact_obj_name)
+                    vobj = gui_doc.getObject(self._contact_obj_name) if obj else None
+                    if vobj and hasattr(vobj, "DiffuseColor"):
+                        vobj.DiffuseColor = self._contact_diffuse
+        except Exception:
+            pass
+
+    # ── rotation ──────────────────────────────────────────────────────────────
+
+    def _apply_rotation(self):
+        if self._sel_normal is None:
+            return
+        doc = FreeCAD.getDocument(self._pkg_doc_name)
+        if not doc:
+            return
+
+        rot = _compute_rotation_to_z(self._sel_normal)
+        _rotate_pkg_doc(doc, rot)
+
+        n = self._sel_normal
+        self._rotation_done = True
+        self._orig_diffuse  = None      # shape changed; old colour data invalid
+        self._apply_btn.setText("Rotation Applied ✓")
+        self._apply_btn.setEnabled(False)
+        self._rot_lbl.setText(
+            f"Rotated:  ({n.x:.3f}, {n.y:.3f}, {n.z:.3f})  →  Z+"
+        )
+
+        # Enable die-attach face picking now that rotation is finalised
+        self._pick_contact_btn.setEnabled(True)
+
+        try:
+            FreeCADGui.setActiveDocument(self._pkg_doc_name)
+            FreeCADGui.activeDocument().activeView().fitAll()
+        except Exception:
+            pass
+
+    # ── ok / cancel ───────────────────────────────────────────────────────────
+
+    def accept(self):
+        self._cleanup()
+        if self._radio_merge.isChecked() and self._gds_doc_name:
+            self._merge_into_gds()
+        else:
+            self._keep_in_pkg_doc()
+
+    def reject(self):
+        self._cleanup()
+        try:
+            FreeCAD.closeDocument(self._pkg_doc_name)
+            FreeCAD.Console.PrintMessage(
+                "[PackageOrientation] Cancelled — package document discarded.\n"
+            )
+        except Exception:
+            pass
+
+    def _cleanup(self):
+        try:
+            FreeCADGui.Selection.removeObserver(self._observer)
+        except Exception:
+            pass
+        self._restore_highlight()
+        self._restore_contact_highlight()
+
+    # ── destination ───────────────────────────────────────────────────────────
+
+    def _merge_into_gds(self):
+        pkg_doc = FreeCAD.getDocument(self._pkg_doc_name)
+        gds_doc = FreeCAD.getDocument(self._gds_doc_name)
+        if not pkg_doc or not gds_doc:
+            FreeCAD.Console.PrintError(
+                "[PackageOrientation] Cannot merge: document(s) not found.\n"
+            )
+            return
+
+        # XY target = centre of existing GDS geometry
+        gds_bb = _doc_combined_bbox(gds_doc)
+        if gds_bb:
+            target_cx = (gds_bb.XMin + gds_bb.XMax) / 2.0
+            target_cy = (gds_bb.YMin + gds_bb.YMax) / 2.0
+            gds_zmin  = gds_bb.ZMin
+        else:
+            target_cx = target_cy = gds_zmin = 0.0
+
+        pkg_bb = _doc_combined_bbox(pkg_doc)
+        if pkg_bb:
+            pkg_cx   = (pkg_bb.XMin + pkg_bb.XMax) / 2.0
+            pkg_cy   = (pkg_bb.YMin + pkg_bb.YMax) / 2.0
+            pkg_zmin = pkg_bb.ZMin
+        else:
+            pkg_cx = pkg_cy = pkg_zmin = 0.0
+
+        # ── Z alignment ───────────────────────────────────────────────────────
+        # If a die-attach face was chosen: align it with the GDS bottom layer.
+        # The contact face Z was recorded in the pkg_doc world space after
+        # rotation; gds_zmin is the bottom of all GDS layer geometry.
+        # We want:  contact_face_z + dz  =  gds_zmin
+        #           → dz = gds_zmin - contact_face_z
+        #
+        # Fallback (no contact face): seat the package bottom at Z = 0.
+        if self._contact_face_z is not None:
+            dz = gds_zmin - self._contact_face_z
+            FreeCAD.Console.PrintMessage(
+                f"[PackageOrientation] Die-attach alignment: "
+                f"contact face Z = {self._contact_face_z:.4f} mm  →  "
+                f"GDS ZMin = {gds_zmin:.4f} mm  (dz = {dz:.4f} mm)\n"
+            )
+        else:
+            dz = -pkg_zmin          # seat package bottom at Z = 0
+            FreeCAD.Console.PrintMessage(
+                f"[PackageOrientation] No die-attach face — "
+                f"seating package bottom at Z = 0  (dz = {dz:.4f} mm)\n"
+            )
+
+        offset = FreeCAD.Vector(target_cx - pkg_cx, target_cy - pkg_cy, dz)
+
+        copied = 0
+        for obj in pkg_doc.Objects:
+            try:
+                if not (hasattr(obj, "Shape") and obj.Shape and not obj.Shape.isNull()):
+                    continue
+                new_obj = gds_doc.addObject("Part::Feature", obj.Label)
+                new_obj.Shape = obj.Shape.copy()
+                pl = obj.Placement.copy()
+                pl.Base = pl.Base + offset
+                new_obj.Placement = pl
+                new_obj.Label = obj.Label
+                try:
+                    new_obj.ViewObject.ShapeColor = obj.ViewObject.ShapeColor
+                    new_obj.ViewObject.LineColor  = obj.ViewObject.LineColor
+                except Exception:
+                    pass
+                copied += 1
+            except Exception as exc:
+                FreeCAD.Console.PrintWarning(
+                    f"[PackageOrientation] skipping '{obj.Label}': {exc}\n"
+                )
+
+        gds_doc.recompute()
+        FreeCAD.Console.PrintMessage(
+            f"[PackageOrientation] {copied} object(s) merged into "
+            f"'{self._gds_doc_name}', "
+            f"XY centre ({target_cx:.3f}, {target_cy:.3f}) mm.\n"
+        )
+
+        try:
+            FreeCADGui.setActiveDocument(self._gds_doc_name)
+            view = FreeCADGui.activeDocument().activeView()
+            view.viewIsometric()
+            view.fitAll()
+        except Exception:
+            pass
+
+        try:
+            FreeCAD.closeDocument(self._pkg_doc_name)
+        except Exception:
+            pass
+
+    def _keep_in_pkg_doc(self):
+        try:
+            FreeCADGui.setActiveDocument(self._pkg_doc_name)
+            view = FreeCADGui.activeDocument().activeView()
+            view.viewIsometric()
+            view.fitAll()
+        except Exception:
+            pass
+        FreeCAD.Console.PrintMessage(
+            f"[PackageOrientation] Package kept in '{self._pkg_doc_name}'.\n"
+        )
+
+
+# ---------------------------------------------------------------------------
+# STEP / IGES import into a dedicated package document
+# ---------------------------------------------------------------------------
+
 def _import_into_freecad(file_path: str):
-    doc = FreeCAD.activeDocument()
-    if not doc:
-        doc = FreeCAD.newDocument("LeadframeLibrary")
+    """
+    Import *file_path* into a brand-new FreeCAD document, then launch the
+    interactive _PackageOrientationPanel so the user can:
 
-    objects_before = set(doc.Objects)
-    ImportGui.insert(file_path, doc.Name)
-    doc.recompute()
+      1. Click a face to define the top (Z+) surface.
+      2. Apply the rotation that aligns that face normal with Z+.
+      3. Choose to merge the result into an existing GDS document, or keep
+         the package model in its own document.
+    """
+    entry_name   = os.path.splitext(os.path.basename(file_path))[0]
+    pkg_label    = f"Pkg_{entry_name}"
 
-    _place_imported_package(doc, objects_before)
-    doc.recompute()
+    # Always create a fresh, dedicated document for this package.
+    pkg_doc      = FreeCAD.newDocument(pkg_label)
+    pkg_doc_name = pkg_doc.Name      # FreeCAD may append a number on collision
 
-    if FreeCADGui.activeDocument():
-        FreeCADGui.activeDocument().activeView().viewIsometric()
-        FreeCADGui.SendMsgToActiveView("ViewFit")
+    docs_before  = set(FreeCAD.listDocuments().keys())
+    ImportGui.insert(file_path, pkg_doc_name)
+
+    # Some importers open a new document instead of inserting into the named one.
+    # Detect stray documents and copy their shapes into pkg_doc.
+    docs_after    = set(FreeCAD.listDocuments().keys())
+    stray_names   = docs_after - docs_before - {pkg_doc_name}
+    for nd_name in stray_names:
+        try:
+            nd = FreeCAD.getDocument(nd_name)
+            for obj in list(nd.Objects):
+                if hasattr(obj, "Shape") and obj.Shape and not obj.Shape.isNull():
+                    new_obj       = pkg_doc.addObject("Part::Feature", obj.Label)
+                    new_obj.Shape = obj.Shape.copy()
+                    new_obj.Label = obj.Label
+            FreeCAD.closeDocument(nd_name)
+            FreeCAD.Console.PrintMessage(
+                f"[LeadframeLibrary] Merged stray document '{nd_name}' "
+                f"into '{pkg_doc_name}'.\n"
+            )
+        except Exception as exc:
+            FreeCAD.Console.PrintWarning(
+                f"[LeadframeLibrary] Could not merge '{nd_name}': {exc}\n"
+            )
+
+    pkg_doc = FreeCAD.getDocument(pkg_doc_name)
+    pkg_doc.recompute()
+
+    for obj in pkg_doc.Objects:
+        try:
+            obj.ViewObject.Visibility = True
+        except Exception:
+            pass
+
+    try:
+        FreeCADGui.setActiveDocument(pkg_doc_name)
+        view = FreeCADGui.activeDocument().activeView()
+        view.viewIsometric()
+        view.fitAll()
+    except Exception:
+        pass
+
+    # Find any open GDS document so the panel can offer the merge option.
+    gds_doc_name = _find_gds_document()
+
+    # Open the orientation task-panel (non-blocking).
+    if FreeCADGui.Control.activeDialog():
+        FreeCADGui.Control.closeDialog()
+    panel = _PackageOrientationPanel(pkg_doc_name, gds_doc_name)
+    FreeCADGui.Control.showDialog(panel)
 
 
 # ---------------------------------------------------------------------------
@@ -548,17 +1176,13 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
             self.status_label.setText(f"Importing '{entry.name}'…")
             QtWidgets.QApplication.processEvents()
             _import_into_freecad(local_path)
-            self.status_label.setText(f"Imported '{entry.name}' — centred at origin.")
-            QtWidgets.QMessageBox.information(
-                self,
-                "Imported",
-                f"'{entry.name}' was imported and centred at the origin.\n\nLocal copy:\n{local_path}",
-            )
+            # _import_into_freecad launched the orientation task-panel.
+            # Close the library dialog so the panel has the user's full focus.
+            self.accept()
         except Exception as exc:
             self.status_label.setText("Import failed.")
-            QtWidgets.QMessageBox.critical(self, "Import failed", str(exc))
-        finally:
             self.import_button.setEnabled(True)
+            QtWidgets.QMessageBox.critical(self, "Import failed", str(exc))
 
     def _on_download_failed(self, msg: str):
         QtWidgets.QApplication.restoreOverrideCursor()
