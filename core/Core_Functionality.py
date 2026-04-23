@@ -1281,7 +1281,13 @@ def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
 
                         if pad_found is not None:
                             used_pads.add(pad_found)
-                            pad_pairs.append((pad_index[pad_found][0], (cx_mm, cy_mm)))
+                            pts_pad, (xlo, ylo, xhi, yhi) = pad_index[pad_found]
+                            # Use center of DT=0 pad polygon, not the DT=2 marker position.
+                            # DT=2 markers are often placed at the edge/corner of a pad,
+                            # so using the pad's bounding-box centre gives "middle of pad".
+                            pad_cx_mm = ((xlo + xhi) / 2.0) * scale
+                            pad_cy_mm = ((ylo + yhi) / 2.0) * scale
+                            pad_pairs.append((pts_pad, (pad_cx_mm, pad_cy_mm)))
                         else:
                             # No large DT=0 pad found — fall back to DT=2 shape itself
                             pad_pairs.append((pts2, (cx_mm, cy_mm)))
