@@ -86,14 +86,29 @@ def create_bond_wire_3d(start: Base.Vector, end: Base.Vector, config: dict) -> P
         bspline.interpolate([start, q1, peak, q2, end])
         spine_edge = bspline.toShape()
         spine_wire = Part.Wire([spine_edge])
-        tangent    = spine_edge.tangentAt(spine_edge.FirstParameter)
-        circle     = Part.makeCircle(radius, start, tangent)
-        profile    = Part.Wire([Part.Edge(circle)])
-        pipe       = spine_wire.makePipe(profile)
+
+        t_start = spine_edge.tangentAt(spine_edge.FirstParameter).normalize()
+        circle_s = Part.makeCircle(radius, start, t_start)
+        profile  = Part.Wire([Part.Edge(circle_s)])
+        pipe     = spine_wire.makePipe(profile)
+
+        # Close the open-ended pipe with flat end caps to form a true solid.
         try:
-            return Part.makeSolid(Part.Shell(pipe.Faces))
-        except Exception:
-            return pipe
+            cap_start = Part.Face(profile)
+
+            t_end    = spine_edge.tangentAt(spine_edge.LastParameter).normalize()
+            circle_e = Part.makeCircle(radius, end, t_end)
+            cap_end  = Part.Face(Part.Wire([Part.Edge(circle_e)]))
+
+            shell = Part.makeShell(list(pipe.Faces) + [cap_start, cap_end])
+            solid = Part.makeSolid(shell)
+            if solid.isValid():
+                return solid
+        except Exception as cap_err:
+            FreeCAD.Console.PrintWarning(f"Wire end-cap failed ({cap_err}); using shell.\n")
+
+        # Fallback: return the open pipe shell
+        return pipe
     except Exception as e:
         FreeCAD.Console.PrintWarning(f"3-D wire sweep failed ({e}); using line.\n")
         return Part.makeLine(start, end)

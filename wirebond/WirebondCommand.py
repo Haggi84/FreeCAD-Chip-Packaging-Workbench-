@@ -12,6 +12,7 @@ from wirebond.WirebondConfigurator import WirebondConfigurator
 from wirebond.ManualWireBonding import manual_bonder  # Global instance
 from wirebond.Wirebon_Confi_Support import check_wirebond_prerequisites
 from wirebond.ContactPointTool import DefineContactPointsCommand
+from wirebond.WireBumpConfigurator import WireBumpConfiguratorCommand
 from Get_Path import get_icon
 from session.SessionManager import session_manager
 
@@ -152,3 +153,4 @@ FreeCADGui.addCommand("FinishWireBondingCommand", FinishWireBondingCommand())
 FreeCADGui.addCommand("CancelWireBondingCommand", CancelWireBondingCommand())
 FreeCADGui.addCommand("DefineContactPointsCommand", DefineContactPointsCommand())
 FreeCADGui.addCommand("ShowContactPointPanelCommand", ShowContactPointPanelCommand())
+FreeCADGui.addCommand("WireBumpConfiguratorCommand", WireBumpConfiguratorCommand())

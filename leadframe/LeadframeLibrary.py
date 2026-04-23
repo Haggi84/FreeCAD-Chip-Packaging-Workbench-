@@ -98,25 +98,65 @@ def fetch_leadframe_entries(library_url: str = DEFAULT_LIBRARY_URL) -> List[Lead
     return entries
 
 
-def _fetch_package_photos(package_page_url: str) -> List[str]:
+def _fetch_package_detail(package_page_url: str):
     """
-    Fetch a per-package detail page and return absolute URLs of product photos.
+    Fetch a per-package detail page and return ``(photos, info_text)``.
 
-    Photos are <img> elements whose src contains the package name (as opposed to
-    generic site chrome like arrows, icons, etc.).  The package name is derived
-    from the page URL stem (e.g. 'M-QFN8W.65' from 'M-QFN8W.65.html').
+    *photos* is a list of absolute image URLs (product photos only).
+    *info_text* is a plain-text summary of any spec table rows, headings, and
+    description paragraphs found on the page — ready to display in the preview
+    panel.
+
+    Both parts are derived from a single HTTP request so the page is only
+    downloaded once per selection.
     """
+    import html as _html_mod
+
     pkg_stem = os.path.splitext(os.path.basename(package_page_url.split("?")[0]))[0]
 
     with urllib.request.urlopen(package_page_url, timeout=15) as resp:
-        html = resp.read().decode("utf-8", errors="ignore")
+        raw_html = resp.read().decode("utf-8", errors="ignore")
 
-    srcs = re.findall(r'<img[^>]+src="([^"]+)"', html, re.IGNORECASE)
+    # ── photos ───────────────────────────────────────────────────────────────
+    srcs = re.findall(r'<img[^>]+src="([^"]+)"', raw_html, re.IGNORECASE)
     photos: List[str] = []
     for src in srcs:
         if pkg_stem.lower() in src.lower() and any(src.lower().endswith(e) for e in IMAGE_EXTS):
             photos.append(urljoin(package_page_url, src))
-    return photos
+
+    # ── text info ─────────────────────────────────────────────────────────────
+    def _strip(fragment: str) -> str:
+        text = re.sub(r"<[^>]+>", "", fragment)
+        text = _html_mod.unescape(text)
+        return re.sub(r"[ \t]+", " ", text).strip()
+
+    lines: List[str] = []
+
+    # Headings (h1–h3)
+    for m in re.finditer(r"<h[1-3][^>]*>(.*?)</h[1-3]>", raw_html, re.IGNORECASE | re.DOTALL):
+        t = _strip(m.group(1))
+        if t:
+            lines.append(t)
+
+    # Description paragraphs
+    for m in re.finditer(r"<p[^>]*>(.*?)</p>", raw_html, re.IGNORECASE | re.DOTALL):
+        t = _strip(m.group(1))
+        if len(t) > 15:          # skip tiny/empty paragraphs
+            lines.append(t)
+
+    # Spec table rows that look like key–value pairs (exactly 2 cells)
+    for row_m in re.finditer(r"<tr\b[^>]*>(.*?)</tr>", raw_html, re.IGNORECASE | re.DOTALL):
+        cells = re.findall(
+            r"<t[dh][^>]*>(.*?)</t[dh]>", row_m.group(1), re.IGNORECASE | re.DOTALL
+        )
+        if len(cells) == 2:
+            key = _strip(cells[0])
+            val = _strip(cells[1])
+            if key and val:
+                lines.append(f"{key}: {val}")
+
+    info_text = "\n".join(lines)
+    return photos, info_text
 
 
 _DOWNLOAD_TIMEOUT_S = 30
@@ -583,6 +623,14 @@ class _PackageOrientationPanel:
             f"Z = {self._contact_face_z:.4f} mm\n"
         )
 
+        # Automatically close the panel and merge once the die-attach face is picked.
+        QtCore.QTimer.singleShot(100, self._auto_accept)
+
+    def _auto_accept(self):
+        """Called automatically after the die-attach face is picked; merges and closes."""
+        self.accept()
+        FreeCADGui.Control.closeDialog()
+
     def _highlight_contact_face(self, obj, sub_name: str):
         """Highlight contact-face selection in blue."""
         try:
@@ -676,11 +724,19 @@ class _PackageOrientationPanel:
     # ── destination ───────────────────────────────────────────────────────────
 
     def _merge_into_gds(self):
-        pkg_doc = FreeCAD.getDocument(self._pkg_doc_name)
-        gds_doc = FreeCAD.getDocument(self._gds_doc_name)
+        try:
+            pkg_doc = FreeCAD.getDocument(self._pkg_doc_name)
+        except Exception:
+            pkg_doc = None
+        try:
+            gds_doc = FreeCAD.getDocument(self._gds_doc_name)
+        except Exception:
+            gds_doc = None
         if not pkg_doc or not gds_doc:
             FreeCAD.Console.PrintError(
-                "[PackageOrientation] Cannot merge: document(s) not found.\n"
+                f"[PackageOrientation] Cannot merge: "
+                f"pkg_doc='{self._pkg_doc_name}' found={pkg_doc is not None}, "
+                f"gds_doc='{self._gds_doc_name}' found={gds_doc is not None}.\n"
             )
             return
 
@@ -874,11 +930,14 @@ class _FetchWorker(QtCore.QThread):
 
 class _PreviewWorker(QtCore.QThread):
     """
-    Fetches the package detail page, picks the best product photo, then
-    downloads it.  Emits either loaded(bytes) or failed(str).
+    Fetches the package detail page in one request, then:
+    - downloads the best product photo  → emits loaded(bytes)
+    - extracts textual spec info        → emits text_loaded(str)
+    On any error emits failed(str).
     """
-    loaded = QtCore.Signal(bytes)
-    failed = QtCore.Signal(str)
+    loaded      = QtCore.Signal(bytes)
+    text_loaded = QtCore.Signal(str)
+    failed      = QtCore.Signal(str)
 
     def __init__(self, entry: LeadframeEntry, parent=None):
         super().__init__(parent)
@@ -890,7 +949,12 @@ class _PreviewWorker(QtCore.QThread):
                 self.failed.emit("No package detail page available.")
                 return
 
-            photos = _fetch_package_photos(self._entry.package_page_url)
+            photos, info_text = _fetch_package_detail(self._entry.package_page_url)
+
+            # Always emit text info (even when no photo was found)
+            if info_text:
+                self.text_loaded.emit(info_text)
+
             if not photos:
                 self.failed.emit("No product photos found on the package page.")
                 return
@@ -933,11 +997,12 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Leadframe Online Library")
-        self.resize(860, 540)
+        self.resize(900, 620)
 
         self.entries: List[LeadframeEntry] = []
         self._all_entries: List[LeadframeEntry] = []
         self._preview_cache: dict = {}   # package_page_url → QPixmap (or None)
+        self._text_cache: dict = {}      # package_page_url → str (or "")
         self._preview_worker: Optional[_PreviewWorker] = None
         self._fetch_worker: Optional[_FetchWorker] = None
         self._download_worker: Optional[_DownloadWorker] = None
@@ -969,9 +1034,18 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
         # --- preview pane ---
         self.preview_label = QtWidgets.QLabel("Select an entry to preview.")
         self.preview_label.setAlignment(QtCore.Qt.AlignCenter)
-        self.preview_label.setMinimumSize(320, 240)
+        self.preview_label.setMinimumSize(320, 200)
         self.preview_label.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.preview_label.setScaledContents(False)
+
+        # Textual info extracted from the package detail page
+        self._info_browser = QtWidgets.QTextBrowser()
+        self._info_browser.setReadOnly(True)
+        self._info_browser.setMinimumHeight(120)
+        self._info_browser.setMaximumHeight(200)
+        self._info_browser.setFrameShape(QtWidgets.QFrame.StyledPanel)
+        self._info_browser.setPlaceholderText("Package information will appear here.")
+        self._info_browser.setOpenExternalLinks(False)
 
         self.status_label = QtWidgets.QLabel("Fetching leadframe library…")
         self.status_label.setWordWrap(True)
@@ -988,6 +1062,7 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
 
         side_layout = QtWidgets.QVBoxLayout()
         side_layout.addWidget(self.preview_label)
+        side_layout.addWidget(self._info_browser)
         side_layout.addWidget(self.status_label)
         side_layout.addStretch()
         side_layout.addWidget(self.import_button)
@@ -1011,6 +1086,8 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
         self._all_entries = []
         self.entries = []
         self._preview_cache.clear()
+        self._text_cache.clear()
+        self._info_browser.clear()
 
         self._fetch_worker = _FetchWorker(DEFAULT_LIBRARY_URL, parent=self)
         self._fetch_worker.finished.connect(self._on_fetch_done)
@@ -1075,6 +1152,7 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
         if not current:
             self.preview_label.setText("Select an entry to preview.")
             self.preview_label.setPixmap(QtGui.QPixmap())
+            self._info_browser.clear()
             self.import_button.setEnabled(False)
             return
         entry: LeadframeEntry = current.data(QtCore.Qt.UserRole)
@@ -1086,6 +1164,7 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
         if not pkg_url:
             self.preview_label.setPixmap(QtGui.QPixmap())
             self.preview_label.setText("No package detail page available.")
+            self._info_browser.clear()
             return
 
         # Serve from cache if available
@@ -1096,15 +1175,20 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
             else:
                 self.preview_label.setPixmap(QtGui.QPixmap())
                 self.preview_label.setText("No product photos available.")
+            # Restore cached text (may be empty string when not yet fetched)
+            cached_text = self._text_cache.get(pkg_url, "")
+            self._info_browser.setPlainText(cached_text)
             return
 
         self.preview_label.setText("Loading preview…")
         self.preview_label.setPixmap(QtGui.QPixmap())
+        self._info_browser.clear()
 
         # Cancel previous in-flight request
         if self._preview_worker and self._preview_worker.isRunning():
             try:
                 self._preview_worker.loaded.disconnect()
+                self._preview_worker.text_loaded.disconnect()
                 self._preview_worker.failed.disconnect()
             except Exception:
                 pass
@@ -1112,6 +1196,9 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
         self._preview_worker = _PreviewWorker(entry, parent=self)
         self._preview_worker.loaded.connect(
             lambda data, url=pkg_url: self._on_preview_loaded(data, url)
+        )
+        self._preview_worker.text_loaded.connect(
+            lambda text, url=pkg_url: self._on_text_loaded(text, url)
         )
         self._preview_worker.failed.connect(
             lambda msg, url=pkg_url: self._on_preview_failed(msg, url)
@@ -1131,6 +1218,15 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
         else:
             self._preview_cache[pkg_url] = None
             self.preview_label.setText("Unable to decode preview image.")
+
+    def _on_text_loaded(self, text: str, pkg_url: str):
+        """Cache and display package textual info for *pkg_url*."""
+        self._text_cache[pkg_url] = text
+        current = self.list_widget.currentItem()
+        if current:
+            entry: LeadframeEntry = current.data(QtCore.Qt.UserRole)
+            if entry.package_page_url == pkg_url:
+                self._info_browser.setPlainText(text)
 
     def _on_preview_failed(self, msg: str, pkg_url: str):
         self._preview_cache[pkg_url] = None

@@ -27,7 +27,12 @@ def check_wirebond_prerequisites():
             has_die_pads = True
         # Explicit contact point marker (set by ContactPointTool)
         elif hasattr(obj, "IsContactPoint") and obj.IsContactPoint:
-            has_die_pads = True
+            if obj.Name.startswith("contact_point_housing_"):
+                # Housing contact points serve as the package-side endpoints,
+                # equivalent to leadframe leads for wire bonding purposes.
+                has_leadframe = True
+            else:
+                has_die_pads = True
 
         # New individual lead fingers (build_leadframe sets IsLeadFinger)
         if hasattr(obj, "IsLeadFinger") and obj.IsLeadFinger:

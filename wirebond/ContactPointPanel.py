@@ -22,6 +22,11 @@ def _is_leadframe_source(src: str) -> bool:
     return src.startswith(("Lead_", "BGA_Ball_", "DiePaddle"))
 
 
+def _is_housing_point(obj) -> bool:
+    """True when the object is a housing contact point (contact_point_housing_*)."""
+    return obj.Name.startswith("contact_point_housing_")
+
+
 def _color_swatch(r_f, g_f, b_f) -> QtGui.QIcon:
     """Return a 12×12 solid-colour icon from 0–1 float RGB components."""
     pix = QtGui.QPixmap(12, 12)
@@ -119,8 +124,9 @@ class ContactPointPanel(QtWidgets.QDockWidget):
         self._lbl_count.setText(f"{len(cps)} contact point(s)")
 
         # Build group rows
-        lf_group  = self._make_group("Leadframe", "#1A99E6")
-        die_group = self._make_group("Die / GDS",  "#E64D1A")
+        lf_group      = self._make_group("Leadframe",  "#1A99E6")
+        die_group     = self._make_group("Die / GDS",   "#E64D1A")
+        housing_group = self._make_group("Housing",     "#FFFF00")
 
         for obj in cps:
             src = getattr(obj, "SourceObject", "")
@@ -138,9 +144,14 @@ class ContactPointPanel(QtWidgets.QDockWidget):
             if vc:
                 item.setIcon(0, _color_swatch(*vc[:3]))
 
-            (lf_group if _is_leadframe_source(src) else die_group).addChild(item)
+            if _is_housing_point(obj):
+                housing_group.addChild(item)
+            elif _is_leadframe_source(src):
+                lf_group.addChild(item)
+            else:
+                die_group.addChild(item)
 
-        for grp in (lf_group, die_group):
+        for grp in (lf_group, die_group, housing_group):
             if grp.childCount():
                 self.tree.addTopLevelItem(grp)
                 grp.setExpanded(True)

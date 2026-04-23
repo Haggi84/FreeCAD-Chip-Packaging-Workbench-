@@ -50,6 +50,7 @@ class MyWorkbench(FreeCADGui.Workbench):
                     "SetContactPointsOnFaceCommand",
                     "ShowContactPointPanelCommand",
                     "WirebondCommand",
+                    "WireBumpConfiguratorCommand",
                     "CancelWireBondingCommand",
                     "SaveSessionCommand",
                     "LoadSessionCommand",
