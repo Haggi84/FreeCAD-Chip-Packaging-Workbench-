@@ -12,6 +12,7 @@ if os.environ.get("FREECAD_DEBUGPY") == "1":
 # Try to register commands (some are optional)
 try:
     from gds import GDSCommand
+    from gds import ChipTransformCommand
     from leadframe import LeadframeCommand
     from leadframe import LeadframeLibraryCommand
     from housing import HousingCommand
@@ -41,6 +42,7 @@ class MyWorkbench(FreeCADGui.Workbench):
                 "GDSII Tools",
                 [
                     "GDSCommand",
+                    "ChipTransformCommand",
                     "LeadframeCommand",
                     "CenterLeadframeCommand",
                     "LeadframeLibraryCommand",
