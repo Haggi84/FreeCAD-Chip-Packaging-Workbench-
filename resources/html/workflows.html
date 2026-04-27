@@ -1,96 +1,87 @@
-<h2>Workflow Examples</h2>
+<h1>🔄 Workflows</h1>
 
-<h3>Complete Semiconductor Package Design</h3>
-<ol>
-<li><strong>Import GDSII Layout</strong>
-    <ul>
-    <li>Use "Load GDSII" command</li>
-    <li>Select die layout file</li>
-    <li>Choose bondable layers (metals)</li>
-    <li>Apply material styling</li>
-    </ul>
-</li>
-<li><strong>Create Leadframe</strong>
-    <ul>
-    <li>Use "Leadframe Configurator"</li>
-    <li>Select QFN/QFP package type</li>
-    <li>Set dimensions to match die size</li>
-    <li>Configure lead count and pitch</li>
-    </ul>
-</li>
-<li><strong>Stack Die on Leadframe</strong>
-    <ul>
-    <li>Use "Layer on Leadframe" command</li>
-    <li>Enable auto-fit with margin</li>
-    <li>Set rotation if needed</li>
-    <li>Generate stacked assembly</li>
-    </ul>
-</li>
-<li><strong>Add Wire Bonds</strong>
-    <ul>
-    <li>Use "Manual 2D Wire Bonding"</li>
-    <li>Click die pads → bond fingers</li>
-    <li>Use arc wires for longer spans</li>
-    <li>Finish session to generate report</li>
-    </ul>
-</li>
-<li><strong>Create Housing</strong>
-    <ul>
-    <li>Use "Housing Configurator"</li>
-    <li>Set wall thickness and clearance</li>
-    <li>Configure transparent lid</li>
-    <li>Generate final package</li>
-    </ul>
-</li>
-</ol>
+<h2>Workflow A — Full Chip-Package Assembly</h2>
 
-<h3>Modification Workflow</h3>
-<ol>
-<li><strong>Update Layer Selection</strong>
-    <ul>
-    <li>Open Property Panel (right dock)</li>
-    <li>Click "Modify" button</li>
-    <li>Select different layers</li>
-    <li>Apply changes without re-import</li>
-    </ul>
-</li>
-<li><strong>Change Leadframe Parameters</strong>
-    <ul>
-    <li>Use Property Panel modification</li>
-    <li>Update dimensions or lead count</li>
-    <li>Regenerate with new parameters</li>
-    </ul>
-</li>
-<li><strong>Adjust Wire Bonds</strong>
-    <ul>
-    <li>Delete existing bond wires</li>
-    <li>Restart wire bonding session</li>
-    <li>Create new bond connections</li>
-    </ul>
-</li>
-</ol>
+<p>The complete workflow from GDS file to bonded 3-D assembly:</p>
 
-<h3>Styling Workflow</h3>
+<table>
+<tr><th>#</th><th>Step</th><th>Tool</th><th>Result</th></tr>
+<tr><td>1</td><td>Import layout</td><td>Load GDSII</td><td>3-D layer solids in the document</td></tr>
+<tr><td>2</td><td>Position chip</td><td>Move / Rotate Chip</td><td>Chip centered and oriented correctly</td></tr>
+<tr><td>3</td><td>Mark bond pads</td><td>Auto PIN contacts (GDS import option)</td><td>Orange ContactPoint markers on pads</td></tr>
+<tr><td>4</td><td>Create package</td><td>Leadframe Configurator or Library (Advanced)</td><td>QFN/QFP/BGA leadframe geometry</td></tr>
+<tr><td>5</td><td>Mark leads</td><td>Set Contact Points on Face</td><td>Yellow housing contact point markers</td></tr>
+<tr><td>6</td><td>Bond wires</td><td>Wire Bond</td><td>Solid 3-D BondWire objects</td></tr>
+<tr><td>7</td><td>Add bumps</td><td>Wire Bump Configurator</td><td>WireBump objects at wire endpoints</td></tr>
+<tr><td>8</td><td>Add housing</td><td>Housing Configurator (Advanced)</td><td>Transparent package body</td></tr>
+<tr><td>9</td><td>Save</td><td>Session → Save</td><td>.dipas session file for replay</td></tr>
+</table>
+
+<h2>Workflow B — GDS Visualization Only</h2>
+
+<div class="card">
 <ol>
-<li><strong>KLayout Color Matching</strong>
-    <ul>
-    <li>Import with "Match KLayout" enabled</li>
-    <li>Uses exact LYP file colors</li>
-    <li>Best for KLayout compatibility</li>
-    </ul>
-</li>
-<li><strong>Material-Based Styling</strong>
-    <ul>
-    <li>Import with material styling</li>
-    <li>Colors based on layer type</li>
-    <li>Metals = gold, oxides = blue, etc.</li>
-    </ul>
-</li>
-<li><strong>Bondable Highlighting</strong>
-    <ul>
-    <li>Enable "Highlight Bondable"</li>
-    <li>Bondable layers shown in gold</li>
-    <li>Quick identification for wire bonding</li>
-    </ul>
-</li>
+<li>Load GDSII with <b>Match KLayout colors</b> enabled</li>
+<li>Select only the layers you need to inspect</li>
+<li>Enable <b>Extrude to 3-D</b> and provide the stackup XML for accurate heights</li>
+<li>Use FreeCAD standard view tools (isometric, section cuts) for inspection</li>
 </ol>
+</div>
+
+<h2>Workflow C — Quick Bond Point Check</h2>
+
+<div class="card">
+<ol>
+<li>Load GDSII with <b>Contacts-only 3-D</b> and <b>Auto PIN contacts</b> enabled</li>
+<li>Only bond-pad layers are shown as full geometry; the rest collapses to a single grey body box</li>
+<li>Inspect the auto-placed orange contact points to verify pad detection</li>
+<li>If any are wrong, delete them and use <b>Define Contact Points</b> to place manually</li>
+</ol>
+</div>
+
+<h2>Workflow D — Session Replay</h2>
+
+<div class="card">
+<ol>
+<li>Open FreeCAD with the DI-PASSIONATE workbench</li>
+<li>Click <b>Session ▾ → Load Design Session</b></li>
+<li>Select the <code>.dipas</code> file</li>
+<li>All recorded actions are replayed automatically — GDS import, leadframe, housing, wire bonding</li>
+</ol>
+<p>Session replay is useful for regenerating a design after modifying the source GDS file.</p>
+</div>
+
+<h2>Workflow E — STEP Package Import</h2>
+
+<div class="card">
+<ol>
+<li>Load GDS layout first</li>
+<li>Reveal the Advanced toolbar (click <b>Advanced Tools ⇄</b>)</li>
+<li>Click <b>Leadframe Library</b></li>
+<li>Browse to the package STEP file</li>
+<li>In the orientation dialog, click the face that should face up</li>
+<li>In the die-attach dialog, click the die-attach paddle face</li>
+<li>The STEP model is placed automatically with the die centered on the paddle</li>
+</ol>
+</div>
+
+<h2>Coordinate System</h2>
+
+<div class="card">
+<b>Units:</b> Millimeters (FreeCAD standard)<br>
+<b>GDS scale:</b> 1 GDS user unit = 0.001 mm (standard µm convention)<br>
+<b>Z orientation:</b> +Z points up; chip die surface faces +Z; bond wires arc above the die<br><br>
+<b>Typical chip size:</b> 1–5 mm XY; 0.003–0.010 mm total stack height<br>
+<b>Typical bond wire length:</b> 0.5–3 mm
+</div>
+
+<h2>Tips &amp; Best Practices</h2>
+
+<ul>
+<li>Always load the <code>.map</code> file if available — it enables accurate layer identification for Auto PIN detection and bondable highlighting</li>
+<li>Use <b>Contacts-only 3-D</b> mode for large chips (&gt;1 M polygons) to keep the viewport fast</li>
+<li>The <b>Contact Point Browser</b> dock lets you quickly verify which pads have been marked</li>
+<li>Each wire bond is a separate FreeCAD transaction — Ctrl+Z undoes individual wires</li>
+<li>Move/Rotate Chip captures a placement snapshot on open; use <b>Restore Original</b> to undo all moves at once</li>
+<li>Save the session before closing — the <code>.dipas</code> file is much smaller than a <code>.FCStd</code> file and fully reproducible</li>
+</ul>

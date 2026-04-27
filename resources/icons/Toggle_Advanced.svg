@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Wrench body -->
+  <g transform="rotate(-35, 32, 32)">
+    <rect x="28" y="10" width="8" height="36" rx="2" fill="#607d8b" stroke="#37474f" stroke-width="1.5"/>
+    <!-- Wrench head open end -->
+    <path d="M 22,10 L 22,22 L 28,22 L 28,10 Z" fill="#607d8b" stroke="#37474f" stroke-width="1.5"/>
+    <path d="M 36,10 L 36,22 L 42,22 L 42,10 Z" fill="#607d8b" stroke="#37474f" stroke-width="1.5"/>
+    <rect x="22" y="10" width="20" height="4" rx="1" fill="#607d8b" stroke="#37474f" stroke-width="1.5"/>
+    <!-- Wrench box end -->
+    <rect x="24" y="44" width="16" height="8" rx="2" fill="#607d8b" stroke="#37474f" stroke-width="1.5"/>
+  </g>
+  <!-- Toggle arrows (right side) -->
+  <!-- Right arrow (expand) -->
+  <polygon points="46,26 54,32 46,38" fill="#4caf50" stroke="#2e7d32" stroke-width="1"/>
+  <!-- Left arrow (collapse) -->
+  <polygon points="58,26 50,32 58,38" fill="#4caf50" stroke="#2e7d32" stroke-width="1"/>
+  <!-- Small dot indicator -->
+  <circle cx="52" cy="52" r="4" fill="#ff9800" stroke="#e65100" stroke-width="1"/>
+</svg>

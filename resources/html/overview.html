@@ -1,29 +1,60 @@
-<h2>Workbench Overview</h2>
+<h1>🏠 Workbench Overview</h1>
 
-<p>The <strong>DI-PASSIONATE FreeCAD Workbench</strong> provides comprehensive tools for semiconductor packaging design and IC layout visualization.</p>
+<p>The <b>DI-PASSIONATE FreeCAD Workbench</b> provides an end-to-end design environment
+for semiconductor chip-packaging — from raw GDS layout data all the way to a fully
+bonded 3-D assembly ready for export.</p>
 
-<h3>Key Features</h3>
-<ul>
-<li><strong>GDSII Import</strong> - Load and visualize semiconductor layout data</li>
-<li><strong>Leadframe Design</strong> - Create QFN, QFP, and BGA packages</li>
-<li><strong>Housing Design</strong> - Generate transparent IC packages</li>
-<li><strong>Layer Stacking</strong> - Stack semiconductor layers on leadframes</li>
-<li><strong>Wire Bonding</strong> - Manual 2D wire bonding capabilities</li>
-</ul>
+<div class="card">
+<b>Design Flow at a Glance</b><br>
+Import GDS → Position Chip → Define Contact Points → Create Leadframe →
+Wire Bond → Configure Bumps → Export / Save Session
+</div>
 
-<h3>Supported File Formats</h3>
-<table border="1" style="border-collapse: collapse; width: 100%;">
-<tr><th>Format</th><th>Extension</th><th>Purpose</th></tr>
-<tr><td>GDSII</td><td>.gds, .GDS</td><td>Layout geometry data</td></tr>
-<tr><td>LYP</td><td>.lyp, .LYP</td><td>KLayout layer properties (colors)</td></tr>
-<tr><td>MAP</td><td>.map, .MAP</td><td>IHP technology mapping (optional)</td></tr>
+<h2>Key Features</h2>
+
+<table>
+<tr><th>Feature</th><th>Description</th></tr>
+<tr><td><b>GDSII Import</b></td><td>Load semiconductor layout (.gds) with KLayout color files (.lyp) and optional IHP technology mapping (.map)</td></tr>
+<tr><td><b>3-D Extrusion</b></td><td>Convert flat layout polygons to proper 3-D solids using PDK stackup data from a KLayout XML file</td></tr>
+<tr><td><b>Chip Transform</b></td><td>Translate and rotate the entire chip assembly with arrow buttons or keyboard shortcuts</td></tr>
+<tr><td><b>Contact Points</b></td><td>Auto-detect bond pads from PIN layers, or place them manually on faces with a grid-based tool</td></tr>
+<tr><td><b>Leadframe Design</b></td><td>Parametric QFN / QFP / BGA leadframes, or import STEP models from the IHP mirror library</td></tr>
+<tr><td><b>Wire Bonding</b></td><td>Manual 3-D wire bonding between die pads and package leads — produces solid swept-pipe geometry</td></tr>
+<tr><td><b>Wire Bump Configurator</b></td><td>Place Ball, Wedge, Stitch, or Nail-Head bumps at both ends of every bond wire</td></tr>
+<tr><td><b>Session Save / Load</b></td><td>Record the full design history and replay it from a .dipas JSON file</td></tr>
 </table>
 
-<h3>Visual Features</h3>
+<h2>Supported File Formats</h2>
+
+<table>
+<tr><th>Format</th><th>Extension</th><th>Role</th></tr>
+<tr><td>GDSII</td><td>.gds</td><td>IC layout geometry</td></tr>
+<tr><td>KLayout Layer Properties</td><td>.lyp</td><td>Layer colors and visibility</td></tr>
+<tr><td>IHP Technology Map</td><td>.map</td><td>Layer name → EDI type mapping (optional)</td></tr>
+<tr><td>KLayout Stackup XML</td><td>.xml</td><td>Accurate Z-heights from PDK (optional)</td></tr>
+<tr><td>STEP</td><td>.step / .stp</td><td>Package models from mirror-semi library</td></tr>
+<tr><td>DI-PASSIONATE Session</td><td>.dipas</td><td>Reproducible design history (JSON)</td></tr>
+</table>
+
+<h2>Toolbar Layout</h2>
+
+<div class="card">
+<b>Main Toolbar</b> (always visible)<br>
+Load GDS &nbsp;|&nbsp; Move/Rotate Chip &nbsp;|&nbsp; Set Contact Points (Face) &nbsp;|&nbsp;
+Contact Point Browser &nbsp;|&nbsp; Wire Bond &nbsp;|&nbsp; Wire Bump Configurator &nbsp;|&nbsp;
+Cancel Wire Bond &nbsp;|&nbsp; Session ▾ &nbsp;|&nbsp; Advanced Tools ⇄ &nbsp;|&nbsp; Help &nbsp;|&nbsp; About
+</div>
+
+<div class="card">
+<b>Advanced Toolbar</b> (hidden by default — toggle with the ⇄ button)<br>
+Leadframe Configurator &nbsp;|&nbsp; Center Leadframe &nbsp;|&nbsp;
+Leadframe Library (STEP) &nbsp;|&nbsp; Housing Configurator &nbsp;|&nbsp;
+Layer on Leadframe &nbsp;|&nbsp; Define Contact Points
+</div>
+
+<h2>System Requirements</h2>
 <ul>
-<li>KLayout LYP file compatibility</li>
-<li>Material-based styling</li>
-<li>Real-time property panels</li>
-<li>Layer modification capabilities</li>
-<li>Bondable layer highlighting</li>
+<li>FreeCAD 1.0 or newer</li>
+<li>Python packages: <code>gdstk</code> (GDS reading), <code>PySide2</code> (included with FreeCAD)</li>
+<li>Optional: KLayout for generating .lyp and .map files</li>
 </ul>

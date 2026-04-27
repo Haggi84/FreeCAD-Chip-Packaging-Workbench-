@@ -573,7 +573,7 @@ class WireBumpConfiguratorCommand:
                 "Configure bump shapes and place them at wire bond endpoints.  "
                 "Select connections from the netlist and press 'Place Bumps'."
             ),
-            "Pixmap": get_icon("Wire_bonding.png"),
+            "Pixmap": get_icon("Wire_Bump.svg"),
         }
 
     def Activated(self):

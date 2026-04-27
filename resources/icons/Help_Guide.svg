@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Circle background -->
+  <circle cx="32" cy="32" r="30" fill="#2980b9" stroke="#1a5a8a" stroke-width="2"/>
+  <!-- Highlight arc -->
+  <path d="M 14,20 A 20,20 0 0,1 50,20" fill="none" stroke="white" stroke-width="2.5"
+        stroke-linecap="round" opacity="0.25"/>
+  <!-- Question mark stem curve -->
+  <path d="M 22,24 C 22,14 42,14 42,24 C 42,32 32,32 32,40" fill="none"
+        stroke="white" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Question mark dot -->
+  <circle cx="32" cy="50" r="4" fill="white"/>
+</svg>

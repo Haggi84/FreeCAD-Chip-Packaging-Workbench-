@@ -1,72 +1,102 @@
-<h2>Quick Start Guide</h2>
+<h1>🚀 Quick Start Guide</h1>
 
-<h3>1. Load GDSII Files</h3>
+<p>Follow these steps to go from a raw GDS file to a fully bonded chip-package assembly.</p>
+
+<h2>Step 1 — Load GDS Layout</h2>
+<div class="card">
 <ol>
-<li>Click <strong>"Load GDSII"</strong> in the toolbar</li>
+<li>Click <b>Load GDSII</b> in the main toolbar</li>
 <li>Select your <code>.gds</code> file</li>
-<li>Select matching <code>.lyp</code> file for colors</li>
-<li>Choose layers to import in the selection dialog</li>
-<li>Configure display options:
-    <ul>
-    <li><strong>Match KLayout</strong> - Use LYP colors</li>
-    <li><strong>Highlight Bondable</strong> - Gold coloring</li>
-    <li><strong>Import All Layers</strong> - Quick selection</li>
-    </ul>
+<li>Select the matching <code>.lyp</code> KLayout color file</li>
+<li>Optionally select an IHP <code>.map</code> file for layer name resolution</li>
+<li>Optionally select a stackup <code>.xml</code> for accurate 3-D Z-heights</li>
+<li>In the layer selector choose which layers to show and set import options:
+  <ul>
+    <li><b>Match KLayout colors</b> — use LYP fill/frame colors exactly</li>
+    <li><b>Highlight bondable</b> — gold highlight for PIN/bond-pad layers</li>
+    <li><b>Extrude to 3-D</b> — convert polygons to solids using stackup data</li>
+    <li><b>Auto PIN contacts</b> — automatically place contact points on detected bond pads</li>
+  </ul>
 </li>
 </ol>
+</div>
 
-<h3>2. Create Leadframe</h3>
-<ol>
-<li>Click <strong>"Leadframe Configurator"</strong></li>
-<li>Choose package type:
-    <ul>
-    <li><strong>QFN</strong> - Quad Flat No-lead</li>
-    <li><strong>QFP</strong> - Quad Flat Package</li>
-    <li><strong>BGA</strong> - Ball Grid Array</li>
-    </ul>
-</li>
-<li>Set dimensions and lead parameters</li>
-<li>Choose material</li>
-<li>Generate leadframe geometry</li>
-</ol>
+<div class="tip"><b>Tip:</b> Use <b>Auto PIN contacts</b> to skip manual contact-point placement for standard IHP PDK layouts — the tool reads DT=2 pin markers to find the exact bond locations.</div>
 
-<h3>3. Stack Layers on Leadframe</h3>
+<h2>Step 2 — Position the Chip</h2>
+<div class="card">
 <ol>
-<li>Click <strong>"Layer on Leadframe"</strong></li>
-<li>Follow GDS import steps (select files and layers)</li>
-<li>Configure leadframe parameters</li>
-<li>Set transformation options:
-    <ul>
-    <li><strong>Auto-fit</strong> - Scale to fit opening</li>
-    <li><strong>Rotation</strong> - Arbitrary rotation</li>
-    <li><strong>Mirror</strong> - Flip top/bottom</li>
-    <li><strong>Offset</strong> - Precise positioning</li>
-    </ul>
-</li>
-<li>Generate stacked assembly</li>
+<li>Click <b>Move / Rotate Chip</b> in the toolbar</li>
+<li>Select scope: <i>GDS Chip Objects</i> moves only GDS layers, contact points and wires</li>
+<li>Use the arrow buttons (or keyboard ←→↑↓ / PgUp/PgDn) to translate</li>
+<li>Use the Rotate buttons (or Shift + arrow keys) to rotate around the bounding-box center</li>
+<li>Click <b>Restore Original</b> to undo all changes in the current session</li>
 </ol>
+</div>
 
-<h3>4. Create Housing</h3>
+<h2>Step 3 — Define Contact Points</h2>
+<div class="card">
+<p><b>Option A — Automatic (recommended)</b></p>
 <ol>
-<li>Click <strong>"Housing Configurator"</strong></li>
-<li>First configure leadframe using the button</li>
-<li>Set housing parameters:
-    <ul>
-    <li>Wall thickness and clearance</li>
-    <li>Housing height</li>
-    <li>Lid options and transparency</li>
-    <li>Material selection</li>
-    </ul>
-</li>
-<li>Generate transparent package</li>
+<li>Enable <b>Auto PIN contacts</b> during GDS import (Step 1)</li>
+<li>Contact point markers (orange dots) appear on the detected bond pads</li>
 </ol>
+<p><b>Option B — Face grid tool</b></p>
+<ol>
+<li>Click <b>Set Contact Points on Face</b> (main toolbar)</li>
+<li>Ctrl+click one or more pad faces to select them</li>
+<li>Click <b>Generate Grid</b> — a UV grid of candidate points appears on each face</li>
+<li>Click the desired grid points to select them (they turn orange)</li>
+<li>Click <b>OK</b> — selected points become contact point markers</li>
+</ol>
+<p><b>Option C — Define Contact Points</b> (advanced toolbar)</p>
+<ol>
+<li>Select one or more GDS layer objects in the 3-D view</li>
+<li>Click <b>Define Contact Points</b> — a marker is placed at the top-face centre of each selected object</li>
+</ol>
+</div>
 
-<h3>5. Manual Wire Bonding</h3>
+<h2>Step 4 — Leadframe (Advanced Toolbar)</h2>
+<div class="card">
+<p>First click the <b>Advanced Tools ⇄</b> button to reveal the advanced toolbar.</p>
 <ol>
-<li>Click <strong>"Manual 2D Wire Bonding"</strong></li>
-<li>Configure wire parameters in dialog</li>
-<li>Click on <span style="color: green;">die pads</span> (green markers appear)</li>
-<li>Click on <span style="color: blue;">bond fingers</span> (blue markers appear)</li>
-<li>Repeat for additional bonds</li>
-<li>Use <strong>"Finish Wire Bonding"</strong> command to complete</li>
+<li>Click <b>Leadframe Configurator</b></li>
+<li>Choose package type: <b>QFN</b>, <b>QFP</b>, or <b>BGA</b></li>
+<li>Set frame dimensions, lead count, pitch, and material</li>
+<li>Click <b>Generate</b></li>
+<li>Use <b>Center Leadframe</b> to align the chip over the die-attach paddle</li>
 </ol>
+<p>Alternatively load a real package STEP model via <b>Leadframe Library</b>.</p>
+</div>
+
+<h2>Step 5 — Wire Bonding</h2>
+<div class="card">
+<ol>
+<li>Click <b>Wire Bond</b> in the main toolbar (requires both GDS contact points and leadframe contact points)</li>
+<li>Configure wire diameter, arc height, and material in the dialog</li>
+<li>Click an <b>orange</b> die-side contact point, then a <b>yellow</b> housing/leadframe contact point</li>
+<li>A solid 3-D wire is created between the two points</li>
+<li>Repeat for each connection</li>
+<li>Click <b>Cancel Wire Bonding</b> when finished (or close the session)</li>
+</ol>
+</div>
+
+<h2>Step 6 — Wire Bumps</h2>
+<div class="card">
+<ol>
+<li>Click <b>Wire Bump Configurator</b></li>
+<li>Select a bump shape: Ball Bond, Wedge Bond, Stitch Bond, or Nail Head</li>
+<li>Adjust geometry parameters — a live cross-section preview updates in real time</li>
+<li>In the <b>Netlist</b> table, check the connections you want to bump</li>
+<li>Click <b>Place Bumps on Selected Connections</b> — bumps appear at both wire endpoints</li>
+</ol>
+</div>
+
+<h2>Step 7 — Save Session</h2>
+<div class="card">
+<ol>
+<li>Click the <b>Session ▾</b> button and choose <b>Save Design Session</b></li>
+<li>Choose a filename — a <code>.dipas</code> JSON file is written alongside your FreeCAD document</li>
+<li>To replay, click <b>Session ▾ → Load Design Session</b> and select the <code>.dipas</code> file</li>
+</ol>
+</div>

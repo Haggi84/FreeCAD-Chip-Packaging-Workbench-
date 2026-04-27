@@ -1,100 +1,117 @@
-<h2>Tool Reference</h2>
+<h1>🔧 Tool Reference</h1>
 
-<h3>GDSCommand - Load GDSII</h3>
-<p><strong>Purpose:</strong> Import GDSII files with layer selection and styling</p>
-<p><strong>Inputs:</strong> GDS file, LYP file, optional MAP file</p>
-<p><strong>Outputs:</strong> 2D/3D geometry with material colors</p>
-<p><strong>Features:</strong>
-<ul>
-<li>Interactive layer selection</li>
-<li>KLayout color matching</li>
-<li>Material-based styling</li>
-<li>Property panel integration</li>
-</ul>
-</p>
+<h2>Main Toolbar</h2>
 
-<h3>LeadframeCommand - Leadframe Configurator</h3>
-<p><strong>Purpose:</strong> Create semiconductor package leadframes</p>
-<p><strong>Supported Types:</strong> QFN, QFP, BGA</p>
-<p><strong>Parameters:</strong>
+<h3>Load GDSII</h3>
+<div class="card">
+<b>Purpose:</b> Import a GDS layout file with color, technology, and 3-D options.<br><br>
+<b>Input files:</b> <code>.gds</code> (required), <code>.lyp</code> (required), <code>.map</code> (optional), stackup <code>.xml</code> (optional)<br><br>
+<b>Import options:</b>
 <ul>
-<li>Frame dimensions (length, width, thickness)</li>
-<li>Lead counts (all sides)</li>
-<li>Lead geometry (width, pitch, length)</li>
-<li>Material selection</li>
+<li><b>Match KLayout</b> — use exact LYP fill/frame colors</li>
+<li><b>Highlight bondable</b> — gold color for PIN/LEFPIN/PAD layers</li>
+<li><b>Extrude to 3-D</b> — polygon solids with PDK-accurate Z-heights</li>
+<li><b>Contacts-only 3-D</b> — full geometry for bond pads, single body box for rest</li>
+<li><b>Auto PIN contacts</b> — automatic contact-point markers on detected bond pads</li>
 </ul>
-</p>
+<b>Created objects:</b> <code>Layer_{name}_{id}</code>, <code>IC_Body_Solid</code>, <code>GDS_Pin_Instances</code>, <code>GDS_PINs_{layer}</code>, <code>ContactPoint_{n}</code>
+</div>
 
-<h3>HousingCommand - Housing Configurator</h3>
-<p><strong>Purpose:</strong> Generate transparent IC packages</p>
-<p><strong>Features:</strong>
-<ul>
-<li>Customizable wall thickness</li>
-<li>Transparent lid options</li>
-<li>Alignment posts</li>
-<li>Material and transparency controls</li>
-</ul>
-<p><strong>Dependencies:</strong> Requires leadframe configuration</p>
+<h3>Move / Rotate Chip</h3>
+<div class="card">
+<b>Purpose:</b> Translate and rotate all GDS chip objects as a group.<br><br>
+<b>Scope:</b> GDS Chip Objects / All Document Objects / Current Selection<br><br>
+<b>Controls:</b> Arrow buttons for XY, ▲▼ for Z; ±X/Y/Z rotation buttons around bounding-box center<br><br>
+<b>Keyboard shortcuts</b> (when dialog is focused):<br>
+←/→ = ±X &nbsp;&nbsp; ↑/↓ = ±Y &nbsp;&nbsp; PgUp/PgDn = ±Z<br>
+Shift + ←/→ = ±Rz &nbsp;&nbsp; Shift + ↑/↓ = ±Rx &nbsp;&nbsp; Shift + PgUp/PgDn = ±Ry<br><br>
+<b>Restore Original</b> — undoes all moves made in the current dialog session
+</div>
 
-<h3>LayeronLeadframe - Layer on Leadframe</h3>
-<p><strong>Purpose:</strong> Stack semiconductor layers on leadframes</p>
-<p><strong>Features:</strong>
-<ul>
-<li>Auto-fitting with margin control</li>
-<li>Rotation and mirroring</li>
-<li>Z-stacking based on technology</li>
-<li>Combined GDS + leadframe workflow</li>
-</ul>
-</p>
+<h3>Set Contact Points on Face</h3>
+<div class="card">
+<b>Purpose:</b> Place contact point markers interactively on selected pad faces.<br><br>
+<b>Phase 1:</b> Ctrl+click faces in the 3-D view → click <b>Generate Grid</b><br>
+<b>Phase 2:</b> Click grid points to select them → click <b>OK</b><br><br>
+<b>Result:</b> <code>contact_point_housing_{n}</code> markers (yellow) placed at selected grid positions.<br>
+These housing-side contact points activate the Wire Bond command automatically.
+</div>
 
-<h3>WirebondCommand - Manual 2D Wire Bonding</h3>
-<p><strong>Purpose:</strong> Create manual wire bonds between die and package</p>
-<p><strong>Workflow:</strong> Die pad selection → Bond finger selection</p>
-<p><strong>Features:</strong>
-<ul>
-<li>Object-based selection (no random clicks)</li>
-<li>Straight and arc wire styles</li>
-<li>Visual feedback with colored markers</li>
-<li>Automatic object identification</li>
-<li>Finish/Cancel session commands</li>
-</ul>
-</p>
+<h3>Contact Point Browser</h3>
+<div class="card">
+<b>Purpose:</b> Dock panel listing all contact points grouped by type.<br>
+<b>Groups:</b> Die-side (orange), Housing (yellow)<br>
+<b>Interaction:</b> Click a row to highlight the corresponding marker in the 3-D view.
+</div>
 
-<h3>Property Panel</h3>
-<p><strong>Location:</strong> Right dock widget</p>
-<p><strong>Tabs:</strong>
-<ul>
-<li><strong>Layer Properties</strong> - Raw LYP properties</li>
-<li><strong>Color Summary</strong> - Color usage statistics</li>
-<li><strong>Technology</strong> - IHP mapping information</li>
-</ul>
-</p>
-<p><strong>Features:</strong>
-<ul>
-<li>Real-time layer information</li>
-<li>Modification without re-import</li>
-<li>Color and visibility controls</li>
-<li>Technology layer mapping</li>
-</ul>
-</p>
+<h3>Wire Bond</h3>
+<div class="card">
+<b>Purpose:</b> Create 3-D solid bond wires between die pads and package leads.<br><br>
+<b>Prerequisites:</b> At least one die-side contact point (orange) <b>and</b> one housing contact point (yellow).<br><br>
+<b>Workflow:</b> Configure wire parameters → click die contact point → click housing contact point → wire is created<br><br>
+<b>Wire geometry:</b> Swept solid pipe with end caps — true solid, not a hollow shell.<br>
+<b>Created objects:</b> <code>BondWire_{n}</code>
+</div>
 
-<h3>FinishWireBondingCommand</h3>
-<p><strong>Purpose:</strong> Complete wire bonding session</p>
-<p><strong>Features:</strong>
-<ul>
-<li>Generates detailed bonding report</li>
-<li>Removes selection observer</li>
-<li>Shows bond count summary</li>
-<li>Cleans up temporary data</li>
-</ul>
-</p>
+<h3>Wire Bump Configurator</h3>
+<div class="card">
+<b>Purpose:</b> Place parametric bump shapes at bond wire endpoints.<br><br>
+<b>Shapes:</b>
+<table>
+<tr><th>Shape</th><th>Parameters</th><th>Typical Use</th></tr>
+<tr><td>Ball Bond</td><td>Ball radius, neck radius, height</td><td>Standard thermosonic bonding</td></tr>
+<tr><td>Wedge Bond</td><td>Width, length, height</td><td>Ultrasonic Al bonding</td></tr>
+<tr><td>Stitch Bond</td><td>Radius, height</td><td>Second bond in ball-wedge sequence</td></tr>
+<tr><td>Nail Head</td><td>Top radius, base radius, height</td><td>Heavy wire bonds</td></tr>
+</table>
+<b>Netlist browser:</b> Shows all <code>BondWire_*</code> objects with net name, start/end CP, and wire length.<br>
+Check rows and click <b>Place Bumps</b> to place at both endpoints.<br>
+<b>Created objects:</b> <code>WireBump_{shape}_{n}</code>
+</div>
 
-<h3>CancelWireBondingCommand</h3>
-<p><strong>Purpose:</strong> Cancel current wire bonding session</p>
-<p><strong>Features:</strong>
-<ul>
-<li>Stops selection listening</li>
-<li>Clears temporary data</li>
-<li>Returns to normal mode</li>
-</ul>
-</p>
+<h3>Session ▾</h3>
+<div class="card">
+<b>Save Design Session:</b> Writes all recorded actions to a <code>.dipas</code> JSON file.<br>
+<b>Load Design Session:</b> Reads a <code>.dipas</code> file and replays all actions to reconstruct the design.<br><br>
+<b>Recorded actions:</b> GDS import, Leadframe config, Layer-on-Leadframe, Housing, Wire bonding config, Center Leadframe
+</div>
+
+<h3>Advanced Tools ⇄</h3>
+<div class="card">
+<b>Purpose:</b> Toggle the visibility of the Advanced Tools toolbar.<br>
+The advanced toolbar is hidden by default to keep the main toolbar uncluttered.
+</div>
+
+<h2>Advanced Toolbar</h2>
+
+<h3>Leadframe Configurator</h3>
+<div class="card">
+<b>Purpose:</b> Generate a parametric semiconductor package leadframe.<br><br>
+<b>Package types:</b> QFN (Quad Flat No-lead), QFP (Quad Flat Package), BGA (Ball Grid Array)<br><br>
+<b>Parameters:</b> Frame size (L×W×T), lead count per side, lead pitch, lead width/length, die-attach paddle size, material
+</div>
+
+<h3>Leadframe Library (STEP Import)</h3>
+<div class="card">
+<b>Purpose:</b> Import a real STEP package model from the IHP mirror-semi online library.<br><br>
+<b>Workflow:</b> Browse library → select package → confirm orientation face → confirm die-attach face → STEP model is placed at the correct position in the GDS document
+</div>
+
+<h3>Housing Configurator</h3>
+<div class="card">
+<b>Purpose:</b> Generate a transparent IC package housing around the leadframe.<br><br>
+<b>Parameters:</b> Wall thickness, clearance, housing height, lid (yes/no), transparency, alignment posts, material
+</div>
+
+<h3>Layer on Leadframe</h3>
+<div class="card">
+<b>Purpose:</b> Import GDS layers and stack them directly onto an existing leadframe.<br><br>
+<b>Features:</b> Auto-scale to fit die-attach paddle, rotation, mirror, Z-offset, combined GDS + leadframe in one document
+</div>
+
+<h3>Define Contact Points</h3>
+<div class="card">
+<b>Purpose:</b> Batch-place contact point markers at the top-face centre of selected GDS layer objects.<br><br>
+<b>Usage:</b> Select one or more <code>Layer_*</code> objects in the 3-D view, then click this button.<br>
+Each selected object gets one <code>ContactPoint_{n}</code> marker at its highest Z face centre.
+</div>
