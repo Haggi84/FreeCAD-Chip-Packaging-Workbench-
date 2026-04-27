@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Chip body -->
+  <rect x="18" y="18" width="28" height="28" rx="3" ry="3"
+        fill="#4a9eda" stroke="#1a5a8a" stroke-width="2"/>
+  <!-- Chip grid lines -->
+  <line x1="26" y1="18" x2="26" y2="46" stroke="#1a5a8a" stroke-width="0.8" opacity="0.5"/>
+  <line x1="34" y1="18" x2="34" y2="46" stroke="#1a5a8a" stroke-width="0.8" opacity="0.5"/>
+  <line x1="18" y1="26" x2="46" y2="26" stroke="#1a5a8a" stroke-width="0.8" opacity="0.5"/>
+  <line x1="18" y1="34" x2="46" y2="34" stroke="#1a5a8a" stroke-width="0.8" opacity="0.5"/>
+  <!-- Chip pins left -->
+  <rect x="13" y="22" width="5" height="3" rx="1" fill="#888" stroke="#555" stroke-width="0.8"/>
+  <rect x="13" y="29" width="5" height="3" rx="1" fill="#888" stroke="#555" stroke-width="0.8"/>
+  <rect x="13" y="36" width="5" height="3" rx="1" fill="#888" stroke="#555" stroke-width="0.8"/>
+  <!-- Chip pins right -->
+  <rect x="46" y="22" width="5" height="3" rx="1" fill="#888" stroke="#555" stroke-width="0.8"/>
+  <rect x="46" y="29" width="5" height="3" rx="1" fill="#888" stroke="#555" stroke-width="0.8"/>
+  <rect x="46" y="36" width="5" height="3" rx="1" fill="#888" stroke="#555" stroke-width="0.8"/>
+  <!-- Arrow Up -->
+  <polygon points="32,3 28,10 31,10 31,15 33,15 33,10 36,10"
+           fill="#e05020" stroke="#a03010" stroke-width="0.5"/>
+  <!-- Arrow Down -->
+  <polygon points="32,61 28,54 31,54 31,49 33,49 33,54 36,54"
+           fill="#e05020" stroke="#a03010" stroke-width="0.5"/>
+  <!-- Arrow Left -->
+  <polygon points="3,32 10,28 10,31 15,31 15,33 10,33 10,36"
+           fill="#e05020" stroke="#a03010" stroke-width="0.5"/>
+  <!-- Arrow Right -->
+  <polygon points="61,32 54,28 54,31 49,31 49,33 54,33 54,36"
+           fill="#e05020" stroke="#a03010" stroke-width="0.5"/>
+  <!-- Rotation arc top-right -->
+  <path d="M 44,8 A 14,14 0 0,1 56,20" fill="none" stroke="#20a020" stroke-width="2.2"
+        stroke-linecap="round"/>
+  <polygon points="56,20 53,14 59,16" fill="#20a020"/>
+</svg>
