@@ -1,13 +1,13 @@
 # DI-PASSIONATE-FreeCAD
 
-![Version](https://img.shields.io/badge/version-0.5.0-green?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.6.0-green?style=flat-square)
 ![FreeCAD](https://img.shields.io/badge/FreeCAD-1.0-blue?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.11-yellow?style=flat-square)
 ![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-informational?style=flat-square)
 
 **A FreeCAD workbench for chip-packaging workflows, developed as part of the BMBF project DI-Passionate.**
 
-This Python AddIn for [FreeCAD](https://www.freecad.org/downloads.php) provides a dedicated **Chip-Packaging Workbench** covering the full chip-assembly design flow: importing GDSII chip layouts, designing leadframes and housings, placing chips, planning bond wires, managing contact points, and saving/restoring sessions.
+This Python AddIn for [FreeCAD](https://www.freecad.org/downloads.php) provides a dedicated **Chip-Packaging Workbench** covering the full chip-assembly design flow: importing GDSII chip layouts, positioning the chip, designing leadframes and housings, placing chips, planning bond wires and bumps, managing contact points, and saving/restoring sessions.
 
 > For detailed setup instructions see **[INSTALL.md](INSTALL.md)**.
 
@@ -15,25 +15,32 @@ This Python AddIn for [FreeCAD](https://www.freecad.org/downloads.php) provides 
 
 ## Features
 
-### Implemented
+### Main Toolbar (always visible)
 
 | Tool | Description |
 |---|---|
-| **Load GDSII** | Import `.gds` files with layer colours from a KLayout `.lyp` file and optional IHP `.map` technology file |
+| **Load GDSII** | Import `.gds` files with layer colours from a KLayout `.lyp` file, optional IHP `.map` technology file, and optional stackup `.xml` for accurate 3-D Z-heights |
+| **Leadframe Library** | Browse and import STEP package models from the MirrorSemi online CAD catalogue directly into the active GDS document |
+| **Move / Rotate Chip** | Modeless dialog to translate and rotate all GDS chip objects as a group using arrow buttons or keyboard shortcuts |
+| **Set Contact Points on Face** | Grid-based interactive tool: Ctrl+click faces → generate UV grid → click grid points → confirm to create contact point markers |
+| **Contact Point Browser** | Dock panel listing all contact points grouped by type (die-side / housing), with 3-D highlight on hover |
+| **Wire Bond** | Interactive 3-D wire bonding session — click a die-pad contact point, then a housing contact point; a solid swept-pipe bond wire is created |
+| **Wire Bump Configurator** | Place parametric bump shapes (Ball, Wedge, Stitch, Nail Head) at both endpoints of selected bond wires via a netlist browser |
+| **Cancel Wire Bonding** | Exit an active wire-bonding session |
+| **Session ▾** | Dropdown: **Save Design Session** / **Load Design Session** — persist and replay the full design history as a `.dipas` JSON file |
+| **Advanced Tools ▾** | Dropdown giving access to the advanced tool set (see below) |
+| **Help Guide** | Modern in-app help dialog with sidebar navigation (Overview, Quick Start, Tool Reference, Workflows, Troubleshooting) |
+| **About** | Version and project information |
+
+### Advanced Tools (dropdown menu)
+
+| Tool | Description |
+|---|---|
 | **Leadframe Configurator** | Parametrically generate QFN, QFP, or BGA leadframes with configurable body size, lead count, and material |
-| **Center Leadframe on GDS** | Auto-align the leadframe centre to the bounding box of the imported GDS geometry |
-| **Leadframe Online Library** | Browse, preview real product photos, and download STEP/IGES/DXF packages from the MirrorSemi CAD catalogue |
-| **Layer on Leadframe** | Scale and place selected GDS layers on an existing leadframe with rotation and mirror options |
+| **Center Leadframe** | Auto-align the leadframe centre to the bounding box of the imported GDS geometry |
 | **Housing Configurator** | Generate a transparent IC housing/mold-compound body around the leadframe |
-| **Define Contact Points** | Place bondable contact-point markers on selected GDS layer objects |
-| **Set Contact Points on Face** | Interactive: select a package body, highlight its top surface in yellow, click to place contact points at exact positions |
-| **Contact Point Browser** | Dock panel listing and highlighting all contact points in the 3D view |
-| **Manual Wire Bonding** | Interactive session — click a die-pad contact point, then a leadframe contact point; a 3D bond wire is created |
-| **Cancel Wire Bonding** | Exit an active wire-bonding session without saving |
-| **Save Session** | Persist all design actions and parameters to a `.dipas` JSON file |
-| **Load Session** | Restore a previous design session from a `.dipas` file |
-| **Help Guide** | In-app help dialog with Overview, Quick Start, Tools, Workflows, and Troubleshooting tabs |
-| **About** | Version and project information dialog |
+| **Layer on Leadframe** | Scale, rotate, and place selected GDS layers on an existing leadframe |
+| **Define Contact Points** | Batch-place contact point markers at the top-face centre of selected GDS layer objects |
 
 ### Planned / In Progress
 
@@ -53,14 +60,16 @@ This Python AddIn for [FreeCAD](https://www.freecad.org/downloads.php) provides 
 
 | Step | Tool | Details |
 |------|------|---------|
-| **1** | **Load GDSII** | Select `.gds` + `.lyp` (+ optional `.map`), choose layers, optionally enable Auto PIN Detection |
-| **2** | **Leadframe Configurator** or **Online Library** | Generate QFN / QFP / BGA leadframe, then run **Center Leadframe on GDS** |
-| **3** | **Layer on Leadframe** | Scale and rotate the GDS chip onto the die paddle |
-| **4** | **Housing Configurator** | Generate transparent mold compound body |
-| **5** | **Define Contact Points** or **Set Contact Points on Face** | Manual contact point placement — skip if Auto PIN Detection was used in step 1 |
-| **6** | **Manual Wire Bonding** | Click die pad → click leadframe lead → 3D bond wire created; repeat per bond |
-| **7** | **Save Session** | Save all parameters to a `.dipas` file so the session can be resumed later |
-| **8** | **Export** *(planned)* | Assembly export for thermal simulation |
+| **1** | **Load GDSII** | Select `.gds` + `.lyp` (+ optional `.map` + `.xml`), choose layers, optionally enable Auto PIN Detection |
+| **2** | **Leadframe Library** or **Advanced → Leadframe Configurator** | Import STEP package or generate parametric QFN/QFP/BGA leadframe |
+| **3** | **Advanced → Center Leadframe** | Align die-attach paddle to GDS bounding box |
+| **4** | **Move / Rotate Chip** | Fine-tune chip position and orientation using arrow buttons or keyboard shortcuts |
+| **5** | **Advanced → Layer on Leadframe** *(optional)* | Stack GDS layers directly onto the leadframe |
+| **6** | **Advanced → Housing Configurator** *(optional)* | Generate transparent mold compound body |
+| **7** | **Set Contact Points on Face** | Place contact point markers on leadframe/housing leads (die-side markers auto-placed if Auto PIN Detection was used in step 1) |
+| **8** | **Wire Bond** | Click die pad → click housing lead → 3-D solid bond wire created; repeat per bond |
+| **9** | **Wire Bump Configurator** | Select bump shape, adjust parameters, pick connections from netlist, place bumps |
+| **10** | **Session ▾ → Save** | Save all parameters to a `.dipas` file for replay |
 
 ---
 
@@ -72,10 +81,60 @@ When loading a GDSII file the **Layer Selector** dialog exposes several import o
 |---|---|
 | **Match KLayout colours** | Apply exact fill/frame colours from the `.lyp` file |
 | **Highlight bondable pads** | Render top-metal / PIN layers in gold |
-| **3D extrusion** | Extrude each layer to its real Z-height using the `.map` stack definition |
-| **Auto PIN contact detection** | Automatically create `ContactPoint` markers on the top PIN layers |
+| **3-D extrusion** | Extrude each layer to its real Z-height using the stackup XML or `.map` stack definition |
+| **Contacts-only 3-D** | Full geometry for bond-pad layers only; all other layers collapse to a single bounding-box body solid (fast for large chips) |
+| **Auto PIN contact detection** | Automatically create `ContactPoint` markers on the top PIN layers (uses DT=2 pin markers for accurate pad-centre placement) |
 
-Filler layers (marked `FILL` in the `.map` file) are represented as a single bounding-box solid to keep import performance high. A progress dialog with a **Cancel** button is shown during import.
+Filler layers (marked `FILL` in the `.map` file or datatype 22) are represented as a single bounding-box solid to keep import performance high. A progress dialog with a **Cancel** button and ETA is shown during import.
+
+---
+
+## Chip Transform Tool
+
+The **Move / Rotate Chip** dialog provides incremental control over the position and orientation of all GDS chip objects:
+
+- **Scope:** GDS Chip Objects only / All Document Objects / Current Selection
+- **Translation:** configurable step size (mm), XY arrow cross, ±Z buttons
+- **Rotation:** configurable step size (°), ±Rx / ±Ry / ±Rz buttons rotating around the bounding-box centre
+- **Restore Original:** reverts all moves made in the current dialog session to the state captured when the dialog was opened
+- **Keyboard shortcuts** (when dialog is focused):
+
+| Key | Action |
+|---|---|
+| ← / → | ±X translation |
+| ↑ / ↓ | ±Y translation |
+| PgUp / PgDn | ±Z translation |
+| Shift + ← / → | ±Rz rotation |
+| Shift + ↑ / ↓ | ±Rx rotation |
+| Shift + PgUp / PgDn | ±Ry rotation |
+
+---
+
+## Wire Bump Configurator
+
+After creating bond wires with the Wire Bond tool, the **Wire Bump Configurator** lets you place realistic bump geometry at every wire endpoint:
+
+| Bump Shape | Parameters | Typical Use |
+|---|---|---|
+| **Ball Bond** | Ball radius, neck radius, height | Thermosonic Au bonding |
+| **Wedge Bond** | Width, length, height | Ultrasonic Al bonding |
+| **Stitch Bond** | Radius, height | Second bond in ball-wedge sequence |
+| **Nail Head** | Top radius, base radius, height | Heavy wire bonds |
+
+The dialog includes a **live cross-section preview** (QPainter rendering) and a **netlist browser** showing all `BondWire_*` objects with net name, start/end contact points, and wire length. Check the desired connections and click **Place Bumps** to place at both endpoints.
+
+---
+
+## Contact Point System
+
+Contact points are small `Part::Vertex` markers that define the bonding locations for the Wire Bond tool.
+
+| Type | Name pattern | Colour | Created by |
+|---|---|---|---|
+| Die-side | `ContactPoint_NNN` | Orange | Auto PIN detection or Define Contact Points |
+| Housing / leadframe | `contact_point_housing_NNN` | Yellow | Set Contact Points on Face |
+
+The **Contact Point Browser** dock panel lists all markers grouped by type. Hovering a row highlights the corresponding marker in the 3-D view.
 
 ---
 
@@ -85,7 +144,10 @@ Filler layers (marked `FILL` in the `.map` file) are represented as a single bou
 |---|---|
 | `.gds` / `.GDS` | GDSII layout (output of KLayout, Cadence, etc.) |
 | `.lyp` | KLayout layer properties — defines layer colours and visibility |
-| `.map` | IHP technology map — layer names, EDI types, Z-stack heights |
+| `.map` | IHP technology map — layer names, EDI types (PIN, NET, VIA, FILL, …) |
+| `.xml` | KLayout stackup XML — accurate Zmin/Zmax per layer from the PDK |
+| `.step` / `.stp` | Package STEP model from MirrorSemi online library |
+| `.dipas` | DI-PASSIONATE session file (JSON) — records all design actions for replay |
 
 The IHP Open PDK (including sample `.map` files) is available at:
 <https://github.com/IHP-GmbH/IHP-Open-PDK>
@@ -96,12 +158,9 @@ A sample `.gds` file for testing is included at `resources/gds/ALL_LNA.gds`.
 
 ## Session Files (`.dipas`)
 
-Each time you run **Save Session** the workbench writes a `.dipas` JSON file containing:
+Each **Save Session** writes a `.dipas` JSON file containing all design actions in order (GDS import paths, leadframe config, housing config, wire-bond config, …) plus timestamps and the associated FreeCAD document path.
 
-- All design actions in order (GDS import paths, leadframe config, housing config, wire-bond config, …)
-- Timestamps and the associated FreeCAD document path
-
-Reopen a session with **Load Session** to restore parameters and re-apply them.
+Reopen a session with **Session ▾ → Load Design Session** to restore parameters and re-apply them from scratch — useful for regenerating a design after modifying the source GDS file.
 
 ---
 
@@ -109,62 +168,80 @@ Reopen a session with **Load Session** to restore parameters and re-apply them.
 
 ```
 DI-PASSIONATE-FreeCAD/
-├── InitGui.py                  # Workbench registration & toolbar definition
+├── InitGui.py                  # Workbench registration, toolbar, Advanced/Session dropdowns
 ├── version.py                  # Single source of truth for the version number
 ├── Get_Path.py                 # Path helpers (icons, HTML resources)
 ├── core/
-│   ├── Core_Functionality.py   # GDS parsing, shape building, layer styling
+│   ├── Core_Functionality.py   # GDS parsing, shape building, layer styling, auto PIN detection
 │   ├── leadframe.py            # Leadframe solid geometry builder
 │   ├── housing.py              # Housing solid geometry builder
 │   └── Color.py                # Colour utilities
 ├── gds/
-│   ├── GDSCommand.py           # "Load GDSII" command + import pipeline
+│   ├── GDSCommand.py           # "Load GDSII" command + full import pipeline
+│   ├── ChipTransformCommand.py # "Move / Rotate Chip" modeless dialog
 │   └── PropertyPanel.py        # Layer properties dock panel
 ├── leadframe/
 │   ├── LeadframeCommand.py     # Leadframe Configurator + Center Leadframe commands
 │   ├── LeadframeConfigurator.py# QFN / QFP / BGA configuration dialog
-│   ├── LeadframeLibrary.py     # Online library browser (MirrorSemi)
+│   ├── LeadframeLibrary.py     # Online library browser (MirrorSemi STEP import)
 │   └── LayeronLeadframe.py     # Layer-on-Leadframe command & dialog
 ├── housing/
 │   ├── HousingCommand.py       # Housing Configurator command
 │   └── HousingConfigurator.py  # Housing configuration dialog
 ├── wirebond/
-│   ├── WirebondCommand.py      # Wire bonding commands (manual, cancel, browser)
+│   ├── WirebondCommand.py      # Wire bonding commands (manual, cancel, browser, bumps)
 │   ├── WirebondConfigurator.py # Wire bonding session configuration dialog
-│   ├── ManualWireBonding.py    # Interactive bonding session logic
+│   ├── ManualWireBonding.py    # Interactive bonding session (solid swept-pipe geometry)
+│   ├── WireBumpConfigurator.py # Bump shape configurator with netlist browser
 │   ├── ContactPointTool.py     # "Define Contact Points" command
 │   ├── ContactPointPanel.py    # Contact Point Browser dock panel
-│   ├── SetContactPointsOnFaceCommand.py  # Interactive top-face contact point placement
-│   └── Wirebon_Confi_Support.py# Prerequisite checks
+│   ├── SetContactPointsOnFaceCommand.py  # Grid-based face contact point placement
+│   └── Wirebon_Confi_Support.py# Prerequisite checks for wire bond activation
 ├── session/
-│   ├── SessionManager.py       # Session record/persist/restore logic (.dipas)
-│   ├── SaveSessionCommand.py   # "Save Session" toolbar command
-│   └── LoadSessionCommand.py   # "Load Session" toolbar command
+│   ├── SessionManager.py       # Session record / persist / restore logic (.dipas)
+│   ├── SaveSessionCommand.py   # Save action
+│   ├── LoadSessionCommand.py   # Load & replay action
+│   └── SessionMenuCommand.py   # Combined Save/Load dropdown toolbar button
 ├── ui/
 │   ├── LayerSelector.py        # Layer selection dialog (used during GDS import)
 │   ├── ExtendedPropertyPanel.py
 │   └── LayeronLeadframeConfigurator.py
 ├── help/
-│   ├── HelpGuideCommand.py     # In-app help guide (HTML tabs)
+│   ├── HelpGuideCommand.py     # Modern in-app help (sidebar navigation + QTextBrowser)
 │   └── AboutCommand.py         # About dialog
 └── resources/
     ├── gds/ALL_LNA.gds         # Sample GDS file for testing
-    ├── icons/                  # SVG/PNG toolbar icons
+    ├── icons/                  # SVG/PNG toolbar icons (see table below)
     ├── html/                   # HTML content for the in-app help guide
     └── workflow.svg            # Workflow overview diagram
 ```
+
+### Icon Reference
+
+| File | Used by |
+|---|---|
+| `Load GDS.png` | Load GDSII |
+| `Leadframe_Library.svg` | Leadframe Library |
+| `Chip_Transform.svg` | Move / Rotate Chip |
+| `Set_Contact_Points.svg` | Set Contact Points on Face |
+| `ContactPoint_Browser.svg` | Contact Point Browser |
+| `Wire_bonding.png` | Wire Bond |
+| `Wire_Bump.svg` | Wire Bump Configurator |
+| `Cancel_Wirebonding.svg` | Cancel Wire Bonding |
+| `Session.svg` | Session ▾ dropdown |
+| `Toggle_Advanced.svg` | Advanced Tools ▾ dropdown |
+| `Help_Guide.svg` | Help Guide |
+| `Leadframe_Configurator.png` | Leadframe Configurator |
+| `Center_Leadframe.svg` | Center Leadframe |
+| `Housing_Configurator.png` | Housing Configurator |
+| `Layer on Leadframe.png` | Layer on Leadframe |
+| `Define_Contact_Points.svg` | Define Contact Points |
 
 ---
 
 ## Quick Setup
 
-See **[INSTALL.md](INSTALL.md)** for the full step-by-step guide covering:
-
-- Installing FreeCAD 1.0
-- Installing the `gdstk` Python dependency
-- Cloning the workbench into the correct `Mod` folder
-- Developer setup (VS Code IntelliSense + `debugpy` remote debugging)
-- Troubleshooting common problems
+See **[INSTALL.md](INSTALL.md)** for the full step-by-step guide.
 
 **Short version:**
 
@@ -188,9 +265,9 @@ A possible target UI showing a configuration module for chip-packaging elements:
 
 <img width="511" height="334" alt="target UI concept" src="https://github.com/user-attachments/assets/5ac820ee-de2e-4051-97c5-c6499160bba8" />
 
-An example for a bonded Chip looks within a package looks like this:
+An example of a bonded chip within a package:
 
-<img width="230" height="300" alt="bonded chip 1" src="https://github.com/user-attachments/assets/49d8373b-136f-4cf7-80d6-4976a90abba1" /> <img width="230" height="300" alt="bonded chip 1" src="https://github.com/user-attachments/assets/59d32864-7f0b-452e-8055-ff854130013b" />
+<img width="230" height="300" alt="bonded chip 1" src="https://github.com/user-attachments/assets/49d8373b-136f-4cf7-80d6-4976a90abba1" /> <img width="230" height="300" alt="bonded chip 2" src="https://github.com/user-attachments/assets/59d32864-7f0b-452e-8055-ff854130013b" />
 
 ---
 
