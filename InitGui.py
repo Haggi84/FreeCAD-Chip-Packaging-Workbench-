@@ -1,4 +1,3 @@
-from PySide2 import QtWidgets, QtCore, QtGui
 import FreeCAD, FreeCADGui
 
 import os
@@ -24,6 +23,7 @@ try:
     from session import SaveSessionCommand
     from session import LoadSessionCommand
     from session import SessionMenuCommand
+    from ui import TechConfigDialog  # noqa: F401  (side-effect: registers TechConfigCommand)
 
     FreeCAD.Console.PrintMessage("Commands loaded successfully\n")
 except Exception as e:
@@ -94,6 +94,16 @@ class MyWorkbench(FreeCADGui.Workbench):
 
     def Initialize(self):
         try:
+            from PySide2 import QtCore as _QtCore
+            import FreeCAD as _FreeCAD
+
+            # ── Technology configuration bar (shown above main tools) ──────
+            self.appendToolbar(
+                "Technology Configuration",
+                ["TechConfigCommand"],
+            )
+
+            # ── Main tools toolbar ─────────────────────────────────────────
             self.appendToolbar(
                 "GDSII Tools",
                 [
@@ -111,9 +121,73 @@ class MyWorkbench(FreeCADGui.Workbench):
                     "AboutCommand",
                 ],
             )
-            FreeCAD.Console.PrintMessage("Toolbar initialized\n")
+
+            # Inject the status label into the tech config toolbar after Qt
+            # has finished building it (singleShot defers until the event loop).
+            _QtCore.QTimer.singleShot(400, self._inject_tech_status_label)
+
+            _FreeCAD.Console.PrintMessage("Toolbars initialized\n")
         except Exception as e:
-            FreeCAD.Console.PrintError(f"Toolbar initialization failed: {e}\n")
+            import FreeCAD as _FC
+            _FC.Console.PrintError(f"Toolbar initialization failed: {e}\n")
+
+    def _inject_tech_status_label(self):
+        """Find the Technology Configuration toolbar and add a status QLabel."""
+        try:
+            from PySide2 import QtWidgets as _QW, QtCore as _QC
+            import FreeCAD as _FC
+            import FreeCADGui as _FCGui
+            from core import TechStatusBar
+
+            mw = _FCGui.getMainWindow()
+            target_tb = None
+            for tb in mw.findChildren(_QW.QToolBar):
+                if tb.windowTitle() == "Technology Configuration":
+                    target_tb = tb
+                    break
+
+            if target_tb is None:
+                _FC.Console.PrintWarning(
+                    "TechConfig: toolbar not found — retrying in 1 s\n"
+                )
+                _QC.QTimer.singleShot(1000, self._inject_tech_status_label)
+                return
+
+            # Build the label widget
+            lbl = _QW.QLabel()
+            lbl.setTextFormat(_QC.Qt.RichText)
+            lbl.setMinimumWidth(360)
+            lbl.setSizePolicy(
+                _QW.QSizePolicy.Expanding,
+                _QW.QSizePolicy.Preferred,
+            )
+            lbl.setToolTip(
+                "Current technology configuration.\n"
+                "Click the gear button on the left to manage profiles."
+            )
+
+            # Style: subtle inset look
+            lbl.setStyleSheet(
+                "QLabel {"
+                "  background: #F5F5F5;"
+                "  border: 1px solid #BDBDBD;"
+                "  border-radius: 3px;"
+                "  padding: 2px 6px;"
+                "  margin: 2px 4px;"
+                "}"
+            )
+
+            target_tb.addSeparator()
+            target_tb.addWidget(lbl)
+
+            TechStatusBar.set_label(lbl)
+            _FC.Console.PrintMessage("TechConfig: status label injected\n")
+
+        except Exception as exc:
+            import FreeCAD as _FC
+            _FC.Console.PrintWarning(
+                f"TechConfig: status label injection failed: {exc}\n"
+            )
 
     def GetClassName(self):
         return "Gui::PythonWorkbench"

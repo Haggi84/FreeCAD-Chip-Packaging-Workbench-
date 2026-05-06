@@ -29,25 +29,43 @@ def load_gds_layers():
             QtWidgets.QMessageBox.critical(None, "Error", "GDS file not found or invalid path.")
             return None, None, None, None, None, None, None, None
 
-        lyp_path, _ = QtWidgets.QFileDialog.getOpenFileName(None, "Select LYP File", "", "LYP Files (*.lyp *.LYP)")
-        if not lyp_path or not os.path.exists(lyp_path):
-            QtWidgets.QMessageBox.critical(None, "Error", "LYP file not found or invalid path.")
-            return None, None, None, None, None, None, None, None
+        # ── Technology config: use global/session paths when available ──────
+        from core.TechConfig import tech_config
 
-        # Optional: choose MAP (technology). If cancelled, try default.
-        map_path, _ = QtWidgets.QFileDialog.getOpenFileName(None, "Select IHP MAP (optional)", "", "MAP Files (*.map *.MAP)")
-        if not map_path:
-            FreeCAD.Console.PrintWarning("No MAP file selected, proceeding without layer mapping.\n")
-            map_path = None
+        if tech_config.has_lyp():
+            lyp_path = tech_config.get_lyp()
+            FreeCAD.Console.PrintMessage(f"TechConfig: using LYP  {lyp_path}\n")
+        else:
+            lyp_path, _ = QtWidgets.QFileDialog.getOpenFileName(None, "Select LYP File", "", "LYP Files (*.lyp *.LYP)")
+            if not lyp_path or not os.path.exists(lyp_path):
+                QtWidgets.QMessageBox.critical(None, "Error", "LYP file not found or invalid path.")
+                return None, None, None, None, None, None, None, None
+            tech_config.set_local(lyp=lyp_path)
+
+        if tech_config.has_map():
+            map_path = tech_config.get_map()
+            FreeCAD.Console.PrintMessage(f"TechConfig: using MAP  {map_path}\n")
+        else:
+            map_path, _ = QtWidgets.QFileDialog.getOpenFileName(None, "Select IHP MAP (optional)", "", "MAP Files (*.map *.MAP)")
+            if not map_path:
+                FreeCAD.Console.PrintWarning("No MAP file selected, proceeding without layer mapping.\n")
+                map_path = None
+            elif map_path:
+                tech_config.set_local(map_=map_path)
         ihp_map = Core_Functionality.parse_map(map_path) if map_path else {}
 
-        # Optional: choose stackup XML (provides accurate Zmin/Zmax per layer).
-        xml_path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            None, "Select Stackup XML (optional)", "", "XML Files (*.xml *.XML)"
-        )
-        if not xml_path:
-            FreeCAD.Console.PrintWarning("No stackup XML selected, using built-in thickness defaults.\n")
-            xml_path = None
+        if tech_config.has_xml():
+            xml_path = tech_config.get_xml()
+            FreeCAD.Console.PrintMessage(f"TechConfig: using XML  {xml_path}\n")
+        else:
+            xml_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+                None, "Select Stackup XML (optional)", "", "XML Files (*.xml *.XML)"
+            )
+            if not xml_path:
+                FreeCAD.Console.PrintWarning("No stackup XML selected, using built-in thickness defaults.\n")
+                xml_path = None
+            elif xml_path:
+                tech_config.set_local(xml=xml_path)
         stackup_data = Core_Functionality.parse_stackup_xml(xml_path) if xml_path else {}
 
         layers_with_colors = Core_Functionality.parse_lyp(lyp_path)

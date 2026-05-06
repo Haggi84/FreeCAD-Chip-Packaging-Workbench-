@@ -8,8 +8,8 @@ Follows Semantic Versioning (https://semver.org/):
 """
 
 MAJOR = 0
-MINOR = 1
-PATCH = 0
+MINOR = 2
+PATCH = 1
 
 VERSION = (MAJOR, MINOR, PATCH)
 VERSION_STRING = f"{MAJOR}.{MINOR}.{PATCH}"  
