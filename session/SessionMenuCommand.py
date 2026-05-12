@@ -7,7 +7,7 @@ When activated it pops up a small menu at the cursor with
 
 import FreeCAD
 import FreeCADGui
-from PySide2 import QtWidgets, QtGui
+from compat import QtWidgets, QtGui
 
 from Get_Path import get_icon
 from session.SessionManager import session_manager

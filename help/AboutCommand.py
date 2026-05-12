@@ -7,7 +7,7 @@ import sys
 
 import FreeCAD
 import FreeCADGui
-from PySide2 import QtCore, QtGui, QtWidgets
+from compat import QtCore, QtGui, QtWidgets
 
 root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, root_path)

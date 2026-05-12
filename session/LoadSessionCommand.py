@@ -9,7 +9,7 @@ from scratch using the saved parameters.
 import os
 import FreeCAD
 import FreeCADGui
-from PySide2 import QtWidgets, QtCore
+from compat import QtWidgets, QtCore
 
 from Get_Path import get_icon
 from session.SessionManager import session_manager, SESSION_EXT
@@ -42,7 +42,7 @@ def _replay_layer_on_leadframe(params):
     """Replay the combined Layer-on-Leadframe workflow."""
     import FreeCAD as _FC
     import FreeCADGui as _FCGUI
-    from PySide2 import QtCore as _QC, QtWidgets as _QW
+    from compat import QtCore as _QC, QtWidgets as _QW
     from core import Core_Functionality
     from leadframe.LayeronLeadframe import configuration
     from ui.ExtendedPropertyPanel import ExtendedPropertyPanel

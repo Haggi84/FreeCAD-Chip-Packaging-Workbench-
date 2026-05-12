@@ -17,7 +17,7 @@ so they can be identified later.
 import FreeCAD
 import FreeCADGui
 import Part
-from PySide2 import QtWidgets, QtCore, QtGui
+from compat import QtWidgets, QtCore, QtGui
 
 import os
 import sys

@@ -1,5 +1,5 @@
 from gds.PropertyPanel import PropertyPanel
-from PySide2 import QtWidgets
+from compat import QtWidgets
 import FreeCAD, FreeCADGui
 from core import Core_Functionality
 

@@ -10,7 +10,7 @@ from urllib.parse import urljoin
 import FreeCAD
 import FreeCADGui
 import ImportGui
-from PySide2 import QtCore, QtGui, QtWidgets
+from compat import QtCore, QtGui, QtWidgets, qenum_int
 
 from Get_Path import get_icon
 
@@ -501,7 +501,7 @@ class _PackageOrientationPanel:
         return QtWidgets.QLabel(f"<b>{text}</b>")
 
     def getStandardButtons(self):
-        return int(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        return qenum_int(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
 
     # ── picking mode toggle ───────────────────────────────────────────────────
 

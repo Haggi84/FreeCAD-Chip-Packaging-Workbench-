@@ -17,7 +17,7 @@ import sys
 import FreeCAD
 import FreeCADGui
 import Part
-from PySide2 import QtWidgets, QtCore
+from compat import QtWidgets, QtCore, qenum_int
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from Get_Path import get_icon
@@ -368,7 +368,7 @@ class _GridContactPanel:
     # ── ok / cancel ───────────────────────────────────────────────────────────
 
     def getStandardButtons(self):
-        return int(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        return qenum_int(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
 
     def accept(self):
         if self._phase == _PHASE_FACES:

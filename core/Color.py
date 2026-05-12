@@ -1,4 +1,4 @@
-from PySide2 import QtGui
+from compat import QtGui
 
 # -----------------------
 # Color / style helpers

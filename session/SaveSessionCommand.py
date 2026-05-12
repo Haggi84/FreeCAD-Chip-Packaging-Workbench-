@@ -8,7 +8,7 @@ parameters) to a .dipas JSON file next to the active FreeCAD document.
 import os
 import FreeCAD
 import FreeCADGui
-from PySide2 import QtWidgets
+from compat import QtWidgets
 
 from Get_Path import get_icon
 from session.SessionManager import session_manager, SESSION_EXT

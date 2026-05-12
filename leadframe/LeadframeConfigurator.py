@@ -3,7 +3,7 @@ Leadframe Configuration Dialog
 Supports QFN, QFP, and BGA package types with die paddle and realistic lead geometry.
 """
 
-from PySide2 import QtWidgets, QtCore
+from compat import QtWidgets, QtCore
 
 
 class LeadframeConfigurator(QtWidgets.QDialog):

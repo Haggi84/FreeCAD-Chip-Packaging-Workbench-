@@ -3,7 +3,7 @@ Housing Configuration Dialog
 UI for configuring transparent housing around leadframes
 """
 
-from PySide2 import QtWidgets, QtCore
+from compat import QtWidgets, QtCore
 import FreeCAD, os, sys
 
 root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

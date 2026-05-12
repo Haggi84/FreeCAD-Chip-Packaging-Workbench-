@@ -356,7 +356,7 @@ class ManualWireBonding:
     def _create_temp_marker(self, pos: Base.Vector):
         """Green sphere at the first pick; auto-removed after 3 s."""
         try:
-            from PySide2 import QtCore
+            from compat import QtCore
             m = self.doc.addObject("Part::Sphere", "_SnapMarker")
             m.Radius = 0.06
             # Must assign a new Placement object — modifying .Base in-place

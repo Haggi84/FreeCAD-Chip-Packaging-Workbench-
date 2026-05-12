@@ -10,7 +10,7 @@ Usage (from a FreeCAD command):
     dlg.exec_()
 """
 
-from PySide2 import QtWidgets, QtCore, QtGui
+from compat import QtWidgets, QtCore, QtGui
 import os
 
 

@@ -3,7 +3,7 @@ Wire Bonding Configuration Dialog
 UI for configuring wire bonding parameters
 """
 
-from PySide2 import QtWidgets
+from compat import QtWidgets
 
 
 class WirebondConfigurator(QtWidgets.QDialog):

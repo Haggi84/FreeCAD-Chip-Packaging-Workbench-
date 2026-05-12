@@ -8,7 +8,7 @@ highlights the corresponding marker in the 3D view; clicking it selects it.
 
 import FreeCAD
 import FreeCADGui
-from PySide2 import QtWidgets, QtCore, QtGui
+from compat import QtWidgets, QtCore, QtGui
 
 
 # Highlight colour applied while the mouse hovers over a tree row

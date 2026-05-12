@@ -21,7 +21,7 @@ import FreeCAD
 import FreeCADGui
 import Part
 from FreeCAD import Base
-from PySide2 import QtWidgets
+from compat import QtWidgets
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from Get_Path import get_icon

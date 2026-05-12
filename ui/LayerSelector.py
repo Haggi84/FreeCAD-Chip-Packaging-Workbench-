@@ -3,7 +3,7 @@ Layer Selection Dialog
 Provides UI for selecting GDS layers with quick action buttons
 """
 
-from PySide2 import QtWidgets, QtCore, QtGui
+from compat import QtWidgets, QtCore, QtGui
 
 class LayerSelector(QtWidgets.QDialog):
     """
@@ -83,7 +83,7 @@ class LayerSelector(QtWidgets.QDialog):
         self.layer_list = QtWidgets.QListWidget()
         self.layer_list.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
 
-        QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+A"), self.layer_list, activated=self.select_all_layers)
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+A"), self.layer_list, activated=self.select_all_layers)
 
         for layer in self.layers:
             layer_name = layer.get("name", "Unknown Layer")

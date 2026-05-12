@@ -1,4 +1,4 @@
-from PySide2 import QtWidgets
+from compat import QtWidgets
 
 class LayeronLeadframeConfigurator(QtWidgets.QDialog):
     def __init__(self, parent=None):

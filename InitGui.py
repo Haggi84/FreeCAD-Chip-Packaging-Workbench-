@@ -56,7 +56,7 @@ class AdvancedMenuCommand:
         }
 
     def Activated(self):
-        from PySide2 import QtWidgets, QtGui
+        from compat import QtWidgets, QtGui
         import FreeCADGui
         from Get_Path import get_icon
 
@@ -94,7 +94,7 @@ class MyWorkbench(FreeCADGui.Workbench):
 
     def Initialize(self):
         try:
-            from PySide2 import QtCore as _QtCore
+            from compat import QtCore as _QtCore
             import FreeCAD as _FreeCAD
 
             # ── Technology configuration bar (shown above main tools) ──────
@@ -134,7 +134,7 @@ class MyWorkbench(FreeCADGui.Workbench):
     def _inject_tech_status_label(self):
         """Find the Technology Configuration toolbar and add a status QLabel."""
         try:
-            from PySide2 import QtWidgets as _QW, QtCore as _QC
+            from compat import QtWidgets as _QW, QtCore as _QC
             import FreeCAD as _FC
             import FreeCADGui as _FCGui
             from core import TechStatusBar
