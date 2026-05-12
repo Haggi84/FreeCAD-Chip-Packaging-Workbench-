@@ -120,6 +120,25 @@ def _is_contact_point(obj) -> bool:
     return getattr(obj, "IsContactPoint", False)
 
 
+class _ContactPointGate:
+    """
+    FreeCAD SelectionGate that allows only ContactPoint objects.
+    Installed when a wire bonding session starts so that non-CP objects
+    receive no hover highlight and cannot be clicked at all.
+
+    FreeCAD 1.x passes the Document / DocumentObject directly; older builds
+    pass name strings.  Both cases are handled below.
+    """
+    def allow(self, doc, obj, sub) -> bool:
+        try:
+            fc_obj = obj if not isinstance(obj, str) else (
+                (FreeCAD.getDocument(doc) if isinstance(doc, str) else doc).getObject(obj)
+            )
+            return fc_obj is not None and getattr(fc_obj, "IsContactPoint", False)
+        except Exception:
+            return False
+
+
 # ── state constants ────────────────────────────────────────────────────────────
 
 class _State:
@@ -165,6 +184,7 @@ class ManualWireBonding:
         self.doc       = FreeCAD.activeDocument() or FreeCAD.newDocument("WireBonding")
 
         FreeCADGui.Selection.addObserver(self)
+        FreeCADGui.Selection.addSelectionGate(_ContactPointGate())
         self._set_status("Wire bonding — click the first contact point (die pad)")
         FreeCAD.Console.PrintMessage(
             "Wire bonding started.\n"
@@ -193,6 +213,10 @@ class ManualWireBonding:
         self.is_active = False
         self.state     = _State.IDLE
         self._clear_highlight()
+        try:
+            FreeCADGui.Selection.removeSelectionGate()
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(f"removeSelectionGate: {e}\n")
         try:
             FreeCADGui.Selection.removeObserver(self)
         except Exception as e:
