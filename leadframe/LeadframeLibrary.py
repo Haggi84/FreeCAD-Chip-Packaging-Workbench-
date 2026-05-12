@@ -1003,9 +1003,11 @@ def _import_into_freecad(file_path: str):
 
     try:
         FreeCADGui.setActiveDocument(pkg_doc_name)
+        FreeCADGui.updateGui()
         view = FreeCADGui.activeDocument().activeView()
-        view.viewIsometric()
-        view.fitAll()
+        if view:
+            view.viewIsometric()
+            view.fitAll()
     except Exception:
         pass
 
