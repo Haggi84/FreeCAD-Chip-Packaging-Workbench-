@@ -316,7 +316,9 @@ class ChipTransformDialog(QtWidgets.QDialog):
         doc.openTransaction("Chip Translate")
         _translate_objects(objs, dx, dy, dz)
         doc.commitTransaction()
-        doc.recompute()
+        # Placement changes don't require shape recomputation — just refresh the view.
+        # doc.recompute() on complex STEP geometry blocks the UI thread in FreeCAD 1.1+.
+        FreeCADGui.updateGui()
         self._dx += dx
         self._dy += dy
         self._dz += dz
@@ -332,7 +334,7 @@ class ChipTransformDialog(QtWidgets.QDialog):
         doc.openTransaction("Chip Rotate")
         _rotate_objects(objs, axis, angle, center)
         doc.commitTransaction()
-        doc.recompute()
+        FreeCADGui.updateGui()
         if axis.x:   self._rx += angle
         elif axis.y: self._ry += angle
         elif axis.z: self._rz += angle
@@ -348,7 +350,7 @@ class ChipTransformDialog(QtWidgets.QDialog):
         doc.openTransaction("Chip Reset Position")
         _translate_objects(objs, -self._dx, -self._dy, -self._dz)
         doc.commitTransaction()
-        doc.recompute()
+        FreeCADGui.updateGui()
         self._dx = self._dy = self._dz = 0.0
         self._update_status()
 

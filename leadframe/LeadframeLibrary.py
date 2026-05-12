@@ -284,38 +284,98 @@ def _doc_combined_bbox(doc) -> Optional[object]:
     return bb
 
 
+def _world_bbox_of_objects(objects):
+    """
+    Return a world-space FreeCAD.BoundBox for *objects* by applying each
+    object's Placement to its local bounding-box corners.
+    Returns None when no valid geometry is found.
+    """
+    xmin = ymin = zmin = float("inf")
+    xmax = ymax = zmax = float("-inf")
+    found = False
+    for obj in objects:
+        try:
+            bb = obj.Shape.BoundBox
+            if not bb.isValid():
+                continue
+            mat = obj.Placement.toMatrix()
+            for lx in (bb.XMin, bb.XMax):
+                for ly in (bb.YMin, bb.YMax):
+                    for lz in (bb.ZMin, bb.ZMax):
+                        wp = mat.multVec(FreeCAD.Vector(lx, ly, lz))
+                        if wp.x < xmin: xmin = wp.x
+                        if wp.x > xmax: xmax = wp.x
+                        if wp.y < ymin: ymin = wp.y
+                        if wp.y > ymax: ymax = wp.y
+                        if wp.z < zmin: zmin = wp.z
+                        if wp.z > zmax: zmax = wp.z
+            found = True
+        except Exception:
+            continue
+    if not found:
+        return None
+    return FreeCAD.BoundBox(xmin, ymin, zmin, xmax, ymax, zmax)
+
+
+def _world_placement_of(obj):
+    """Accumulated world Placement for *obj*, walking up the InList chain."""
+    pl = obj.Placement.copy()
+    current = obj
+    while current.InList:
+        parent = current.InList[0]
+        if hasattr(parent, "Placement"):
+            pl = parent.Placement.multiply(pl)
+        current = parent
+    return pl
+
+
 def _rotate_pkg_doc(doc, rotation: "FreeCAD.Rotation"):
     """
-    Apply *rotation* to every shape object in *doc*, pivoting around the
-    combined bounding-box centre.  Afterwards, translate the model so its
-    new ZMin sits exactly at Z = 0 (bottom face on the ground plane).
-    """
-    bb = _doc_combined_bbox(doc)
-    if bb is None:
-        return
+    Apply *rotation* to the package model, pivoting around the world-space
+    bounding-box centre.  Afterwards, translate so ZMin = 0.
 
-    center = bb.Center
-    shape_objs = [
+    Only top-level objects (empty InList) are moved.  In FreeCAD 1.1, STEP
+    imports frequently produce App::Part containers whose children inherit the
+    container's Placement.  Rotating child objects individually in world-space
+    coordinates double-transforms them and causes the model to disappear.
+    """
+    all_shape_objs = [
         o for o in doc.Objects
         if hasattr(o, "Shape") and o.Shape and not o.Shape.isNull()
     ]
-    for obj in shape_objs:
+    if not all_shape_objs:
+        return
+
+    # Prefer top-level objects only; fall back to all shapes for flat imports.
+    top_level = [o for o in all_shape_objs if not o.InList]
+    objs_to_rotate = top_level if top_level else all_shape_objs
+
+    # Compute world-space pivot (placements already encoded in each object's
+    # Placement — _doc_combined_bbox only reads local coords and is wrong here).
+    world_bb = _world_bbox_of_objects(objs_to_rotate)
+    if world_bb is None:
+        return
+    center = world_bb.Center
+
+    for obj in objs_to_rotate:
         pl = obj.Placement
         new_base = rotation.multVec(pl.Base - center) + center
-        new_rot  = rotation.multiply(pl.Rotation)
+        new_rot  = rotation * pl.Rotation
         obj.Placement = FreeCAD.Placement(new_base, new_rot)
 
-    doc.recompute()
+    # Refresh the viewport without triggering a full shape recompute.
+    # doc.recompute() on complex STEP geometry blocks the UI thread in FC 1.1.
+    FreeCADGui.updateGui()
 
-    # Lift so bottom rests at Z = 0
-    bb2 = _doc_combined_bbox(doc)
-    if bb2 and abs(bb2.ZMin) > 1e-6:
-        dz = -bb2.ZMin
-        for obj in shape_objs:
+    # Lift so bottom rests at Z = 0 using world-space ZMin after rotation.
+    world_bb2 = _world_bbox_of_objects(objs_to_rotate)
+    if world_bb2 and abs(world_bb2.ZMin) > 1e-6:
+        dz = -world_bb2.ZMin
+        for obj in objs_to_rotate:
             pl = obj.Placement
             pl.Base = pl.Base + FreeCAD.Vector(0.0, 0.0, dz)
             obj.Placement = pl
-        doc.recompute()
+        FreeCADGui.updateGui()
 
 
 def _compute_rotation_to_z(normal: "FreeCAD.Vector") -> "FreeCAD.Rotation":
@@ -402,10 +462,11 @@ class _PackageOrientationPanel:
         self._rotation_done = False
 
         # die-attach (contact) face state
-        self._contact_obj_name  = None      # name of the FreeCAD object
-        self._contact_face_idx  = None      # 0-based face index
-        self._contact_face_z    = None      # world-space Z of face centre (pkg_doc)
-        self._contact_diffuse   = None      # saved colours for contact-face highlight
+        self._contact_obj_name         = None   # name of the FreeCAD object
+        self._contact_face_idx         = None   # 0-based face index
+        self._contact_face_z           = None   # world-space Z of face centre (for display)
+        self._contact_face_world_center = None  # FreeCAD.Vector world-space face centre
+        self._contact_diffuse          = None   # saved colours for contact-face highlight
 
         # current picking mode
         self._pick_mode = self._MODE_TOP
@@ -515,9 +576,10 @@ class _PackageOrientationPanel:
 
     def _clear_contact_face(self):
         self._restore_contact_highlight()
-        self._contact_obj_name = None
-        self._contact_face_idx = None
-        self._contact_face_z   = None
+        self._contact_obj_name          = None
+        self._contact_face_idx          = None
+        self._contact_face_z            = None
+        self._contact_face_world_center = None
         self._contact_lbl.setText("<i>No die-attach face selected.</i>")
         self._clear_contact_btn.setEnabled(False)
 
@@ -600,13 +662,19 @@ class _PackageOrientationPanel:
         self._contact_obj_name = obj.Name
         self._contact_face_idx = idx
 
-        # World-space Z of the face centre (BoundBox is world-space after recompute).
-        # Use the face's own CenterOfMass which matches the BoundBox coordinate system.
-        self._contact_face_z = face.CenterOfMass.z
+        # World-space centre of the die-attach face: apply the accumulated Placement
+        # (including any parent App::Part) to the face's local CenterOfMass.
+        # face.CenterOfMass is in the object's local shape coordinates; obj.Placement
+        # (plus any parent placements) maps it to world space in the package document.
+        local_ctr = FreeCAD.Vector(face.CenterOfMass)
+        self._contact_face_world_center = _world_placement_of(obj).toMatrix().multVec(local_ctr)
+        self._contact_face_z = self._contact_face_world_center.z  # kept for display
 
         self._contact_lbl.setText(
             f"<b>Face:</b> {sub_name}  ({obj.Label})<br>"
-            f"<b>Z position:</b> {self._contact_face_z:.4f} mm  "
+            f"<b>Centre:</b> ({self._contact_face_world_center.x:.4f}, "
+            f"{self._contact_face_world_center.y:.4f}, "
+            f"{self._contact_face_world_center.z:.4f}) mm  "
             f"<i>(world space in package doc)</i>"
         )
 
@@ -740,8 +808,12 @@ class _PackageOrientationPanel:
             )
             return
 
-        # XY target = centre of existing GDS geometry
-        gds_bb = _doc_combined_bbox(gds_doc)
+        # XY target = centre of existing GDS geometry (world-space, respects Placement).
+        gds_shape_objs = [
+            o for o in gds_doc.Objects
+            if hasattr(o, "Shape") and o.Shape and not o.Shape.isNull()
+        ]
+        gds_bb = _world_bbox_of_objects(gds_shape_objs)
         if gds_bb:
             target_cx = (gds_bb.XMin + gds_bb.XMax) / 2.0
             target_cy = (gds_bb.YMin + gds_bb.YMax) / 2.0
@@ -749,7 +821,14 @@ class _PackageOrientationPanel:
         else:
             target_cx = target_cy = gds_zmin = 0.0
 
-        pkg_bb = _doc_combined_bbox(pkg_doc)
+        # Use world-space bbox for the package — _doc_combined_bbox only reads
+        # local-coord shapes and gives wrong results after the rotation step.
+        pkg_shape_objs = [
+            o for o in pkg_doc.Objects
+            if hasattr(o, "Shape") and o.Shape and not o.Shape.isNull()
+        ]
+        pkg_top = [o for o in pkg_shape_objs if not o.InList] or pkg_shape_objs
+        pkg_bb = _world_bbox_of_objects(pkg_top)
         if pkg_bb:
             pkg_cx   = (pkg_bb.XMin + pkg_bb.XMax) / 2.0
             pkg_cy   = (pkg_bb.YMin + pkg_bb.YMax) / 2.0
@@ -757,46 +836,77 @@ class _PackageOrientationPanel:
         else:
             pkg_cx = pkg_cy = pkg_zmin = 0.0
 
-        # ── Z alignment ───────────────────────────────────────────────────────
-        # If a die-attach face was chosen: align it with the GDS bottom layer.
-        # The contact face Z was recorded in the pkg_doc world space after
-        # rotation; gds_zmin is the bottom of all GDS layer geometry.
-        # We want:  contact_face_z + dz  =  gds_zmin
-        #           → dz = gds_zmin - contact_face_z
+        # ── XY + Z alignment ──────────────────────────────────────────────────
+        # If a die-attach face was chosen, align its world-space centre with the
+        # GDS chip centre (XY) and the GDS bottom layer (Z).  Using the face
+        # centre rather than the package bounding-box centre is exact for any
+        # package geometry and correctly handles parent App::Part offsets.
         #
-        # Fallback (no contact face): seat the package bottom at Z = 0.
-        if self._contact_face_z is not None:
-            dz = gds_zmin - self._contact_face_z
+        # Fallback (no contact face): centre the package bbox on the chip and
+        # seat the package bottom at Z = 0.
+        if self._contact_face_world_center is not None:
+            fc = self._contact_face_world_center
+            dz = gds_zmin - fc.z
+            offset = FreeCAD.Vector(target_cx - fc.x, target_cy - fc.y, dz)
             FreeCAD.Console.PrintMessage(
                 f"[PackageOrientation] Die-attach alignment: "
-                f"contact face Z = {self._contact_face_z:.4f} mm  →  "
-                f"GDS ZMin = {gds_zmin:.4f} mm  (dz = {dz:.4f} mm)\n"
+                f"face centre ({fc.x:.4f}, {fc.y:.4f}, {fc.z:.4f}) mm  →  "
+                f"GDS ({target_cx:.4f}, {target_cy:.4f}, {gds_zmin:.4f}) mm  "
+                f"(dz = {dz:.4f} mm)\n"
             )
         else:
             dz = -pkg_zmin          # seat package bottom at Z = 0
+            offset = FreeCAD.Vector(target_cx - pkg_cx, target_cy - pkg_cy, dz)
             FreeCAD.Console.PrintMessage(
                 f"[PackageOrientation] No die-attach face — "
                 f"seating package bottom at Z = 0  (dz = {dz:.4f} mm)\n"
             )
 
-        offset = FreeCAD.Vector(target_cx - pkg_cx, target_cy - pkg_cy, dz)
+        # Build the set of all shape objects once for leaf detection.
+        all_shape_set = set(
+            o for o in pkg_doc.Objects
+            if hasattr(o, "Shape") and o.Shape and not o.Shape.isNull()
+        )
+
+        def _is_leaf(o):
+            """True when none of this object's OutList members are shape objects.
+            Leaf objects carry individual STEP colors; containers are gray compounds."""
+            return not any(child in all_shape_set for child in o.OutList)
 
         copied = 0
-        for obj in pkg_doc.Objects:
+        for obj in all_shape_set:
+            if not _is_leaf(obj):
+                continue
             try:
-                if not (hasattr(obj, "Shape") and obj.Shape and not obj.Shape.isNull()):
-                    continue
+                world_pl = _world_placement_of(obj)
+                world_pl.Base = world_pl.Base + offset
+
                 new_obj = gds_doc.addObject("Part::Feature", obj.Label)
                 new_obj.Shape = obj.Shape.copy()
-                pl = obj.Placement.copy()
-                pl.Base = pl.Base + offset
-                new_obj.Placement = pl
+                new_obj.Placement = world_pl
                 new_obj.Label = obj.Label
+
+                # Copy per-face DiffuseColor first (STEP colors), fall back to ShapeColor.
                 try:
-                    new_obj.ViewObject.ShapeColor = obj.ViewObject.ShapeColor
-                    new_obj.ViewObject.LineColor  = obj.ViewObject.LineColor
+                    dc = obj.ViewObject.DiffuseColor
+                    if dc and len(dc) > 1:
+                        new_obj.ViewObject.DiffuseColor = dc
+                    else:
+                        new_obj.ViewObject.ShapeColor = obj.ViewObject.ShapeColor
+                        new_obj.ViewObject.LineColor   = obj.ViewObject.LineColor
+                except Exception:
+                    try:
+                        new_obj.ViewObject.ShapeColor = obj.ViewObject.ShapeColor
+                        new_obj.ViewObject.LineColor   = obj.ViewObject.LineColor
+                    except Exception:
+                        pass
+
+                # Make the package semi-transparent so the chip inside is visible.
+                try:
+                    new_obj.ViewObject.Transparency = 60
                 except Exception:
                     pass
+
                 copied += 1
             except Exception as exc:
                 FreeCAD.Console.PrintWarning(

@@ -15,6 +15,7 @@ from core.Color import hex_to_rgb, hex_to_qcolor
 class PropertyPanel(QtWidgets.QDockWidget):
     def __init__(self, parent=None):
         super(PropertyPanel, self).__init__("Layer and Color Properties", parent)
+        self.setObjectName("PropertyPanel")
         self.setAllowedAreas(QtCore.Qt.RightDockWidgetArea | QtCore.Qt.LeftDockWidgetArea)
         self.attached_doc = None
 
