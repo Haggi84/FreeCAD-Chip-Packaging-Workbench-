@@ -54,6 +54,7 @@ class TechConfigManager:
         self._local:  dict = dict(_EMPTY_PROFILE)
         self._config_file: Path = self._resolve_config_path()
         self._load_global()
+        self._ensure_ihp_sg13g2_profile()
         self._init_local()
 
     # ── Config-file location ───────────────────────────────────────────────
@@ -88,6 +89,25 @@ class TechConfigManager:
                 )
             except Exception:
                 pass
+
+    def _ensure_ihp_sg13g2_profile(self):
+        """Seed the built-in IHP-PDK SG13G2 profile on first run.
+
+        Only runs when no user config file exists yet, so existing user
+        settings are never overwritten.
+        """
+        profile_name = "IHP-PDK SG13G2"
+        if self._config_file.exists():
+            return
+        stack_dir = Path(__file__).parent.parent / "resources" / "stack_info" / "IHP-PDK_SG13G2"
+        self.set_profile(profile_name, {
+            "description": "IHP SG13G2 BiCMOS 130 nm PDK — 200 µm stack",
+            "lyp_path":    str(stack_dir / "sg13g2.lyp"),
+            "map_path":    str(stack_dir / "sg13g2.map"),
+            "xml_path":    str(stack_dir / "SG13G2_200um.xml"),
+        })
+        self.set_active_name(profile_name)
+        self.save_global()
 
     def save_global(self):
         """Write the current global config to disk."""
