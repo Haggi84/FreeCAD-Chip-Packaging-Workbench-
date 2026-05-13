@@ -21,7 +21,7 @@ This guide explains how to get the **DI-PASSIONATE FreeCAD Workbench** running f
 
 | Requirement | Minimum version | Notes |
 |---|---|---|
-| **FreeCAD** | 1.0 | See section 2 |
+| **FreeCAD** | 1.1 | See section 2 |
 | **Python** | 3.11 | Bundled with FreeCAD — no separate install needed |
 | **git** | any recent | To clone the repository |
 | **Internet access** | — | Required for the Leadframe Online Library |
