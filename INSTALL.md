@@ -32,7 +32,7 @@ No separate Python installation is needed — FreeCAD ships with its own embedde
 
 ## 2. Install FreeCAD
 
-Download the **FreeCAD 1.0** installer from the official website:
+Download the **FreeCAD 1.1.1** installer from the official website:
 
 <https://www.freecad.org/downloads.php>
 
