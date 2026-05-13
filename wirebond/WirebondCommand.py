@@ -10,7 +10,6 @@ sys.path.insert(0, root_path)
 
 from wirebond.WirebondConfigurator import WirebondConfigurator
 from wirebond.ManualWireBonding import manual_bonder  # Global instance
-from wirebond.Wirebon_Confi_Support import check_wirebond_prerequisites
 from wirebond.ContactPointTool import DefineContactPointsCommand
 from wirebond.WireBumpConfigurator import WireBumpConfiguratorCommand
 from Get_Path import get_icon
@@ -29,20 +28,6 @@ class WirebondCommand:
         }
 
     def Activated(self):
-        # Check prerequisites
-        can_bond, message = check_wirebond_prerequisites()
-
-        if not can_bond:
-            QtWidgets.QMessageBox.warning(
-                None,
-                "Wire Bonding Not Available",
-                f"{message}\n\n"
-                "Wire bonding requires:\n"
-                "• GDS layers with bondable pads (use 'Load GDSII')\n"
-                "• A leadframe (use 'Leadframe Configurator' or 'Layer on Leadframe')",
-            )
-            return
-
         # Show configuration dialog
         dialog = WirebondConfigurator()
         if dialog.exec_():
@@ -72,12 +57,7 @@ class WirebondCommand:
             QtWidgets.QMessageBox.information(None, "Cancelled", "Wire bonding configuration cancelled.")
 
     def IsActive(self):
-        """
-        Command is only active if prerequisites are met.
-        This grays out the button when conditions aren't met.
-        """
-        can_bond, _ = check_wirebond_prerequisites()
-        return can_bond
+        return True
 
 
 class FinishWireBondingCommand:

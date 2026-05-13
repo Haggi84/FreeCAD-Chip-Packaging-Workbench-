@@ -9,7 +9,7 @@ Follows Semantic Versioning (https://semver.org/):
 
 MAJOR = 0
 MINOR = 3
-PATCH = 6
+PATCH = 7
 
 VERSION = (MAJOR, MINOR, PATCH)
 VERSION_STRING = f"{MAJOR}.{MINOR}.{PATCH}"  

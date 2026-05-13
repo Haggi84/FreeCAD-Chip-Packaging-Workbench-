@@ -32,6 +32,26 @@ def load_gds_layers():
         # ── Technology config: use global/session paths when available ──────
         from core.TechConfig import tech_config
 
+        if not tech_config.is_configured():
+            msg = QtWidgets.QMessageBox(None)
+            msg.setWindowTitle("Technology Configuration")
+            msg.setText("No technology profile is configured.")
+            msg.setInformativeText(
+                "Use the built-in standard configuration (IHP SG13G2), "
+                "or select files manually?"
+            )
+            btn_std    = msg.addButton("Use Standard Configuration", QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+            msg.addButton("Select Files Manually", QtWidgets.QMessageBox.ButtonRole.ActionRole)
+            msg.addButton(QtWidgets.QMessageBox.StandardButton.Cancel)
+            msg.setDefaultButton(btn_std)
+            msg.exec_()
+            clicked = msg.clickedButton()
+            if clicked is None or clicked == msg.button(QtWidgets.QMessageBox.StandardButton.Cancel):
+                return None, None, None, None, None, None, None, None
+            if clicked == btn_std:
+                tech_config.apply_builtin_to_local()
+                FreeCAD.Console.PrintMessage("TechConfig: using built-in IHP SG13G2 standard configuration\n")
+
         if tech_config.has_lyp():
             lyp_path = tech_config.get_lyp()
             FreeCAD.Console.PrintMessage(f"TechConfig: using LYP  {lyp_path}\n")

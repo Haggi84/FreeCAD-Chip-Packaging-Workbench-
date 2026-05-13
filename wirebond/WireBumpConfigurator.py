@@ -581,10 +581,7 @@ class WireBumpConfiguratorCommand:
         dlg.exec_()
 
     def IsActive(self):
-        doc = FreeCAD.activeDocument()
-        if not doc:
-            return False
-        return any(o.Name.startswith("BondWire_") for o in doc.Objects)
+        return True
 
 
 FreeCADGui.addCommand("WireBumpConfiguratorCommand", WireBumpConfiguratorCommand())

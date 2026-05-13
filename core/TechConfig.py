@@ -176,6 +176,13 @@ class TechConfigManager:
         """Copy a specific global profile into the session config."""
         self._local = dict(self.get_profile(name))
 
+    def apply_builtin_to_local(self):
+        """Set the session config to the bundled IHP SG13G2 resources."""
+        stack_dir = Path(__file__).parent.parent / "resources" / "stack_info" / "IHP-PDK_SG13G2"
+        self._local["lyp_path"] = str(stack_dir / "sg13g2.lyp")
+        self._local["map_path"] = str(stack_dir / "sg13g2.map")
+        self._local["xml_path"] = str(stack_dir / "SG13G2_200um.xml")
+
     def set_local(self, lyp: str = None, map_: str = None, xml: str = None):
         """Override individual paths for the current session only."""
         if lyp  is not None:
