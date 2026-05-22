@@ -128,6 +128,8 @@ def build_leadframe(config: dict, doc=None, gds_objects=None):
     """
     doc = FreeCAD.activeDocument() or FreeCAD.newDocument("Leadframe")
 
+    _before_lf = {o.Name for o in doc.Objects}
+
     frame_type      = config["frame_type"]
     frame_length    = config["frame_length"]
     frame_width     = config["frame_width"]
@@ -163,6 +165,13 @@ def build_leadframe(config: dict, doc=None, gds_objects=None):
                 obj.Placement = Base.Placement(
                     Base.Vector(0, 0, z), Base.Rotation(0, 0, 0, 1)
                 )
+
+    # ── group all newly created objects under one assembly node ──────────
+    pkg_group = doc.addObject("App::DocumentObjectGroup", "Package")
+    pkg_group.Label = "Package"
+    for _o in list(doc.Objects):
+        if _o.Name not in _before_lf and _o.Name != pkg_group.Name:
+            pkg_group.addObject(_o)
 
     doc.recompute()
     FreeCADGui.activeDocument().activeView().viewIsometric()

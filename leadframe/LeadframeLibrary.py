@@ -873,6 +873,7 @@ class _PackageOrientationPanel:
             Leaf objects carry individual STEP colors; containers are gray compounds."""
             return not any(child in all_shape_set for child in o.OutList)
 
+        _before_merge = {o.Name for o in gds_doc.Objects}
         copied = 0
         for obj in all_shape_set:
             if not _is_leaf(obj):
@@ -912,6 +913,13 @@ class _PackageOrientationPanel:
                 FreeCAD.Console.PrintWarning(
                     f"[PackageOrientation] skipping '{obj.Label}': {exc}\n"
                 )
+
+        # Group all newly added package objects under one assembly node.
+        pkg_group = gds_doc.addObject("App::DocumentObjectGroup", "Package")
+        pkg_group.Label = "Package"
+        for _o in list(gds_doc.Objects):
+            if _o.Name not in _before_merge and _o.Name != pkg_group.Name:
+                pkg_group.addObject(_o)
 
         gds_doc.recompute()
         FreeCAD.Console.PrintMessage(

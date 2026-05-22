@@ -26,7 +26,7 @@ def refresh():
         has_x  = tech_config.has_xml()
 
         def _tag(ok, letter):
-            color = "#2E7D32" if ok else "#9E9E9E"
+            color = "#2E7D32" if ok else "#A30F0F"
             mark  = "✔" if ok else "✘"
             return (
                 f'<font color="{color}"><b>{letter}</b>'

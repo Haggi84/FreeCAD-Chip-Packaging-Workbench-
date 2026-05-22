@@ -371,6 +371,17 @@ class ManualWireBonding:
                 f"length={shape.Length:.3f} mm\n"
             )
 
+            # Refresh the Contact Point Browser so newly connected CPs are
+            # greyed out and the netlist row appears immediately.
+            try:
+                from compat import QtWidgets as _QW
+                mw = FreeCADGui.getMainWindow()
+                panel = mw.findChild(_QW.QDockWidget, "ContactPointPanel")
+                if panel is not None:
+                    panel.populate()
+            except Exception:
+                pass
+
         except Exception as e:
             doc.abortTransaction()
             FreeCAD.Console.PrintError(f"Wire placement failed: {e}\n")
@@ -388,7 +399,14 @@ class ManualWireBonding:
             m.Placement = FreeCAD.Placement(pos, FreeCAD.Rotation(0, 0, 0, 1))
             m.ViewObject.ShapeColor = _COLOR_SNAP_VALID
             m.ViewObject.Transparency = 20
-            self.doc.recompute()
+            # Lightweight viewport refresh instead of full doc.recompute() —
+            # a sphere marker does not depend on any other shape, so a full
+            # OCCT rebuild of the entire document is unnecessary here.
+            try:
+                import FreeCADGui as _Gui
+                _Gui.updateGui()
+            except Exception:
+                self.doc.recompute()
             QtCore.QTimer.singleShot(3000, lambda: self._remove_marker(m))
         except Exception as e:
             FreeCAD.Console.PrintWarning(f"Snap marker: {e}\n")
@@ -397,7 +415,13 @@ class ManualWireBonding:
         try:
             if self.doc and marker in self.doc.Objects:
                 self.doc.removeObject(marker.Name)
-                self.doc.recompute()
+                # Lightweight refresh — marker removal does not require
+                # recomputing the full document shape graph.
+                try:
+                    import FreeCADGui as _Gui
+                    _Gui.updateGui()
+                except Exception:
+                    self.doc.recompute()
         except Exception:
             pass
 

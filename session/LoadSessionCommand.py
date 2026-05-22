@@ -169,11 +169,21 @@ def _replay_wirebond_placements(params):
             wire_obj.WireLength = (start - end).Length
 
             doc.commitTransaction()
-            doc.recompute()
+            # NOTE: recompute() intentionally NOT called here.
+            # A single recompute after all wires are created is far faster
+            # than one per wire (was causing N full OCCT rebuilds for N bonds).
 
         except Exception as e:
             doc.abortTransaction()
             FreeCAD.Console.PrintError(f"Bond wire replay failed (bond {i + 1}): {e}\n")
+
+    # One recompute for all wires together — replaces the per-wire recompute
+    # that was previously inside the loop (N wires → N OCCT rebuilds → slow).
+    if bonds:
+        doc.recompute()
+        FreeCAD.Console.PrintMessage(
+            f"[Session Replay] {len(bonds)} bond wire(s) rebuilt in single recompute.\n"
+        )
 
 
 # ---------------------------------------------------------------------------

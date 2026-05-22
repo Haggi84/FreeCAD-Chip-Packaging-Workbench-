@@ -49,8 +49,11 @@ _GDS_PREFIXES = (
 
 
 def _all_objects(doc):
-    """Every object in the document that has a Shape."""
-    return [o for o in (doc.Objects if doc else []) if hasattr(o, "Shape")]
+    """Every object in the document that has a Shape and a Placement."""
+    return [
+        o for o in (doc.Objects if doc else [])
+        if hasattr(o, "Shape") and hasattr(o, "Placement")
+    ]
 
 
 def _gds_objects(doc):

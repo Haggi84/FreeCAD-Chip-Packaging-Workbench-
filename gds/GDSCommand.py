@@ -163,8 +163,11 @@ def load_gds_layers():
             use_klayout_colors = match_klayout
             highlight_bondable   = bool(options.get("highlight_bondable", True))
             extrude_3d           = bool(options.get("extrude_3d", False))
+            mesh_3d              = bool(options.get("mesh_3d", False))
             auto_pin_contacts    = bool(options.get("auto_pin_contacts", False))
             contacts_only_3d     = bool(options.get("contacts_only_3d", False))
+            if mesh_3d:
+                extrude_3d = True   # mesh path still needs stack_mm for z positions
 
             # Pre-compute which layers to render as full geometry in contacts_only mode
             contact_keys       = None
@@ -192,6 +195,8 @@ def load_gds_layers():
 
             # Ensure a valid document is available
             doc = FreeCAD.activeDocument()
+
+            _before_gds = {o.Name for o in doc.Objects}
 
             try:
                 doc.openTransaction("Fast Preview Import")
@@ -245,6 +250,8 @@ def load_gds_layers():
             )
 
             try:
+                import os as _os
+                _n_workers = max(1, (_os.cpu_count() or 2) - 1)
                 shapes = Core_Functionality.load_gds(
                     gds_path,
                     selected_layers,
@@ -256,12 +263,17 @@ def load_gds_layers():
                     skip_fill_datatype=False,
                     fill_as_bbox=True,
                     fill_layer_keys=fill_layer_keys,
+                    ihp_map=ihp_map,
                     flat_layer_keys=flat_layer_keys,
                     stack_mm=stack_mm,
                     contacts_only_3d=contacts_only_3d,
                     contact_keys=contact_keys,
                     max_polys_per_layer=max_polys_per_layer,
-                    progress_callback=progress_callback
+                    mesh_3d=mesh_3d,
+                    progress_callback=progress_callback,
+                    use_cache=True,
+                    parallel_workers=_n_workers,
+                    auto_bbox_threshold=5_000,
                 )
             finally:
                 progress_dialog.close()
@@ -274,15 +286,17 @@ def load_gds_layers():
                 return None, None, None, None, None, None, None, None
 
             layer_objects = {}
+            # Colors to apply after recompute — FreeCAD resets ViewObject colors
+            # when it rebuilds the mesh during recompute(), so we store them and
+            # re-apply once tessellation is done.
+            _pending_colors = []  # list of (obj, shape_rgb, line_rgb, tr)
 
             # ── body solid (contacts_only_3d mode) ──────────────────────────
             body_entry = next((s for s in shapes if s.get("is_body_solid")), None)
             if body_entry:
                 body_obj = doc.addObject("Part::Feature", "IC_Body_Solid")
                 body_obj.Shape = body_entry["shape"]
-                body_obj.ViewObject.ShapeColor = (0.55, 0.55, 0.55)
-                body_obj.ViewObject.LineColor   = (0.25, 0.25, 0.25)
-                body_obj.ViewObject.Transparency = 60
+                _pending_colors.append((body_obj, (0.55, 0.55, 0.55), (0.25, 0.25, 0.25), 60))
 
             for layer in selected_layers:
                 layer_id = layer.get("layer_id", 0)
@@ -313,11 +327,13 @@ def load_gds_layers():
                 if not shape:
                     continue
 
-                obj = doc.addObject("Part::Feature", f"Layer_{layer_name}_{layer_id}")
-                obj.Shape = shape["shape"]
-                obj.ViewObject.ShapeColor = shape_rgb
-                obj.ViewObject.LineColor = line_rgb
-                obj.ViewObject.Transparency = tr
+                if shape.get("is_mesh"):
+                    obj = doc.addObject("Mesh::Feature", f"Layer_{layer_name}_{layer_id}")
+                    obj.Mesh = shape["mesh"]
+                else:
+                    obj = doc.addObject("Part::Feature", f"Layer_{layer_name}_{layer_id}")
+                    obj.Shape = shape["shape"]
+                _pending_colors.append((obj, shape_rgb, line_rgb, tr))
                 layer_objects.setdefault(layer_id, []).append(obj)
 
             try:
@@ -326,12 +342,6 @@ def load_gds_layers():
                 pass
 
             # ── render phase — show progress while FreeCAD tessellates shapes ──
-            total_faces = sum(
-                getattr(getattr(s, "Shape", None), "Faces", None) and
-                len(s.Shape.Faces) or 0
-                for s in (layer_objects.get(k, [None])[0]
-                          for k in layer_objects) if s
-            )
             n_shapes = sum(len(v) for v in layer_objects.values())
             render_dlg = QtWidgets.QProgressDialog(
                 f"Rendering {n_shapes} shape(s) in FreeCAD viewport…\n"
@@ -349,6 +359,14 @@ def load_gds_layers():
             _t_render = time.time()
             doc.recompute()
             _render_elapsed = time.time() - _t_render
+
+            # Apply colors after recompute so they are not overwritten by
+            # FreeCAD's mesh rebuild.
+            for _obj, _shape_rgb, _line_rgb, _tr in _pending_colors:
+                _obj.ViewObject.ShapeColor    = _shape_rgb
+                _obj.ViewObject.LineColor     = _line_rgb
+                _obj.ViewObject.Transparency  = _tr
+
             render_dlg.close()
             FreeCAD.Console.PrintMessage(
                 f"Render (tessellation) completed in {_render_elapsed:.1f}s\n"
@@ -388,7 +406,30 @@ def load_gds_layers():
                         "Tip: load an IHP .map file for best results.",
                     )
 
+            # ── group all newly created objects under one assembly node ───────
+            gds_group = doc.addObject("App::DocumentObjectGroup", "GDS_Die")
+            gds_group.Label = "GDS_Die"
+            for _o in list(doc.Objects):
+                if _o.Name not in _before_gds and _o.Name != gds_group.Name:
+                    gds_group.addObject(_o)
+
             FreeCADGui.setActiveDocument(doc.Name)
+
+            # ── apply performance mode immediately after import ──────────────
+            # All layers start in Wireframe (low GPU load). The user can then
+            # promote individual layers to Detail via the Detail Layer Panel.
+            try:
+                from gds.TogglePerformanceModeCommand import apply_performance_mode
+                apply_performance_mode(doc)
+                FreeCAD.Console.PrintMessage(
+                    "GDS import: Performance mode applied by default. "
+                    "Use the Detail Layer Panel to promote layers to full quality.\n"
+                )
+            except Exception as _pm_err:
+                FreeCAD.Console.PrintWarning(
+                    f"GDS import: could not apply default performance mode: {_pm_err}\n"
+                )
+
             FreeCADGui.updateGui()
             view = FreeCADGui.activeDocument().activeView()
             if view:
@@ -528,6 +569,8 @@ def load_gds_with_params(gds_path, lyp_path, map_path, selected_layers, options)
     except Exception:
         pass
 
+    import os as _os
+    _n_workers = max(1, (_os.cpu_count() or 2) - 1)
     shapes = Core_Functionality.load_gds(
         gds_path, filtered,
         transform=None, preview_2d=not extrude_3d, compound_per_layer=True,
@@ -537,6 +580,9 @@ def load_gds_with_params(gds_path, lyp_path, map_path, selected_layers, options)
         stack_mm=stack_mm,
         contacts_only_3d=contacts_only_3d, contact_keys=contact_keys,
         max_polys_per_layer=max_polys_per_layer,
+        use_cache=True,
+        parallel_workers=_n_workers,
+        auto_bbox_threshold=5_000,
     )
 
     if not shapes:

@@ -1,9 +1,146 @@
 import xml.etree.ElementTree as ET
 import math
+import hashlib
+import os
+import pickle
+import platform
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
 import gdstk
 import FreeCAD
 import Part
 from FreeCAD import Base
+
+try:
+    import numpy as _np
+    _HAS_NP = True
+except ImportError:
+    _np = None
+    _HAS_NP = False
+
+# ── module-level constants ────────────────────────────────────────────────────
+
+# Layers with more polygons than this are auto-collapsed to a bounding box
+# rather than processed individually (prevents 3M-polygon FILL layers from
+# taking 30 minutes).  0 = disabled.
+AUTO_BBOX_POLY_THRESHOLD: int = 50_000
+
+# Layers whose MEDIAN polygon area (in µm²) is below this threshold are
+# auto-collapsed to a bounding box, regardless of polygon count.
+# This catches sub-micron Fill-Metal / Dummy-Metal layers (e.g. Layer 6/DT0
+# in IHP SG13G2 with 471 k rectangles each ~0.026 µm²) that would otherwise
+# spend minutes in OCCT for shapes invisible at any zoom level.
+# Real routing and pad layers have median areas >> 10 µm².
+# Set to 0.0 to disable.
+MICRO_AREA_BBOX_THRESHOLD_UM2: float = 2.0   # µm²
+MICRO_AREA_SAMPLE_SIZE: int = 500
+
+# Disk-cache directory for serialised GDS import results
+def _gds_cache_dir() -> Path:
+    system = platform.system()
+    if system == "Windows":
+        base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+    elif system == "Darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    return base / "FreeCAD" / "DI-PASSIONATE" / "gds_cache"
+
+_GDS_CACHE_DIR = _gds_cache_dir()
+
+
+# ── cache helpers ─────────────────────────────────────────────────────────────
+
+def _cache_key(gds_path: str, selected_layers, options: dict) -> str:
+    h = hashlib.sha256()
+    try:
+        h.update(str(Path(gds_path).stat().st_mtime_ns).encode())
+    except OSError:
+        h.update(gds_path.encode())
+    h.update(repr([(l.get("layer_id"), l.get("datatype")) for l in selected_layers]).encode())
+    h.update(repr(sorted(options.items())).encode())
+    return h.hexdigest()[:24]
+
+
+def _load_cache(key: str):
+    p = _GDS_CACHE_DIR / f"{key}.pkl"
+    if not p.exists():
+        return None
+    try:
+        with open(p, "rb") as fh:
+            payload = pickle.load(fh)
+        # Restore Part.Shapes from serialised BREP strings
+        results = []
+        for entry in payload:
+            e = dict(entry)
+            if "shape_brep" in e:
+                shp = Part.Shape()
+                shp.importBrepFromString(e.pop("shape_brep"))
+                e["shape"] = shp
+            results.append(e)
+        return results
+    except Exception as exc:
+        FreeCAD.Console.PrintWarning(f"GDS cache load failed ({exc}), re-importing.\n")
+        return None
+
+
+def _save_cache(key: str, results: list):
+    try:
+        _GDS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        payload = []
+        for entry in results:
+            e = dict(entry)
+            if "shape" in e and not e.get("is_mesh"):
+                try:
+                    e["shape_brep"] = e.pop("shape").exportBrepToString()
+                except Exception:
+                    return          # non-serialisable shape — skip cache
+            payload.append(e)
+        p = _GDS_CACHE_DIR / f"{key}.pkl"
+        with open(p, "wb") as fh:
+            pickle.dump(payload, fh, protocol=4)
+    except Exception as exc:
+        FreeCAD.Console.PrintWarning(f"GDS cache save failed: {exc}\n")
+
+
+# ── vectorised geometry helpers ───────────────────────────────────────────────
+
+def _vec_transform(pts, s: float, rot_deg: float, mirror_y: bool,
+                   tx: float, ty: float):
+    """
+    Transform a polygon's points in one NumPy pass.
+    Returns a (N,2) ndarray when NumPy is available, else a list of (x,y) tuples.
+    """
+    if _HAS_NP:
+        arr = _np.asarray(pts, dtype=float) * s
+        if rot_deg != 0.0:
+            r = math.radians(rot_deg)
+            c, sv = math.cos(r), math.sin(r)
+            x = arr[:, 0] * c - arr[:, 1] * sv
+            y = arr[:, 0] * sv + arr[:, 1] * c
+            arr = _np.column_stack((x, y))
+        if mirror_y:
+            arr[:, 1] = -arr[:, 1]
+        arr[:, 0] += tx
+        arr[:, 1] += ty
+        return arr
+    return [_transform_point(p, s, rot_deg, mirror_y, tx, ty) for p in pts]
+
+
+def _area_from_arr(arr) -> float:
+    """Shoelace area on a (N,2) ndarray or list of (x,y) pairs."""
+    if _HAS_NP and isinstance(arr, _np.ndarray):
+        x, y = arr[:, 0], arr[:, 1]
+        return float(0.5 * abs(_np.sum(x * _np.roll(y, -1) - _np.roll(x, -1) * y)))
+    return _polygon_area_mm2(arr)
+
+
+def _arr_to_tuples(arr) -> list:
+    """Convert a (N,2) ndarray or list of pairs to list of (x,y) tuples."""
+    if _HAS_NP and isinstance(arr, _np.ndarray):
+        return [tuple(row) for row in arr]
+    return list(arr)
 
 # -------------------------------
 # KLayout LYP parsing (colors)
@@ -434,6 +571,90 @@ def _simplify_poly(points, eps):
     out.append(points[-1])
     return out if len(out) >= 3 else points
 
+def _ear_clip_triangulate(pts2d):
+    """
+    Triangulate a simple 2D polygon (no holes) via ear clipping.
+    Returns a list of (i, j, k) index tuples into pts2d.
+    O(N²) — fast for typical GDS polygons (< 200 vertices).
+    """
+    n = len(pts2d)
+    if n < 3:
+        return []
+    if n == 3:
+        return [(0, 1, 2)]
+
+    def _cross(ox, oy, ax, ay, bx, by):
+        return (ax - ox) * (by - oy) - (ay - oy) * (bx - ox)
+
+    def _in_tri(px, py, ax, ay, bx, by, cx, cy):
+        d1 = _cross(ax, ay, bx, by, px, py)
+        d2 = _cross(bx, by, cx, cy, px, py)
+        d3 = _cross(cx, cy, ax, ay, px, py)
+        return not (((d1 < 0) or (d2 < 0) or (d3 < 0)) and
+                    ((d1 > 0) or (d2 > 0) or (d3 > 0)))
+
+    # Signed area via shoelace — negative means CW; reverse to CCW
+    area2 = sum(pts2d[i][0] * (pts2d[(i + 1) % n][1] - pts2d[(i - 1) % n][1])
+                for i in range(n))
+    indices = list(range(n))
+    if area2 < 0:
+        indices.reverse()
+
+    tris   = []
+    safety = n * n + n
+    i      = 0
+    while len(indices) > 3 and safety > 0:
+        safety -= 1
+        m  = len(indices)
+        pi = indices[(i - 1) % m]
+        ci = indices[i % m]
+        ni = indices[(i + 1) % m]
+        ax, ay = pts2d[pi];  bx, by = pts2d[ci];  cx, cy = pts2d[ni]
+
+        if _cross(ax, ay, bx, by, cx, cy) <= 0:        # reflex vertex — skip
+            i = (i + 1) % m
+            continue
+
+        if not any(_in_tri(pts2d[oi][0], pts2d[oi][1], ax, ay, bx, by, cx, cy)
+                   for oi in indices if oi not in (pi, ci, ni)):
+            tris.append((pi, ci, ni))
+            indices.pop(i % m)
+            m -= 1
+            i = i % m if m else 0
+        else:
+            i = (i + 1) % m
+
+    if len(indices) == 3:
+        tris.append(tuple(indices))
+    return tris
+
+
+def _polygon_to_mesh_facets(pts2d, z0, z1):
+    """
+    Convert a 2D polygon + z-range to a flat list of triangle tuples suitable
+    for Mesh.Mesh() construction.  Each entry is ((x0,y0,z0),(x1,y1,z1),(x2,y2,z2)).
+    """
+    tris = _ear_clip_triangulate(pts2d)
+    if not tris:
+        return []
+    facets = []
+    n = len(pts2d)
+    for a, b, c in tris:                                # bottom (CW → downward normal)
+        facets.append(((pts2d[a][0], pts2d[a][1], z0),
+                       (pts2d[c][0], pts2d[c][1], z0),
+                       (pts2d[b][0], pts2d[b][1], z0)))
+    for a, b, c in tris:                                # top (CCW → upward normal)
+        facets.append(((pts2d[a][0], pts2d[a][1], z1),
+                       (pts2d[b][0], pts2d[b][1], z1),
+                       (pts2d[c][0], pts2d[c][1], z1)))
+    for i in range(n):                                  # side walls
+        j = (i + 1) % n
+        x0, y0 = pts2d[i];  x1, y1 = pts2d[j]
+        facets.append(((x0, y0, z0), (x1, y1, z0), (x1, y1, z1)))
+        facets.append(((x0, y0, z0), (x1, y1, z1), (x0, y0, z1)))
+    return facets
+
+
 def load_gds(gds_path,
              selected_layers,
              transform=None,
@@ -444,11 +665,17 @@ def load_gds(gds_path,
              skip_fill_datatype=True,
              fill_as_bbox=True,       # replace filler polygons with a single bounding-box solid
              fill_layer_keys=None,    # extra (layer_id, datatype) pairs to treat as filler
+             ihp_map=None,            # full EDI map — used to detect FILL layers by edi_types tag
              stack_mm=None,
              contacts_only_3d=False,  # render only contact_keys as full 3D; collapse rest to one body
              contact_keys=None,       # set of (layer_id, datatype) to keep as full geometry
              max_polys_per_layer=None,# cap on polygons per contact layer (sorted largest-area first)
              flat_layer_keys=None,    # (layer_id, datatype) always rendered as flat 2D face (never extruded)
+             mesh_3d=False,           # bypass OCCT B-rep: build Mesh.Mesh directly from triangulated polygons
+             auto_bbox_threshold=None,# collapse layer to bbox when polygon count exceeds this (None = use module default)
+             use_gdstk_union=False,   # merge overlapping polygons per layer in C++ before building shapes
+             use_cache=False,         # serialise result to disk; second import is near-instant
+             parallel_workers=0,      # number of threads for data-prep phase (0 = serial)
              progress_callback=None
              ):
     """
@@ -466,6 +693,21 @@ def load_gds(gds_path,
           'fill_hex':  '#rrggbb',
         }
     """
+    _bbox_threshold = AUTO_BBOX_POLY_THRESHOLD if auto_bbox_threshold is None else int(auto_bbox_threshold)
+
+    # ── disk-cache check ──────────────────────────────────────────────────────
+    _cache_options = {
+        "preview_2d": preview_2d, "min_area": min_area_mm2,
+        "decimate": decimate_tol_mm, "fill_bbox": fill_as_bbox,
+        "mesh_3d": mesh_3d, "bbox_thresh": _bbox_threshold,
+    }
+    _ck = _cache_key(gds_path, selected_layers, _cache_options) if use_cache else None
+    if _ck:
+        _hit = _load_cache(_ck)
+        if _hit is not None:
+            FreeCAD.Console.PrintMessage(f"GDS cache hit ({_ck[:8]}…) — skipping import.\n")
+            return _hit
+
     try:
         lib = gdstk.read_gds(gds_path)
         if transform is None:
@@ -488,12 +730,21 @@ def load_gds(gds_path,
         by_layer = {key: [] for key in wanted}
 
         # Filler detection: DT=22 convention + any explicitly declared fill keys
+        # + any key whose EDI type set contains "FILL" (catches Drawing layers like
+        # 29/0 that carry millions of dummy-metal polygons but use DT=0, not DT=22)
         _fill_keys = set(fill_layer_keys or [])
-        # PIN layers: always rendered as flat 2D faces, never extruded
         _flat_keys = set(flat_layer_keys or [])
 
         def _is_filler(lyr, dt):
-            return dt == 22 or (lyr, dt) in _fill_keys
+            if dt == 22 or (lyr, dt) in _fill_keys:
+                return True
+            # If the EDI map explicitly tags this key as FILL, collapse it to a
+            # bounding box regardless of datatype or other co-assigned EDI types.
+            if ihp_map:
+                entry = ihp_map.get((lyr, dt))
+                if entry and "FILL" in entry.get("edi_types", set()):
+                    return True
+            return False
 
         # Running bounding extents for filler layers — filled in bbox mode
         fill_extents = {}   # (layer, dt) -> [xmin, ymin, xmax, ymax]
@@ -595,6 +846,106 @@ def load_gds(gds_path,
 
         polygons = list(iter_polygons())
 
+        # ── gdstk Boolean Union: merge overlapping polygons per layer in C++ ─
+        # Dramatically reduces polygon count for dense routing layers before any
+        # Python-level processing.  Operates on raw gdstk objects, not Part shapes.
+        if use_gdstk_union and not preview_2d:
+            from collections import defaultdict as _dd
+            _raw_by_key = _dd(list)
+            for lyr, dt, pts in polygons:
+                if (lyr, dt) in wanted and not _is_filler(lyr, dt):
+                    _raw_by_key[(lyr, dt)].append(
+                        gdstk.Polygon(pts if not hasattr(pts, "points") else pts.points,
+                                      layer=lyr, datatype=dt)
+                    )
+            _merged = {}
+            for key, polys in _raw_by_key.items():
+                try:
+                    result = gdstk.boolean(polys, [], "or", layer=key[0], datatype=key[1])
+                    _merged[key] = [(key[0], key[1], p.points) for p in result]
+                    FreeCAD.Console.PrintMessage(
+                        f"  gdstk union layer {key[0]}/{key[1]}: "
+                        f"{len(polys):,} → {len(result):,} polygons\n"
+                    )
+                except Exception as _ue:
+                    FreeCAD.Console.PrintWarning(f"  gdstk union failed for {key}: {_ue}\n")
+            # Rebuild polygons list: replace unioned keys, keep filler/non-selected as-is
+            _non_union = [(lyr, dt, pts) for lyr, dt, pts in polygons
+                          if (lyr, dt) not in _merged]
+            _union_flat = [t for tlist in _merged.values() for t in tlist]
+            polygons = _non_union + _union_flat
+
+        # ── auto-bbox threshold ───────────────────────────────────────────────
+        # Count polygons per (layer, dt).  Any selected, non-fill key that
+        # exceeds the threshold is added to _fill_keys so the main loop
+        # collapses it to a single bounding-box solid instead of processing
+        # each polygon individually.
+        if _bbox_threshold > 0:
+            _key_counts: dict = {}
+            for lyr, dt, _ in polygons:
+                k = (lyr, dt)
+                if k in wanted:
+                    _key_counts[k] = _key_counts.get(k, 0) + 1
+            for k, cnt in _key_counts.items():
+                if cnt > _bbox_threshold and not _is_filler(k[0], k[1]):
+                    _fill_keys.add(k)
+                    FreeCAD.Console.PrintWarning(
+                        f"  Auto-bbox: layer {k[0]}/{k[1]} has {cnt:,} polygons "
+                        f"(threshold {_bbox_threshold:,}) → bounding box\n"
+                    )
+
+        # ── Micro-area pre-scan: collapse sub-micron Fill-Metal layers ────────
+        # Many process nodes (e.g. IHP SG13G2) insert hundreds of thousands of
+        # sub-micron dummy-metal rectangles for CMP planarisation.  These are
+        # invisible in any 3-D view and catastrophically slow to process in OCCT.
+        # Strategy: sample up to MICRO_AREA_SAMPLE_SIZE polygons per layer,
+        # compute the median area in µm², and collapse any layer below
+        # MICRO_AREA_BBOX_THRESHOLD_UM2 to a single bounding-box solid.
+        if MICRO_AREA_BBOX_THRESHOLD_UM2 > 0.0 and _HAS_NP:
+            # Group raw polygon point arrays by key for sampling
+            _key_sample: dict = {}
+            for lyr, dt, poly_pts_raw in polygons:
+                k = (lyr, dt)
+                if k not in wanted or k in _fill_keys:
+                    continue
+                if _is_filler(lyr, dt):
+                    continue
+                _key_sample.setdefault(k, [])
+                if len(_key_sample[k]) < MICRO_AREA_SAMPLE_SIZE:
+                    _key_sample[k].append(_points_array(poly_pts_raw))
+
+            # unit² → µm²: 1 unit = lib.unit metres; 1 µm = 1e-6 m
+            # area_um2 = area_units² × (lib.unit / 1e-6)²
+            _unit_to_um = (lib.unit / 1e-6) if hasattr(lib, "unit") and lib.unit else 1.0
+            _unit_to_um2 = _unit_to_um ** 2
+
+            for k, sample_pts in _key_sample.items():
+                if not sample_pts:
+                    continue
+                areas_um2 = []
+                for pts in sample_pts:
+                    try:
+                        arr = _np.asarray(pts, dtype=float)
+                        if arr.shape[0] < 3:
+                            continue
+                        x, y = arr[:, 0], arr[:, 1]
+                        area = abs(float(_np.dot(x, _np.roll(y, 1)) -
+                                         _np.dot(y, _np.roll(x, 1)))) / 2.0
+                        areas_um2.append(area * _unit_to_um2)
+                    except Exception:
+                        pass
+                if not areas_um2:
+                    continue
+                median_um2 = float(_np.median(areas_um2))
+                if median_um2 < MICRO_AREA_BBOX_THRESHOLD_UM2:
+                    _fill_keys.add(k)
+                    n_polys = sum(1 for lyr, dt, _ in polygons if (lyr, dt) == k)
+                    FreeCAD.Console.PrintWarning(
+                        f"  Micro-area bbox: layer {k[0]}/{k[1]} "
+                        f"median={median_um2:.4f} µm² < {MICRO_AREA_BBOX_THRESHOLD_UM2} µm² "
+                        f"({n_polys:,} polygons) → bounding box\n"
+                    )
+
         # ── contacts_only_3d: cap polygon count per contact layer ────────────
         # Sort each contact layer's polygons by area (largest first) and keep
         # only the top max_polys_per_layer entries.  This drops tiny routing
@@ -624,106 +975,145 @@ def load_gds(gds_path,
                 )
             polygons = filtered_contact + rest_out
 
-        # optional progress tracking based on fully-instantiated polygons
-        progress_total = None
-        if progress_callback:
-            progress_total = 0
-            for layer, datatype, _ in polygons:
-                key = (layer, datatype)
-                if key not in wanted:
-                    continue
-                if _is_filler(layer, datatype):
-                    continue   # filler layers counted separately; don't inflate progress
-                progress_total += 1
-            progress_total = max(progress_total, 1)
-            progress_callback(0, progress_total, "Importing GDS layers...")
-
-        # collect wires/faces per layer
-        progress_count = 0
-        for layer, datatype, poly_pts in polygons:
-            poly_pts = _points_array(poly_pts)
+        # ── Phase 1: bbox accumulators (serial) + bucket normal polygons ────────
+        _raw_normals: dict = {}   # key -> [pts_array, ...]
+        for layer, datatype, poly_pts_raw in polygons:
+            poly_pts = _points_array(poly_pts_raw)
             key = (layer, datatype)
             if key not in wanted:
                 continue
 
-            # contacts_only_3d: non-contact layers → body bbox accumulator, skip full geometry
+            # contacts_only_3d: non-contact layers → body bbox accumulator
             if contacts_only_3d and key not in _contact_keys:
-                pts2d_b = [_transform_point(p, s, rot_deg, mirror_y, tx, ty) for p in poly_pts]
-                if pts2d_b:
-                    xs = [p[0] for p in pts2d_b]
-                    ys = [p[1] for p in pts2d_b]
-                    if _body_extents is None:
-                        _body_extents = [min(xs), min(ys), max(xs), max(ys)]
+                _arr_b = _vec_transform(poly_pts, s, rot_deg, mirror_y, tx, ty)
+                if len(_arr_b) > 0:
+                    if _HAS_NP and isinstance(_arr_b, _np.ndarray):
+                        _xmn, _xmx = float(_arr_b[:, 0].min()), float(_arr_b[:, 0].max())
+                        _ymn, _ymx = float(_arr_b[:, 1].min()), float(_arr_b[:, 1].max())
                     else:
-                        _body_extents[0] = min(_body_extents[0], min(xs))
-                        _body_extents[1] = min(_body_extents[1], min(ys))
-                        _body_extents[2] = max(_body_extents[2], max(xs))
-                        _body_extents[3] = max(_body_extents[3], max(ys))
+                        _xmn, _xmx = min(p[0] for p in _arr_b), max(p[0] for p in _arr_b)
+                        _ymn, _ymx = min(p[1] for p in _arr_b), max(p[1] for p in _arr_b)
+                    if _body_extents is None:
+                        _body_extents = [_xmn, _ymn, _xmx, _ymx]
+                    else:
+                        _body_extents[0] = min(_body_extents[0], _xmn)
+                        _body_extents[1] = min(_body_extents[1], _ymn)
+                        _body_extents[2] = max(_body_extents[2], _xmx)
+                        _body_extents[3] = max(_body_extents[3], _ymx)
                 continue
 
             if _is_filler(layer, datatype):
                 if fill_as_bbox:
-                    # Accumulate bounding extent; shape created after main loop
-                    pts2d_f = [_transform_point(p, s, rot_deg, mirror_y, tx, ty) for p in poly_pts]
-                    if pts2d_f:
-                        xs = [p[0] for p in pts2d_f]
-                        ys = [p[1] for p in pts2d_f]
+                    _arr_f = _vec_transform(poly_pts, s, rot_deg, mirror_y, tx, ty)
+                    if len(_arr_f) > 0:
+                        if _HAS_NP and isinstance(_arr_f, _np.ndarray):
+                            _xmn, _xmx = float(_arr_f[:, 0].min()), float(_arr_f[:, 0].max())
+                            _ymn, _ymx = float(_arr_f[:, 1].min()), float(_arr_f[:, 1].max())
+                        else:
+                            _xmn, _xmx = min(p[0] for p in _arr_f), max(p[0] for p in _arr_f)
+                            _ymn, _ymx = min(p[1] for p in _arr_f), max(p[1] for p in _arr_f)
                         if key in fill_extents:
                             e = fill_extents[key]
-                            e[0] = min(e[0], min(xs))
-                            e[1] = min(e[1], min(ys))
-                            e[2] = max(e[2], max(xs))
-                            e[3] = max(e[3], max(ys))
+                            e[0] = min(e[0], _xmn); e[1] = min(e[1], _ymn)
+                            e[2] = max(e[2], _xmx); e[3] = max(e[3], _ymx)
                         else:
-                            fill_extents[key] = [min(xs), min(ys), max(xs), max(ys)]
-                elif skip_fill_datatype:
-                    pass   # skip entirely (legacy behaviour)
-                continue   # either way, not processed as an individual polygon
+                            fill_extents[key] = [_xmn, _ymn, _xmx, _ymx]
+                continue
 
-            pts2d = [_transform_point(p, s, rot_deg, mirror_y, tx, ty) for p in poly_pts]
+            _raw_normals.setdefault(key, []).append(poly_pts)
+
+        # progress total from normal-polygon count
+        _all_raw_count = sum(len(v) for v in _raw_normals.values())
+        progress_total = max(_all_raw_count, 1) if progress_callback else None
+        if progress_callback:
+            progress_callback(0, progress_total, "Importing GDS layers...")
+
+        # ── Phase 2: transform + filter — parallel when parallel_workers > 0 ──
+        # NumPy releases the GIL during array math, so threads give real speedup
+        # on transform-heavy layers even with CPython.  OCCT calls happen only
+        # in Phase 3 (main thread), so thread-safety is not a concern here.
+        def _prep_one(poly_pts_raw):
+            _arr = _vec_transform(poly_pts_raw, s, rot_deg, mirror_y, tx, ty)
+            pts2d = _arr_to_tuples(_arr)
             if decimate_tol_mm > 0.0:
                 pts2d = _simplify_poly(pts2d, decimate_tol_mm)
+                _arr = _np.array(pts2d) if _HAS_NP else pts2d
             if len(pts2d) < 3:
-                continue
-            if min_area_mm2 > 0.0 and _polygon_area_mm2(pts2d) < min_area_mm2:
-                continue
+                return None
+            if min_area_mm2 > 0.0 and _area_from_arr(_arr) < min_area_mm2:
+                return None
+            return pts2d
 
-            progress_count += 1
-            if progress_callback:
-                message = f"Importing layer {layer}/{datatype} ({progress_count}/{progress_total})"
-                if progress_callback(progress_count, progress_total, message) is False:
-                    return []
+        def _prep_key_batch(item):
+            key, raw_list = item
+            out = []
+            for p in raw_list:
+                r = _prep_one(p)
+                if r is not None:
+                    out.append(r)
+            return key, out
 
-            # build wire/face
-            wire = Part.makePolygon([(x, y, 0.0) for (x, y) in (pts2d + [pts2d[0]])])
-            if preview_2d or (_flat_keys and key in _flat_keys):
-                # Flat 2D face: preview mode OR explicitly declared PIN/flat layer.
-                try:
-                    by_layer[key].append(Part.Face(wire))
-                except Exception:
-                    by_layer[key].append(wire)
-            else:
-                try:
-                    face = Part.Face(wire)
-                except Exception:
-                    # Attempt a wire repair before giving up
+        _prepped: dict = {}   # key -> [pts2d, ...]
+
+        if parallel_workers > 0:
+            _n_workers = max(1, int(parallel_workers))
+            with ThreadPoolExecutor(max_workers=_n_workers) as _pool:
+                for _k, _pts_list in _pool.map(_prep_key_batch, _raw_normals.items()):
+                    _prepped[_k] = _pts_list
+            FreeCAD.Console.PrintMessage(
+                f"Parallel data-prep done ({_n_workers} workers, "
+                f"{sum(len(v) for v in _prepped.values()):,} polygons passed filter).\n"
+            )
+        else:
+            for _k, _out in map(_prep_key_batch, _raw_normals.items()):
+                _prepped[_k] = _out
+
+        # ── Phase 3: OCCT / mesh shape creation (always main thread) ─────────
+        progress_count = 0
+        for key, pts2d_list in _prepped.items():
+            layer_k, dt_k = key
+            for pts2d in pts2d_list:
+                progress_count += 1
+                if progress_callback and progress_total:
+                    msg = f"Importing layer {layer_k}/{dt_k} ({progress_count}/{progress_total})"
+                    if progress_callback(progress_count, progress_total, msg) is False:
+                        return []
+
+                wire = Part.makePolygon([(x, y, 0.0) for (x, y) in (pts2d + [pts2d[0]])])
+                if preview_2d or (_flat_keys and key in _flat_keys):
                     try:
-                        wire = Part.Wire(wire.Edges)
+                        by_layer[key].append(Part.Face(wire))
+                    except Exception:
+                        by_layer[key].append(wire)
+                elif mesh_3d:
+                    if stack_mm and key in stack_mm:
+                        t_mm = float(stack_mm[key]["t_mm"])
+                        z0   = float(stack_mm[key]["z0_mm"])
+                    else:
+                        t_mm = default_t_mm
+                        z0   = 0.0
+                    facets = _polygon_to_mesh_facets(pts2d, z0, z0 + t_mm)
+                    if facets:
+                        by_layer[key].extend(facets)
+                else:
+                    try:
                         face = Part.Face(wire)
                     except Exception:
-                        continue
-                # pick thickness & offset for this layer
-                if stack_mm and key in stack_mm:
-                    t_mm = float(stack_mm[key]["t_mm"])
-                    z0 = float(stack_mm[key]["z0_mm"])
-                else:
-                    t_mm = default_t_mm
-                    z0 = 0.0
-                shp = face.extrude(FreeCAD.Vector(0, 0, t_mm))
-                # translate to its bottom Z
-                if z0 != 0.0:
-                    shp.translate(FreeCAD.Vector(0, 0, z0))
-                by_layer[key].append(shp)
+                        try:
+                            wire = Part.Wire(wire.Edges)
+                            face = Part.Face(wire)
+                        except Exception:
+                            continue
+                    if stack_mm and key in stack_mm:
+                        t_mm = float(stack_mm[key]["t_mm"])
+                        z0 = float(stack_mm[key]["z0_mm"])
+                    else:
+                        t_mm = default_t_mm
+                        z0 = 0.0
+                    shp = face.extrude(FreeCAD.Vector(0, 0, t_mm))
+                    if z0 != 0.0:
+                        shp.translate(FreeCAD.Vector(0, 0, z0))
+                    by_layer[key].append(shp)
 
         # Build a single bounding-box shape for each filler layer
         for key, (xmin, ymin, xmax, ymax) in fill_extents.items():
@@ -755,22 +1145,40 @@ def load_gds(gds_path,
                                    FreeCAD.Vector(xmin, ymin, z0))
                 by_layer[key] = [box]
 
-        # one compound per layer
+        # one compound (or mesh) per layer
         results = []
         for layer in selected_layers:
             lid = layer.get("layer_id", 0)
-            dt = layer.get("datatype", 0)
+            dt  = layer.get("datatype", 0)
             parts = by_layer.get((lid, dt), [])
             if not parts:
                 continue
-            compound = Part.makeCompound(parts) if compound_per_layer and len(parts) > 1 else parts[0]
-            results.append({
-                "shape": compound,
-                "layer_id": lid,
-                "datatype": dt,
-                "frame_hex": layer.get("frame-color", "#000000"),
-                "fill_hex": layer.get("fill-color", "#FFFFFF"),
-            })
+            if mesh_3d and not preview_2d:
+                # parts is a flat list of triangle tuples — build one Mesh per layer
+                try:
+                    import Mesh as _Mesh
+                    mesh_obj = _Mesh.Mesh(parts)
+                    results.append({
+                        "mesh":     mesh_obj,
+                        "is_mesh":  True,
+                        "layer_id": lid,
+                        "datatype": dt,
+                        "frame_hex": layer.get("frame-color", "#000000"),
+                        "fill_hex":  layer.get("fill-color", "#FFFFFF"),
+                    })
+                except Exception as exc:
+                    FreeCAD.Console.PrintWarning(
+                        f"Mesh assembly failed for layer {lid}/{dt}: {exc}\n"
+                    )
+            else:
+                compound = Part.makeCompound(parts) if compound_per_layer and len(parts) > 1 else parts[0]
+                results.append({
+                    "shape":    compound,
+                    "layer_id": lid,
+                    "datatype": dt,
+                    "frame_hex": layer.get("frame-color", "#000000"),
+                    "fill_hex":  layer.get("fill-color", "#FFFFFF"),
+                })
 
         # Build the combined body solid for contacts_only_3d mode
         if contacts_only_3d and _body_extents is not None:
@@ -795,6 +1203,8 @@ def load_gds(gds_path,
 
         if progress_callback and progress_total is not None:
             progress_callback(progress_total, progress_total, "Finalizing GDS shapes...")
+        if _ck:
+            _save_cache(_ck, results)
         return results
 
     except Exception as e:

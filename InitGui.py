@@ -12,6 +12,9 @@ if os.environ.get("FREECAD_DEBUGPY") == "1":
 try:
     from gds import GDSCommand
     from gds import ChipTransformCommand
+    from gds import ShowLayerSliderCommand
+    from gds import TogglePerformanceModeCommand
+    from gds import ShowDetailLayerPanelCommand
     from leadframe import LeadframeCommand
     from leadframe import LeadframeLibraryCommand
     from housing import HousingCommand
@@ -108,6 +111,9 @@ class MyWorkbench(FreeCADGui.Workbench):
                 "GDSII Tools",
                 [
                     "GDSCommand",
+                    "TogglePerformanceModeCommand",
+                    "ShowDetailLayerPanelCommand",
+                    "ShowLayerSliderCommand",
                     "LeadframeLibraryCommand",
                     "ChipTransformCommand",
                     "SetContactPointsOnFaceCommand",

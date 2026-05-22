@@ -26,11 +26,34 @@ from Get_Path import get_icon
 # ── palette ────────────────────────────────────────────────────────────────────
 
 _COLOR_CANDIDATE = (0.55, 0.55, 0.55)   # grey  — candidate
-_COLOR_SELECTED  = (1.00, 1.00, 0.00)   # yellow — chosen housing contact point
+_COLOR_SELECTED  = (1.00, 1.00, 0.00)   # yellow — chosen housing/package contact point
 _POINT_SIZE      = 10
 
 
-# ── housing contact-point helpers ──────────────────────────────────────────────
+# ── assembly classification ────────────────────────────────────────────────────
+
+def _get_source_assembly(doc, obj_name: str) -> str:
+    """Return 'gds', 'package', or 'unknown' based on which group the object is in."""
+    obj = doc.getObject(obj_name)
+    if obj is None:
+        return "unknown"
+    for group in doc.Objects:
+        if not hasattr(group, "Group"):
+            continue
+        try:
+            if obj not in group.Group:
+                continue
+        except Exception:
+            continue
+        lbl = group.Label.lower()
+        if any(k in lbl for k in ("gds", "die")):
+            return "gds"
+        if any(k in lbl for k in ("package", "leadframe")):
+            return "package"
+    return "unknown"
+
+
+# ── contact-point marker helpers ───────────────────────────────────────────────
 
 def _next_housing_index(doc) -> int:
     existing = [o for o in doc.Objects
@@ -38,8 +61,14 @@ def _next_housing_index(doc) -> int:
     return len(existing) + 1
 
 
+def _next_gds_index(doc) -> int:
+    existing = [o for o in doc.Objects
+                if o.Name.startswith("ContactPoint_")]
+    return len(existing) + 1
+
+
 def _create_housing_marker(doc, source_name: str, point, index: int):
-    """Create a yellow ContactPoint marker named contact_point_housing_NNN."""
+    """Create a yellow ContactPoint marker named contact_point_housing_NNN (package side)."""
     marker = doc.addObject("Part::Feature", f"contact_point_housing_{index:03d}")
     marker.Shape = Part.Vertex(point.x, point.y, point.z)
 
@@ -53,6 +82,25 @@ def _create_housing_marker(doc, source_name: str, point, index: int):
 
     marker.ViewObject.PointSize   = 8
     marker.ViewObject.PointColor  = (1.0, 1.0, 0.0)   # yellow
+    marker.ViewObject.DisplayMode = "Points"
+    return marker
+
+
+def _create_gds_marker(doc, source_name: str, point, index: int):
+    """Create an orange ContactPoint marker named ContactPoint_NNN (die/GDS side)."""
+    marker = doc.addObject("Part::Feature", f"ContactPoint_{index:03d}")
+    marker.Shape = Part.Vertex(point.x, point.y, point.z)
+
+    marker.addProperty("App::PropertyVector", "ContactPoint", "Wirebond", "")
+    marker.addProperty("App::PropertyString", "SourceObject",  "Wirebond", "")
+    marker.addProperty("App::PropertyBool",   "IsContactPoint","Wirebond", "")
+
+    marker.ContactPoint   = point
+    marker.SourceObject   = source_name
+    marker.IsContactPoint = True
+
+    marker.ViewObject.PointSize   = 8
+    marker.ViewObject.PointColor  = (1.0, 0.50, 0.0)   # orange — die side
     marker.ViewObject.DisplayMode = "Points"
     return marker
 
@@ -387,7 +435,11 @@ class _GridContactPanel:
                     vx  = gp.Shape.Vertexes[0]
                     pt  = FreeCAD.Vector(vx.X, vx.Y, vx.Z)
                     src = self._source_map.get(name, "")
-                    m   = _create_housing_marker(doc, src, pt, _next_housing_index(doc))
+                    asm = _get_source_assembly(doc, src)
+                    if asm == "gds":
+                        m = _create_gds_marker(doc, src, pt, _next_gds_index(doc))
+                    else:
+                        m = _create_housing_marker(doc, src, pt, _next_housing_index(doc))
                     placed.append(m.Name)
                 except Exception as exc:
                     FreeCAD.Console.PrintWarning(
@@ -398,7 +450,7 @@ class _GridContactPanel:
             _refresh_contact_panel()
 
         FreeCAD.Console.PrintMessage(
-            f"[SetContactPoints] {len(placed)} housing contact point(s) placed.\n"
+            f"[SetContactPoints] {len(placed)} contact point(s) placed.\n"
         )
         self._cleanup()
         QtCore.QTimer.singleShot(0, FreeCADGui.Control.closeDialog)

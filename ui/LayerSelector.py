@@ -23,6 +23,7 @@ class LayerSelector(QtWidgets.QDialog):
             "match_klayout": True,
             "highlight_bondable": True,
             "extrude_3d": False,
+            "mesh_3d": False,
             "auto_pin_contacts": False,
             "contacts_only_3d": False,
         })
@@ -38,6 +39,15 @@ class LayerSelector(QtWidgets.QDialog):
         self.check_hl.setChecked(bool(self.options.get("highlight_bondable", True)))
         self.check_3d = QtWidgets.QCheckBox("Extrude layers to 3D volumes (uses PDK thickness table)")
         self.check_3d.setChecked(bool(self.options.get("extrude_3d", False)))
+        self.check_mesh_3d = QtWidgets.QCheckBox(
+            "Fast Mesh 3D — preserve geometry, skip OCCT B-rep (slicer-style tessellation)"
+        )
+        self.check_mesh_3d.setChecked(bool(self.options.get("mesh_3d", False)))
+        self.check_mesh_3d.setToolTip(
+            "Triangulates each GDS polygon directly into a mesh without going through OCCT.\n"
+            "Preserves all polygon geometry but produces a mesh (not a solid).\n"
+            "Typically 10–50× faster than full B-rep extrusion for complex layers."
+        )
         self.check_auto_pin = QtWidgets.QCheckBox(
             "Auto-detect top PIN layers and create contact points"
         )
@@ -55,8 +65,16 @@ class LayerSelector(QtWidgets.QDialog):
         opt_top.addWidget(self.check_match)
         opt_top.addWidget(self.check_hl)
         opt_top.addWidget(self.check_3d)
+        opt_top.addWidget(self.check_mesh_3d)
         opt_top.addWidget(self.check_auto_pin)
         opt_top.addWidget(self.check_contacts_only)
+
+        # Mutual exclusion: the three 3D modes are alternatives, not combinations
+        self.check_3d.toggled.connect(lambda on: self.check_mesh_3d.setChecked(False) if on else None)
+        self.check_3d.toggled.connect(lambda on: self.check_contacts_only.setChecked(False) if on else None)
+        self.check_mesh_3d.toggled.connect(lambda on: self.check_3d.setChecked(False) if on else None)
+        self.check_mesh_3d.toggled.connect(lambda on: self.check_contacts_only.setChecked(False) if on else None)
+        self.check_contacts_only.toggled.connect(lambda on: self.check_mesh_3d.setChecked(False) if on else None)
         layout.addLayout(opt_top)
 
         # Add selection control buttons
@@ -172,11 +190,12 @@ class LayerSelector(QtWidgets.QDialog):
     # --- accept ---
     def accept(self):
         # options
-        self.options["match_klayout"]    = self.check_match.isChecked()
+        self.options["match_klayout"]     = self.check_match.isChecked()
         self.options["highlight_bondable"] = self.check_hl.isChecked()
-        self.options["extrude_3d"]       = self.check_3d.isChecked()
+        self.options["extrude_3d"]        = self.check_3d.isChecked()
+        self.options["mesh_3d"]           = self.check_mesh_3d.isChecked()
         self.options["auto_pin_contacts"] = self.check_auto_pin.isChecked()
-        self.options["contacts_only_3d"] = self.check_contacts_only.isChecked()
+        self.options["contacts_only_3d"]  = self.check_contacts_only.isChecked()
 
         if self.check_all_button.isChecked():
             self.selected_layers = list(self.layers)
