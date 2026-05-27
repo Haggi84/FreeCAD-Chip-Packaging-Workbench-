@@ -14,6 +14,20 @@ class LeadframeConfigurator(QtWidgets.QDialog):
 
         root = QtWidgets.QVBoxLayout(self)
 
+        # ── Library shortcut ───────────────────────────────────────────────
+        lib_row = QtWidgets.QHBoxLayout()
+        btn_lib = QtWidgets.QPushButton("📦  From library…")
+        btn_lib.setToolTip(
+            "Browse the built-in JEDEC / IPC package catalogue and\n"
+            "pre-fill all parameters from a standard package definition."
+        )
+        btn_lib.clicked.connect(self._open_library)
+        self._lbl_pkg = QtWidgets.QLabel("")
+        self._lbl_pkg.setStyleSheet("color: #93c5fd; font-size: 10px;")
+        lib_row.addWidget(btn_lib)
+        lib_row.addWidget(self._lbl_pkg, 1)
+        root.addLayout(lib_row)
+
         # ── Package type ───────────────────────────────────────────────────
         type_box = QtWidgets.QGroupBox("Package Type")
         type_form = QtWidgets.QFormLayout(type_box)
@@ -124,6 +138,72 @@ class LeadframeConfigurator(QtWidgets.QDialog):
         # Propagate frame size to die paddle defaults
         self.frame_length.valueChanged.connect(self._sync_paddle_defaults)
         self.frame_width.valueChanged.connect(self._sync_paddle_defaults)
+
+        self._update_visibility()
+        self._update_hints()
+        self._update_bga_hint()
+
+    # ── library integration ────────────────────────────────────────────────
+
+    def _open_library(self):
+        """Open the JEDEC package browser and apply the chosen package."""
+        from ui.PackageSelectorDialog import PackageSelectorDialog
+        dlg = PackageSelectorDialog(self)
+        if dlg.exec_() == PackageSelectorDialog.Accepted:
+            pkg = dlg.selected_package()
+            if pkg is not None:
+                self.apply_package(pkg)
+
+    def apply_package(self, pkg):
+        """
+        Pre-fill all configurator widgets from a PackageSpec.
+        Called by the library browser or externally (e.g. session replay).
+        """
+        from leadframe.PackageDatabase import PackageSpec
+
+        # Package type
+        type_map = {
+            "QFN":   "QFN (Quad Flat No-lead)",
+            "QFP":   "QFP (Quad Flat Package)",
+            "DIP":   "QFP (Quad Flat Package)",   # DIP uses 2-sided QFP geometry
+            "SOIC":  "QFP (Quad Flat Package)",
+            "TSSOP": "QFP (Quad Flat Package)",
+            "BGA":   "BGA (Ball Grid Array)",
+        }
+        ft = type_map.get(pkg.family, "QFN (Quad Flat No-lead)")
+        idx = self.frame_type.findText(ft)
+        if idx >= 0:
+            self.frame_type.setCurrentIndex(idx)
+
+        # Body
+        self.frame_length.setValue(pkg.body_length_mm)
+        self.frame_width.setValue(pkg.body_width_mm)
+        self.frame_thickness.setValue(pkg.body_height_mm)
+
+        if pkg.family in ("QFN", "QFP", "DIP", "SOIC", "TSSOP"):
+            self.left_lead_count.setValue(pkg.pins_lr)
+            self.right_lead_count.setValue(pkg.pins_lr)
+            self.top_lead_count.setValue(pkg.pins_tb)
+            self.bottom_lead_count.setValue(pkg.pins_tb)
+            self.lead_pitch.setValue(pkg.lead_pitch_mm)
+            self.lead_width.setValue(pkg.lead_width_mm)
+            self.inner_lead_length.setValue(pkg.inner_lead_mm)
+            self.lead_length.setValue(pkg.outer_lead_mm)
+
+            has_paddle = pkg.has_die_paddle
+            self.paddle_box.setChecked(has_paddle)
+            if has_paddle:
+                pl = pkg.paddle_length_mm or round(pkg.body_length_mm * 0.55, 3)
+                pw = pkg.paddle_width_mm  or round(pkg.body_width_mm  * 0.55, 3)
+                self.die_paddle_length.setValue(pl)
+                self.die_paddle_width.setValue(pw)
+
+        elif pkg.family == "BGA":
+            self.bga_ball_diameter.setValue(pkg.bga_ball_dia_mm)
+            self.bga_ball_pitch.setValue(pkg.bga_ball_pitch_mm)
+
+        # Label
+        self._lbl_pkg.setText(f"← {pkg.name}  ({pkg.standard})")
 
         self._update_visibility()
         self._update_hints()

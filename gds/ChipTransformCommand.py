@@ -99,7 +99,10 @@ def _translate_objects(objects, dx, dy, dz):
 
 def _rotate_objects(objects, axis_vec, angle_deg, center):
     """Rotate objects around *center* by *angle_deg* about *axis_vec* (world frame)."""
-    rot = FreeCAD.Rotation(axis_vec, angle_deg)
+    import math
+    half = math.radians(angle_deg) / 2.0
+    s = math.sin(half)
+    rot = FreeCAD.Rotation(axis_vec.x * s, axis_vec.y * s, axis_vec.z * s, math.cos(half))
     for obj in objects:
         old_pos = obj.Placement.Base
         old_rot = obj.Placement.Rotation
@@ -218,8 +221,8 @@ class ChipTransformDialog(QtWidgets.QDialog):
         for row, (label, axis, _) in enumerate(axes, start=1):
             r_lay.addWidget(QtWidgets.QLabel(f"Around {label}:"), row, 0)
             ax = axis
-            r_lay.addWidget(self._nav_btn(f"−{label}", lambda a=ax: self._do_rotate(a, -1)), row, 1)
-            r_lay.addWidget(self._nav_btn(f"+{label}", lambda a=ax: self._do_rotate(a, +1)), row, 2)
+            r_lay.addWidget(self._nav_btn(f"−{label}", lambda _, a=ax: self._do_rotate(a, -1)), row, 1)
+            r_lay.addWidget(self._nav_btn(f"+{label}", lambda _, a=ax: self._do_rotate(a, +1)), row, 2)
 
         root.addWidget(r_grp)
 
