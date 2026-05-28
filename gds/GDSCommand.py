@@ -99,6 +99,9 @@ def load_gds_layers():
             QtWidgets.QMessageBox.warning(None, "Warning", "No layers found in the GDS file.")
             return None, None, None, None, None, None, None, None
 
+        # Estimate polygon counts per layer for the pre-import complexity hint.
+        poly_counts = Core_Functionality.estimate_polygon_counts(gds_path)
+
         filtered_layers = [layer for layer in layers if (layer.get("layer_id", 0), layer.get("datatype", 0)) in gds_layers]
         if not filtered_layers:
             QtWidgets.QMessageBox.warning(None, "Warning", "No matching layers found between LYP and GDS files.")
@@ -118,7 +121,8 @@ def load_gds_layers():
         property_panel.update_properties([], unique_colors, {})
 
         # Layer selection (now with 'Import all layers')
-        dialog = LayerSelector(filtered_layers, options=property_panel.options, ihp_map=ihp_map)
+        dialog = LayerSelector(filtered_layers, options=property_panel.options,
+                               ihp_map=ihp_map, poly_counts=poly_counts)
         if dialog.exec_():
             selected_layers = dialog.selected_layers
             options = dialog.options
@@ -162,6 +166,8 @@ def load_gds_layers():
             decimate = 0.0 if match_klayout else 0.002
             use_klayout_colors = match_klayout
             highlight_bondable   = bool(options.get("highlight_bondable", True))
+            # User-selected per-layer bounding-box simplification.
+            user_bbox_keys = set(options.get("layer_bbox", set()))
             extrude_3d           = bool(options.get("extrude_3d", False))
             mesh_3d              = bool(options.get("mesh_3d", False))
             auto_pin_contacts    = bool(options.get("auto_pin_contacts", False))
@@ -263,6 +269,10 @@ def load_gds_layers():
                     skip_fill_datatype=False,
                     fill_as_bbox=True,
                     fill_layer_keys=fill_layer_keys,
+                    force_bbox_keys=user_bbox_keys,
+                    exclude_auto_bbox_keys={
+                        (l["layer_id"], l["datatype"]) for l in selected_layers
+                    } - user_bbox_keys,
                     ihp_map=ihp_map,
                     flat_layer_keys=flat_layer_keys,
                     stack_mm=stack_mm,
@@ -430,6 +440,17 @@ def load_gds_layers():
                     f"GDS import: could not apply default performance mode: {_pm_err}\n"
                 )
 
+            # Re-apply layer colors after performance mode — changing Deviation
+            # during the wireframe switch can trigger a re-tessellation in FreeCAD
+            # that resets ShapeColor/LineColor back to defaults.
+            for _obj, _shape_rgb, _line_rgb, _tr in _pending_colors:
+                try:
+                    _obj.ViewObject.ShapeColor   = _shape_rgb
+                    _obj.ViewObject.LineColor    = _line_rgb
+                    _obj.ViewObject.Transparency = _tr
+                except Exception:
+                    pass
+
             FreeCADGui.updateGui()
             view = FreeCADGui.activeDocument().activeView()
             if view:
@@ -571,12 +592,17 @@ def load_gds_with_params(gds_path, lyp_path, map_path, selected_layers, options)
 
     import os as _os
     _n_workers = max(1, (_os.cpu_count() or 2) - 1)
+    _user_bbox_keys_replay = set(options.get("layer_bbox", set()))
     shapes = Core_Functionality.load_gds(
         gds_path, filtered,
         transform=None, preview_2d=not extrude_3d, compound_per_layer=True,
         min_area_mm2=min_area, decimate_tol_mm=decimate,
         skip_fill_datatype=False, fill_as_bbox=True,
         fill_layer_keys=fill_layer_keys, flat_layer_keys=flat_layer_keys,
+        force_bbox_keys=_user_bbox_keys_replay,
+        exclude_auto_bbox_keys={
+            (l["layer_id"], l["datatype"]) for l in filtered
+        } - _user_bbox_keys_replay,
         stack_mm=stack_mm,
         contacts_only_3d=contacts_only_3d, contact_keys=contact_keys,
         max_polys_per_layer=max_polys_per_layer,

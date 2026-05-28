@@ -512,6 +512,35 @@ def get_gds_layer(gds_path):
 
     except Exception as e:
         FreeCAD.Console.PrintError(f"Error reading GDSII file {gds_path}: {str(e)}\n")
+
+
+def estimate_polygon_counts(gds_path: str) -> dict:
+    """
+    Count polygons per (layer_id, datatype) without building any geometry.
+    Returns {(layer_id, datatype): count}.  Fast — reads the file once, no OCCT.
+    """
+    try:
+        lib = gdstk.read_gds(gds_path)
+        counts: dict = {}
+        for cell in _as_iter(getattr(lib, 'cells', [])):
+            for polygon in _as_iter(getattr(cell, 'polygons', [])):
+                k = (polygon.layer, polygon.datatype)
+                counts[k] = counts.get(k, 0) + 1
+            for path in _as_iter(getattr(cell, 'paths', [])):
+                layers_attr = getattr(path, 'layers', None)
+                dtypes_attr = getattr(path, 'datatypes', None)
+                if layers_attr:
+                    for i, lyr in enumerate(layers_attr):
+                        dt = dtypes_attr[i] if (dtypes_attr and i < len(dtypes_attr)) else 0
+                        k = (lyr, dt)
+                        counts[k] = counts.get(k, 0) + 1
+                else:
+                    k = (getattr(path, 'layer', 0), getattr(path, 'datatype', 0))
+                    counts[k] = counts.get(k, 0) + 1
+        return counts
+    except Exception as e:
+        FreeCAD.Console.PrintWarning(f"estimate_polygon_counts: {e}\n")
+        return {}
         return set()
     
 def derive_base_scale_mm(gds_path):
@@ -673,6 +702,8 @@ def load_gds(gds_path,
              flat_layer_keys=None,    # (layer_id, datatype) always rendered as flat 2D face (never extruded)
              mesh_3d=False,           # bypass OCCT B-rep: build Mesh.Mesh directly from triangulated polygons
              auto_bbox_threshold=None,# collapse layer to bbox when polygon count exceeds this (None = use module default)
+             force_bbox_keys=None,    # user-selected (layer_id, datatype) pairs to always render as bounding box
+             exclude_auto_bbox_keys=None, # user-selected keys that must never be auto-collapsed to bbox
              use_gdstk_union=False,   # merge overlapping polygons per layer in C++ before building shapes
              use_cache=False,         # serialise result to disk; second import is near-instant
              parallel_workers=0,      # number of threads for data-prep phase (0 = serial)
@@ -700,6 +731,8 @@ def load_gds(gds_path,
         "preview_2d": preview_2d, "min_area": min_area_mm2,
         "decimate": decimate_tol_mm, "fill_bbox": fill_as_bbox,
         "mesh_3d": mesh_3d, "bbox_thresh": _bbox_threshold,
+        "force_bbox": tuple(sorted(force_bbox_keys or [])),
+        "excl_bbox":  tuple(sorted(exclude_auto_bbox_keys or [])),
     }
     _ck = _cache_key(gds_path, selected_layers, _cache_options) if use_cache else None
     if _ck:
@@ -733,6 +766,7 @@ def load_gds(gds_path,
         # + any key whose EDI type set contains "FILL" (catches Drawing layers like
         # 29/0 that carry millions of dummy-metal polygons but use DT=0, not DT=22)
         _fill_keys = set(fill_layer_keys or [])
+        _fill_keys.update(force_bbox_keys or [])   # user-selected bbox layers
         _flat_keys = set(flat_layer_keys or [])
 
         def _is_filler(lyr, dt):
@@ -880,6 +914,7 @@ def load_gds(gds_path,
         # exceeds the threshold is added to _fill_keys so the main loop
         # collapses it to a single bounding-box solid instead of processing
         # each polygon individually.
+        _exclude_auto_bbox = set(exclude_auto_bbox_keys or [])
         if _bbox_threshold > 0:
             _key_counts: dict = {}
             for lyr, dt, _ in polygons:
@@ -888,11 +923,17 @@ def load_gds(gds_path,
                     _key_counts[k] = _key_counts.get(k, 0) + 1
             for k, cnt in _key_counts.items():
                 if cnt > _bbox_threshold and not _is_filler(k[0], k[1]):
-                    _fill_keys.add(k)
-                    FreeCAD.Console.PrintWarning(
-                        f"  Auto-bbox: layer {k[0]}/{k[1]} has {cnt:,} polygons "
-                        f"(threshold {_bbox_threshold:,}) → bounding box\n"
-                    )
+                    if k in _exclude_auto_bbox:
+                        FreeCAD.Console.PrintMessage(
+                            f"  Auto-bbox skipped: layer {k[0]}/{k[1]} has {cnt:,} polygons "
+                            f"but user kept full geometry\n"
+                        )
+                    else:
+                        _fill_keys.add(k)
+                        FreeCAD.Console.PrintWarning(
+                            f"  Auto-bbox: layer {k[0]}/{k[1]} has {cnt:,} polygons "
+                            f"(threshold {_bbox_threshold:,}) → bounding box\n"
+                        )
 
         # ── Micro-area pre-scan: collapse sub-micron Fill-Metal layers ────────
         # Many process nodes (e.g. IHP SG13G2) insert hundreds of thousands of
@@ -938,13 +979,19 @@ def load_gds(gds_path,
                     continue
                 median_um2 = float(_np.median(areas_um2))
                 if median_um2 < MICRO_AREA_BBOX_THRESHOLD_UM2:
-                    _fill_keys.add(k)
-                    n_polys = sum(1 for lyr, dt, _ in polygons if (lyr, dt) == k)
-                    FreeCAD.Console.PrintWarning(
-                        f"  Micro-area bbox: layer {k[0]}/{k[1]} "
-                        f"median={median_um2:.4f} µm² < {MICRO_AREA_BBOX_THRESHOLD_UM2} µm² "
-                        f"({n_polys:,} polygons) → bounding box\n"
-                    )
+                    if k in _exclude_auto_bbox:
+                        FreeCAD.Console.PrintMessage(
+                            f"  Micro-area bbox skipped: layer {k[0]}/{k[1]} "
+                            f"median={median_um2:.4f} µm² but user kept full geometry\n"
+                        )
+                    else:
+                        _fill_keys.add(k)
+                        n_polys = sum(1 for lyr, dt, _ in polygons if (lyr, dt) == k)
+                        FreeCAD.Console.PrintWarning(
+                            f"  Micro-area bbox: layer {k[0]}/{k[1]} "
+                            f"median={median_um2:.4f} µm² < {MICRO_AREA_BBOX_THRESHOLD_UM2} µm² "
+                            f"({n_polys:,} polygons) → bounding box\n"
+                        )
 
         # ── contacts_only_3d: cap polygon count per contact layer ────────────
         # Sort each contact layer's polygons by area (largest first) and keep
@@ -1350,7 +1397,11 @@ def is_bondable(types: set) -> bool:
     if not types:
         return False
     T = {t.upper() for t in types}
-    return any(t in T for t in ("PIN", "LEFPIN", "BUMP", "PAD"))
+    _bond_markers  = {"PIN", "LEFPIN", "BUMP", "PAD"}
+    _routing_types = {"NET", "SPNET", "VIA", "DRAWING"}
+    # Drawing layers carry PIN/LEFPIN alongside NET/SPNET/VIA in IHP .map files.
+    # Only pure pin-marker layers (no routing types) are actual bond-pad layers.
+    return bool(_bond_markers & T) and not bool(_routing_types & T)
 
 
 def identify_contact_layers(selected_layers, ihp_map):
