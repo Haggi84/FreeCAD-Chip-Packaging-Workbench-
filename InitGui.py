@@ -27,6 +27,8 @@ try:
     from session import LoadSessionCommand
     from session import SessionMenuCommand
     from ui import TechConfigDialog  # noqa: F401  (side-effect: registers TechConfigCommand)
+    from pcb import PCBImportCommand      # noqa: F401
+    from pcb import PCBPlacementCommand   # noqa: F401
 
     FreeCAD.Console.PrintMessage("Commands loaded successfully\n")
 except Exception as e:
@@ -110,6 +112,8 @@ class MyWorkbench(FreeCADGui.Workbench):
             self.appendToolbar(
                 "GDSII Tools",
                 [
+                    "PCBImportCommand",
+                    "PCBPlacementCommand",
                     "GDSCommand",
                     "TogglePerformanceModeCommand",
                     "ShowDetailLayerPanelCommand",

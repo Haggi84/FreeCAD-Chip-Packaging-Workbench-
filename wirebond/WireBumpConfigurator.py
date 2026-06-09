@@ -64,6 +64,14 @@ BUMP_SHAPES = {
             "Height (mm)":        dict(key="height", default=0.040, lo=0.005, hi=0.300, step=0.005),
         },
     },
+    "Donut Head": {
+        "description": "Ring-shaped donut bond — used in some power device processes",
+        "params": {
+            "Outer diameter (mm)": dict(key="outer_d", default=0.080, lo=0.010, hi=0.600, step=0.005),
+            "Inner diameter (mm)": dict(key="inner_d", default=0.040, lo=0.005, hi=0.400, step=0.005),
+            "Height (mm)":         dict(key="height",  default=0.020, lo=0.005, hi=0.300, step=0.005),
+        },
+    },
 }
 
 
@@ -110,7 +118,14 @@ def _build_bump_shape(shape_name: str, params: dict) -> Part.Shape:
         r2 = params.get("top_d",  0.04) / 2.0
         h  = params.get("height", 0.04)
         return Part.makeCone(r1, r2, h)
-
+    if shape_name == "Donut Bump":
+        r1 = params.get("outer_d", 0.08) / 2.0
+        r2 = params.get("inner_d", 0.04) / 2.0
+        h  = params.get("height",  0.02)
+        outer = Part.makeTorus(r1, r2, h)
+        inner = Part.makeCylinder(r2, h)
+        inner.translate(FreeCAD.Vector(0, 0, -1))   # ensure it cuts through
+        return outer.cut(inner)
     # Fallback: small sphere
     return Part.makeSphere(0.03)
 
@@ -264,7 +279,29 @@ class _PreviewWidget(QtWidgets.QWidget):
                              f"top={pr.get('top_d',0.04):.3f}")
             self._draw_dim_v(p, cx + px1 + 6, pad_y, pad_y - py, dim_c,
                              f"h={h_b:.3f}")
-
+        elif shape == "Donut Head":
+            r1  = pr.get("outer_d", 0.08) / 2
+            r2  = pr.get("inner_d", 0.04) / 2
+            h_b = pr.get("height",  0.02)
+            px1 = max(5, int(r1 * scale_u))
+            px2 = max(3, int(r2 * scale_u))
+            py  = max(4, int(h_b * scale_u))
+            # Outer circle
+            p.setBrush(QtGui.QBrush(gold))
+            p.setPen(QtGui.QPen(gold.lighter(140), 1))
+            p.drawTorus(QtCore.QPointF(cx, pad_y - py), px1, px2)
+            # p.drawEllipse(cx - px1, pad_y - py - px1, 2 * px1, 2 * px1)
+            # Inner circle (background colour to "cut out")
+            p.setBrush(QtGui.QBrush(self.palette().color(QtGui.QPalette.Window)))
+            p.setPen(QtGui.QPen(self.palette().color(QtGui.QPalette.Window), 1))
+            p.drawcylinder(QtCore.QPointF(cx, pad_y - py), px2, 1)
+            # p.drawEllipse(cx - px2, pad_y - py - px2, 2 * px2, 2 * px2)
+            self._draw_dim_h(p, cx - px1, cx + px1, pad_y + py + 14, dim_c,
+                             f"outer={pr.get('outer_d',0.08):.3f}")
+            self._draw_dim_h(p, cx - px2, cx + px2, pad_y - py - 8, dim_c,
+                             f"inner={pr.get('inner_d',0.04):.3f}")
+            self._draw_dim_v(p, cx + px1 + 6, pad_y, pad_y - py, dim_c,
+                             f"h={h_b:.3f}")
         p.end()
 
     # -- dimension helpers -----------------------------------------------------

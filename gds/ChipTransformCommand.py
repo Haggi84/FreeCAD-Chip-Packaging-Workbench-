@@ -6,6 +6,19 @@ Opens a modeless dialog to translate and rotate all GDS chip objects
 BondWire_*, WireBump_*, GridPt*) as a group,
 or to operate on the current FreeCAD selection.
 
+Substrate / encapsulant frame objects (Substrate_Frames group, created by
+DetailLayerPanel._build_frames) are automatically included in the
+"GDS Chip Objects" scope so they move together with the chip layers.
+
+Align to Selection:
+  Pick any object in the FreeCAD 3D view, then use the Align section:
+  • "Snap Z (bottom → surface)"  — moves the chip group so its lowest Z
+    face sits exactly on the top face of the selected object.
+  • "Center XY on click point"   — moves the chip group so its XY bounding-
+    box center aligns with the XY position of the last-picked vertex/face
+    center on the selected object.
+  • "Both"                       — applies Z-snap and XY-center together.
+
 Translation and rotation are applied incrementally via buttons or keyboard
 shortcuts when the dialog has keyboard focus.
 
@@ -47,6 +60,13 @@ _GDS_PREFIXES = (
     "GridPt",            # SetContactPointsOnFaceCommand grid markers (if any remain)
 )
 
+# Names / prefixes for substrate / encapsulant frame objects produced by
+# DetailLayerPanel._build_frames().  These live in the "Substrate_Frames" group
+# but must move together with the GDS chip objects.
+_FRAME_NAMES = (
+    "Encapsulant_Frame",   # Part::Feature created by _build_frames (Name)
+)
+
 
 def _all_objects(doc):
     """Every object in the document that has a Shape and a Placement."""
@@ -57,11 +77,34 @@ def _all_objects(doc):
 
 
 def _gds_objects(doc):
-    """GDS chip objects only — excludes leadframe, housing, sketches, etc."""
-    return [
+    """GDS chip objects only — excludes leadframe, housing, sketches, etc.
+
+    Includes:
+    - All objects whose Name starts with one of _GDS_PREFIXES
+    - All objects inside the Substrate_Frames group so that encapsulant frame
+      extrusions move together with the chip layers.
+    """
+    objs = [
         o for o in _all_objects(doc)
         if any(o.Name.startswith(p) for p in _GDS_PREFIXES)
     ]
+
+    # Pull in every frame object from the Substrate_Frames group.
+    # We look up by group name/label rather than by object-name prefix so that
+    # multiple frame objects (one per layer, future extension) are all included
+    # automatically without touching _FRAME_NAMES.
+    frames_grp = next(
+        (o for o in (doc.Objects if doc else [])
+         if o.Name == "Substrate_Frames" or o.Label == "Substrate Frames"),
+        None,
+    )
+    if frames_grp is not None:
+        grp_members = getattr(frames_grp, "Group", [])
+        for fo in grp_members:
+            if hasattr(fo, "Shape") and hasattr(fo, "Placement") and fo not in objs:
+                objs.append(fo)
+
+    return objs
 
 
 def _selected_objects():
@@ -119,6 +162,80 @@ def _restore_placements(objects, saved):
             obj.Placement = saved[obj.Name].copy()
 
 
+# ── Align helpers ──────────────────────────────────────────────────────────────
+
+def _chip_zmin(objects):
+    """Return the minimum Z coordinate (bottom face) of the chip group."""
+    zmin = float("inf")
+    for obj in objects:
+        try:
+            zmin = min(zmin, obj.Shape.BoundBox.ZMin)
+        except Exception:
+            pass
+    return zmin if zmin != float("inf") else 0.0
+
+
+def _chip_xy_center(objects):
+    """Return the XY bounding-box centre of the chip group as (cx, cy)."""
+    xmin = ymin = float("inf")
+    xmax = ymax = float("-inf")
+    for obj in objects:
+        try:
+            b = obj.Shape.BoundBox
+            xmin = min(xmin, b.XMin); xmax = max(xmax, b.XMax)
+            ymin = min(ymin, b.YMin); ymax = max(ymax, b.YMax)
+        except Exception:
+            pass
+    if xmin == float("inf"):
+        return 0.0, 0.0
+    return (xmin + xmax) / 2.0, (ymin + ymax) / 2.0
+
+
+def _target_z_top(obj):
+    """Return the highest Z coordinate (top surface) of a target object."""
+    try:
+        return obj.Shape.BoundBox.ZMax
+    except Exception:
+        return 0.0
+
+
+def _target_xy_pick(sel_ex):
+    """
+    Return (x, y) of the picked point from a FreeCADGui SelectionObject.
+
+    Priority:
+      1. Sub-element vertex position (most precise — user clicked a vertex)
+      2. Sub-element face centre  (user clicked a face)
+      3. Object bounding-box XY centre (fallback)
+    """
+    # Try the picked point stored directly on the selection
+    try:
+        pt = sel_ex.PickedPoints
+        if pt:
+            return pt[0].x, pt[0].y
+    except Exception:
+        pass
+
+    # Try sub-element geometry centre
+    try:
+        for sub_name in (sel_ex.SubElementNames or []):
+            sub = sel_ex.Object.Shape.getElement(sub_name)
+            if hasattr(sub, "Point"):           # Vertex
+                return sub.Point.x, sub.Point.y
+            if hasattr(sub, "CenterOfMass"):    # Face / Edge
+                c = sub.CenterOfMass
+                return c.x, c.y
+    except Exception:
+        pass
+
+    # Fallback: object BBox centre
+    try:
+        b = sel_ex.Object.Shape.BoundBox
+        return (b.XMin + b.XMax) / 2.0, (b.YMin + b.YMax) / 2.0
+    except Exception:
+        return 0.0, 0.0
+
+
 # ── Dialog ─────────────────────────────────────────────────────────────────────
 
 class ChipTransformDialog(QtWidgets.QDialog):
@@ -144,6 +261,8 @@ class ChipTransformDialog(QtWidgets.QDialog):
         self._dx = self._dy = self._dz = 0.0    # cumulative translation (mm)
         self._rx = self._ry = self._rz = 0.0    # cumulative rotation (deg, approx)
         self._initial_placements = {}            # {name: Placement} snapshot at open
+        self._sel_object = None                  # target object for Align
+        self._sel_ex     = None                  # raw SelectionObject (carries picked pt)
 
         self._build_ui()
         self._snapshot_placements()
@@ -226,7 +345,53 @@ class ChipTransformDialog(QtWidgets.QDialog):
 
         root.addWidget(r_grp)
 
-        # Status
+        # ── Align to Selection ─────────────────────────────────────────────────
+        a_grp = QtWidgets.QGroupBox("Align to Selection")
+        a_lay = QtWidgets.QVBoxLayout(a_grp)
+        a_lay.setSpacing(4)
+
+        # Info label showing current selection
+        self._lbl_sel = QtWidgets.QLabel("No object selected")
+        self._lbl_sel.setStyleSheet("font-size: 9px; color: #888; font-style: italic;")
+        self._lbl_sel.setWordWrap(True)
+        a_lay.addWidget(self._lbl_sel)
+
+        # Refresh selection button
+        refresh_btn = QtWidgets.QPushButton("↺  Read current FreeCAD selection")
+        refresh_btn.setToolTip(
+            "Click an object (or face/vertex) in the 3D view, then press this\n"
+            "button to load it as the alignment target."
+        )
+        refresh_btn.clicked.connect(self._read_selection)
+        a_lay.addWidget(refresh_btn)
+
+        # Align action buttons
+        btn_row_a = QtWidgets.QHBoxLayout()
+        btn_z   = QtWidgets.QPushButton("Snap Z\n(bottom → surface)")
+        btn_xy  = QtWidgets.QPushButton("Center XY\non click point")
+        btn_both = QtWidgets.QPushButton("Both\n(Z + XY)")
+        for b in (btn_z, btn_xy, btn_both):
+            b.setFixedHeight(44)
+        btn_z.setToolTip(
+            "Move chip group so its lowest face sits flush on the top\n"
+            "surface of the selected object."
+        )
+        btn_xy.setToolTip(
+            "Move chip group so its XY bounding-box center aligns with\n"
+            "the XY position of the last-picked vertex or face center."
+        )
+        btn_both.setToolTip("Apply Z-snap and XY-centering together.")
+        btn_z.clicked.connect(lambda: self._do_align(snap_z=True,  center_xy=False))
+        btn_xy.clicked.connect(lambda: self._do_align(snap_z=False, center_xy=True))
+        btn_both.clicked.connect(lambda: self._do_align(snap_z=True,  center_xy=True))
+        btn_row_a.addWidget(btn_z)
+        btn_row_a.addWidget(btn_xy)
+        btn_row_a.addWidget(btn_both)
+        a_lay.addLayout(btn_row_a)
+
+        root.addWidget(a_grp)
+
+
         status_grp = QtWidgets.QGroupBox("Cumulative Offset (since dialog opened)")
         status_lay = QtWidgets.QVBoxLayout(status_grp)
         mono = QtGui.QFont("Courier")
@@ -358,6 +523,75 @@ class ChipTransformDialog(QtWidgets.QDialog):
         doc.commitTransaction()
         FreeCADGui.updateGui()
         self._dx = self._dy = self._dz = 0.0
+        self._update_status()
+
+    # ── Align to Selection ─────────────────────────────────────────────────────
+
+    def _read_selection(self):
+        """Read the current FreeCAD selection and store it as the align target."""
+        sel = FreeCADGui.Selection.getSelectionEx()
+        # Filter out GDS chip objects — aligning chip to itself makes no sense
+        doc = FreeCAD.activeDocument()
+        chip_names = {o.Name for o in _gds_objects(doc)} if doc else set()
+
+        candidates = [s for s in sel
+                      if hasattr(s.Object, "Shape")
+                      and s.Object.Name not in chip_names]
+        if not candidates:
+            QtWidgets.QMessageBox.warning(
+                self, "No valid selection",
+                "Click a non-chip object (e.g. the PCB body) in the 3D view,\n"
+                "then press '↺ Read current FreeCAD selection'."
+            )
+            return
+
+        self._sel_ex     = candidates[0]
+        self._sel_object = candidates[0].Object
+        label = self._sel_object.Label or self._sel_object.Name
+
+        # Show picked sub-element if any
+        subs = list(candidates[0].SubElementNames or [])
+        sub_txt = f"  [{subs[0]}]" if subs else ""
+        self._lbl_sel.setText(f"Target: {label}{sub_txt}")
+        self._lbl_sel.setStyleSheet("font-size: 9px; color: #88cc88; font-style: normal;")
+
+    def _do_align(self, snap_z: bool, center_xy: bool):
+        """Apply Z-snap and/or XY-centering of chip group to the stored target."""
+        if self._sel_object is None:
+            QtWidgets.QMessageBox.warning(
+                self, "No target",
+                "Press '↺ Read current FreeCAD selection' first to pick a target."
+            )
+            return
+
+        objs = self._objects()
+        if not objs:
+            return
+
+        dx = dy = dz = 0.0
+
+        if snap_z:
+            target_z = _target_z_top(self._sel_object)
+            chip_z   = _chip_zmin(objs)
+            dz = target_z - chip_z
+
+        if center_xy:
+            tx, ty = _target_xy_pick(self._sel_ex)
+            cx, cy = _chip_xy_center(objs)
+            dx = tx - cx
+            dy = ty - cy
+
+        if dx == 0.0 and dy == 0.0 and dz == 0.0:
+            return
+
+        doc = FreeCAD.activeDocument()
+        doc.openTransaction("Chip Align")
+        _translate_objects(objs, dx, dy, dz)
+        doc.commitTransaction()
+        FreeCADGui.updateGui()
+        self._dx += dx
+        self._dy += dy
+        self._dz += dz
         self._update_status()
 
     # ── Status display ─────────────────────────────────────────────────────────

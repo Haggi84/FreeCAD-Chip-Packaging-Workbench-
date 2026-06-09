@@ -684,6 +684,66 @@ def _polygon_to_mesh_facets(pts2d, z0, z1):
     return facets
 
 
+def _layer_shape_worker(key, pts2d_list, preview_2d: bool,
+                        is_flat: bool, t_mm: float, z0: float,
+                        do_mesh: bool):
+    """
+    Thread worker: build all OCCT/mesh shapes for one (layer_id, datatype) key.
+
+    Every OCCT object is created from scratch inside the worker so there is
+    no shared mutable OCCT state between threads.  B-rep shapes are exported
+    to a BREP string before the thread exits; the caller imports them on the
+    main thread.  Mesh-mode returns plain Python facet tuples directly.
+
+    Returns: (key, result_dict | None)
+      result_dict for B-rep  → {"type": "brep",  "data": <str>}
+      result_dict for mesh   → {"type": "mesh",  "data": [facet, ...]}
+    """
+    if do_mesh:
+        facets = []
+        for pts2d in pts2d_list:
+            facets.extend(_polygon_to_mesh_facets(pts2d, z0, z0 + t_mm))
+        return key, {"type": "mesh", "data": facets} if facets else None
+
+    shapes = []
+    for pts2d in pts2d_list:
+        try:
+            closed = pts2d + [pts2d[0]]
+            wire   = Part.makePolygon([(x, y, 0.0) for x, y in closed])
+            if preview_2d or is_flat:
+                try:
+                    shapes.append(Part.Face(wire))
+                except Exception:
+                    shapes.append(wire)
+            else:
+                try:
+                    face = Part.Face(wire)
+                except Exception:
+                    try:
+                        wire = Part.Wire(wire.Edges)
+                        face = Part.Face(wire)
+                    except Exception:
+                        continue
+                shp = face.extrude(FreeCAD.Vector(0, 0, t_mm))
+                if z0 != 0.0:
+                    shp.translate(FreeCAD.Vector(0, 0, z0))
+                shapes.append(shp)
+        except Exception:
+            continue
+
+    if not shapes:
+        return key, None
+
+    try:
+        compound = Part.makeCompound(shapes) if len(shapes) > 1 else shapes[0]
+        return key, {"type": "brep", "data": compound.exportBrepToString()}
+    except Exception as exc:
+        FreeCAD.Console.PrintWarning(
+            f"[load_gds] compound/export failed for {key}: {exc}\n"
+        )
+        return key, None
+
+
 def load_gds(gds_path,
              selected_layers,
              transform=None,
@@ -1115,52 +1175,58 @@ def load_gds(gds_path,
             for _k, _out in map(_prep_key_batch, _raw_normals.items()):
                 _prepped[_k] = _out
 
-        # ── Phase 3: OCCT / mesh shape creation (always main thread) ─────────
-        progress_count = 0
-        for key, pts2d_list in _prepped.items():
-            layer_k, dt_k = key
-            for pts2d in pts2d_list:
-                progress_count += 1
-                if progress_callback and progress_total:
-                    msg = f"Importing layer {layer_k}/{dt_k} ({progress_count}/{progress_total})"
-                    if progress_callback(progress_count, progress_total, msg) is False:
-                        return []
+        # ── Phase 3: OCCT / mesh shape creation — parallel per layer key ────
+        # One worker thread per (layer_id, datatype) key.  Each worker builds
+        # all polygons for that layer independently and returns either a BREP
+        # compound string (B-rep path) or raw mesh facets (mesh path).
+        # Main thread imports BREPs and populates by_layer — no OCCT sharing.
+        _p3_workers = max(1, int(parallel_workers)) if parallel_workers > 0 \
+                      else max(1, (os.cpu_count() or 2) - 1)
+        _p3_total   = max(len(_prepped), 1)
+        _do_mesh    = mesh_3d and not preview_2d
 
-                wire = Part.makePolygon([(x, y, 0.0) for (x, y) in (pts2d + [pts2d[0]])])
-                if preview_2d or (_flat_keys and key in _flat_keys):
-                    try:
-                        by_layer[key].append(Part.Face(wire))
-                    except Exception:
-                        by_layer[key].append(wire)
-                elif mesh_3d:
-                    if stack_mm and key in stack_mm:
-                        t_mm = float(stack_mm[key]["t_mm"])
-                        z0   = float(stack_mm[key]["z0_mm"])
-                    else:
-                        t_mm = default_t_mm
-                        z0   = 0.0
-                    facets = _polygon_to_mesh_facets(pts2d, z0, z0 + t_mm)
-                    if facets:
-                        by_layer[key].extend(facets)
+        if progress_callback:
+            progress_callback(0, _p3_total, "Building layer shapes…")
+
+        _p3_futures: dict = {}
+        with ThreadPoolExecutor(max_workers=_p3_workers) as _pool:
+            for _key, _pts_list in _prepped.items():
+                if stack_mm and _key in stack_mm:
+                    _t   = float(stack_mm[_key]["t_mm"])
+                    _z0  = float(stack_mm[_key]["z0_mm"])
                 else:
-                    try:
-                        face = Part.Face(wire)
-                    except Exception:
-                        try:
-                            wire = Part.Wire(wire.Edges)
-                            face = Part.Face(wire)
-                        except Exception:
-                            continue
-                    if stack_mm and key in stack_mm:
-                        t_mm = float(stack_mm[key]["t_mm"])
-                        z0 = float(stack_mm[key]["z0_mm"])
-                    else:
-                        t_mm = default_t_mm
-                        z0 = 0.0
-                    shp = face.extrude(FreeCAD.Vector(0, 0, t_mm))
-                    if z0 != 0.0:
-                        shp.translate(FreeCAD.Vector(0, 0, z0))
-                    by_layer[key].append(shp)
+                    _t   = default_t_mm
+                    _z0  = 0.0
+                _flat = bool(_flat_keys and _key in _flat_keys)
+                _f = _pool.submit(
+                    _layer_shape_worker,
+                    _key, _pts_list, preview_2d, _flat, _t, _z0, _do_mesh,
+                )
+                _p3_futures[_f] = _key
+
+        _p3_done = 0
+        for _future in as_completed(_p3_futures):
+            _key = _p3_futures[_future]
+            _p3_done += 1
+            if progress_callback:
+                _msg = (f"Assembling layer {_key[0]}/{_key[1]}"
+                        f"  ({_p3_done}/{_p3_total})")
+                if progress_callback(_p3_done, _p3_total, _msg) is False:
+                    return []
+            try:
+                _, _result = _future.result()
+                if _result is None:
+                    continue
+                if _result["type"] == "mesh":
+                    by_layer[_key].extend(_result["data"])
+                elif _result["type"] == "brep" and _result["data"]:
+                    _shp = Part.Shape()
+                    _shp.importBrepFromString(_result["data"])
+                    by_layer[_key] = [_shp]   # already compounded in worker
+            except Exception as _exc:
+                FreeCAD.Console.PrintWarning(
+                    f"[load_gds] shape worker failed for {_key}: {_exc}\n"
+                )
 
         # Build a single bounding-box shape for each filler layer
         for key, (xmin, ymin, xmax, ymax) in fill_extents.items():

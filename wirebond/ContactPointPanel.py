@@ -34,6 +34,15 @@ def _is_housing_point(obj) -> bool:
     return obj.Name.startswith("contact_point_housing_")
 
 
+def _is_pcb_point(obj) -> bool:
+    """True when the object is a PCB pad ContactPoint."""
+    return (
+        obj.Name.startswith("PCB_Pad_")
+        or getattr(obj, "PadType", "") == "PCB_Pad"
+        or getattr(obj, "SourceObject", "").startswith("PCB_")
+    )
+
+
 def _color_swatch(r_f, g_f, b_f, size: int = 12) -> QtGui.QIcon:
     """Return a solid-colour icon from 0–1 float RGB components."""
     pix = QtGui.QPixmap(size, size)
@@ -220,9 +229,10 @@ class ContactPointPanel(QtWidgets.QDockWidget):
         )
 
         # Build group rows — free CPs first, then connected (greyed out)
-        lf_group      = self._make_group("Leadframe", "#75BEEB")
+        lf_group      = self._make_group("Leadframe",  "#75BEEB")
         die_group     = self._make_group("Die / GDS",  "#E64D1A")
         housing_group = self._make_group("Housing",    "#2D50B1")
+        pcb_group     = self._make_group("PCB Pads",   "#1DA85A")
 
         # Build label lookup for netlist display (obj.Name → obj.Label)
         cp_label: dict[str, str] = {}
@@ -259,14 +269,16 @@ class ContactPointPanel(QtWidgets.QDockWidget):
                 for col in range(3):
                     item.setForeground(col, QtGui.QBrush(_FG_FREE))
 
-            if _is_housing_point(obj):
+            if _is_pcb_point(obj):
+                pcb_group.addChild(item)
+            elif _is_housing_point(obj):
                 housing_group.addChild(item)
             elif _is_leadframe_source(src):
                 lf_group.addChild(item)
             else:
                 die_group.addChild(item)
 
-        for grp in (lf_group, die_group, housing_group):
+        for grp in (lf_group, die_group, housing_group, pcb_group):
             if grp.childCount():
                 self.tree.addTopLevelItem(grp)
                 grp.setExpanded(True)

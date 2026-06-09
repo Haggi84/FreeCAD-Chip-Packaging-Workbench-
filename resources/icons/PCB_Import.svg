@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- PCB board (green rectangle) -->
+  <rect x="6" y="14" width="52" height="36" rx="3" fill="#1a7a3a" stroke="#0f4f25" stroke-width="2"/>
+  <!-- PCB edge stripe -->
+  <rect x="6" y="14" width="52" height="4" rx="3" fill="#0f5a2a"/>
+  <!-- Copper traces -->
+  <line x1="14" y1="26" x2="30" y2="26" stroke="#c8a000" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="30" y1="26" x2="30" y2="36" stroke="#c8a000" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="30" y1="36" x2="50" y2="36" stroke="#c8a000" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="14" y1="40" x2="22" y2="40" stroke="#c8a000" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- Pads -->
+  <circle cx="12" cy="26" r="3.5" fill="#e8c000" stroke="#8a6800" stroke-width="1"/>
+  <circle cx="12" cy="40" r="3.5" fill="#e8c000" stroke="#8a6800" stroke-width="1"/>
+  <circle cx="52" cy="36" r="3.5" fill="#e8c000" stroke="#8a6800" stroke-width="1"/>
+  <circle cx="24" cy="40" r="3.5" fill="#e8c000" stroke="#8a6800" stroke-width="1"/>
+  <!-- Down arrow (import) -->
+  <path d="M46 6 L46 13 M43 10 L46 13 L49 10" stroke="#ffffff" stroke-width="2.5"
+        stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>
