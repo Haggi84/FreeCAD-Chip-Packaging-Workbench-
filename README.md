@@ -2,7 +2,7 @@
 This project is licensed under the GNU General Public License v3.0 —
 see [LICENSE](LICENSE) for details.
 
-# DI-PASSIONATE-FreeCAD
+# FreeCAD-Chip-Packaging Workbench (DI-PASSIONATE)
 
 ![Version](https://img.shields.io/badge/version-0.5.0-green?style=flat-square)
 ![FreeCAD](https://img.shields.io/badge/FreeCAD-1.1-blue?style=flat-square)
