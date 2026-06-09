@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2025-2026  <Jochen Zeitler>
 """
 TechStatusBar — lightweight helper that owns the QLabel injected into the
 "Technology Configuration" toolbar.  Keeps the label text in sync with the

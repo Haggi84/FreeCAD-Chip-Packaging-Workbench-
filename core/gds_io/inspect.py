@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2025-2026  <Jochen Zeitler>
 """
 Lightweight GDS file inspection — no OCCT geometry, no FreeCAD objects.
 

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2025-2026  <Jochen Zeitler>
 """
 Stackup helpers — layer thickness lookup, vertical ordering, and Z-position
 dictionaries used by load_gds() for 3D extrusion.

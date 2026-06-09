@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2025-2026  <Jochen Zeitler>
 """
 Manual wire bonding — contact-point filter and 3-D swept-tube geometry.
 

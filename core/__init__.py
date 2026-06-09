@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2025-2026  <Jochen Zeitler>
 """
 Core module for DI-PASSIONATE FreeCAD Workbench
 Contains fundamental utilities for GDS processing and geometry operations
