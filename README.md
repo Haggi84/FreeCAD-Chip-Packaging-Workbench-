@@ -1,3 +1,7 @@
+## License
+This project is licensed under the GNU General Public License v3.0 —
+see [LICENSE](LICENSE) for details.
+
 # DI-PASSIONATE-FreeCAD
 
 ![Version](https://img.shields.io/badge/version-0.5.0-green?style=flat-square)
