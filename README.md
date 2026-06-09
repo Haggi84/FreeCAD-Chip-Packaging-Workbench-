@@ -9,7 +9,7 @@ see [LICENSE](LICENSE) for details.
 ![Python](https://img.shields.io/badge/Python-3.11-yellow?style=flat-square)
 ![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-informational?style=flat-square)
 
-**A FreeCAD workbench for chip-packaging workflows, developed as part of the BMBF project DI-Passionate.**
+**A FreeCAD workbench for chip-packaging workflows, developed as part of the BMBF project DI-PASSIONATE.**
 
 This Python AddIn for [FreeCAD](https://www.freecad.org/downloads.php) provides a dedicated **Chip-Packaging Workbench** covering the full chip-assembly design flow: importing GDSII chip layouts, positioning the chip, designing leadframes and housings, placing chips, planning bond wires and bumps, managing contact points, and saving/restoring sessions.
 
