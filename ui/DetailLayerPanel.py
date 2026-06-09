@@ -1,38 +1,38 @@
 """
 DetailLayerPanel
 ================
-Dock panel für den LOD-gesteuerten GDS-Workflow.
+Dock panel for the LOD-controlled GDS workflow.
 
-Jeder Routing-Layer hat drei Zustände:
+Each routing layer has three states:
 
-  SOLID   ▣  Noch nicht geladen — IC_Body_Solid überbrückt den Stack.
-              Klick auf „Laden" startet den Hintergrund-Import.
-  LOADING ⟳  Tessellierung läuft im Hintergrund. Zeile ist ausgegraut.
-  DETAIL  ◉  Vollgeometrie sichtbar.
+  SOLID   ▣  Not yet loaded — IC_Body_Solid bridges the stack.
+              Click "Load" to start the background import.
+  LOADING ⟳  Tessellation running in the background. Row is greyed out.
+  DETAIL  ◉  Full geometry visible.
 
-PIN/Bonding-Layer und COMP kommen vom Import immer als DETAIL.
-Fill-Layer bleiben immer SOLID (BBox — werden nie vollständig geladen).
+PIN/bonding layers and COMP always arrive from the import as DETAIL.
+Fill layers always remain SOLID (BBox — never fully loaded).
 
-Frame-Extrusion (Leadframe/Substrate) ist davon unabhängig und
-funktioniert wie bisher.
+Frame extrusion (leadframe/substrate) is independent of this and
+works as before.
 
 Layout
 ------
   ┌─────────────────────────────────────────────────────────────────┐
-  │  [Aktualisieren]  [Alle laden]  [Alle zurücksetzen]             │
-  │  [Set Frame]  <template>  [Frames An]  [Frames Aus]             │
+  │  [Refresh]  [Load all]  [Reset all]                             │
+  │  [Set Frame]  <template>  [Frames On]  [Frames Off]             │
   ├────────────┬──────────┬──────┬──────┬──────┬───────────────────┤
-  │  Layer     │ Z-Range  │ Zust.│ BBox │ Det. │ Frame             │
+  │  Layer     │ Z-Range  │ State│ BBox │ Det. │ Frame             │
   ├────────────┼──────────┼──────┼──────┼──────┼───────────────────┤
   │ TopMetal2  │ 3.0–3.3  │  ◉   │  □   │  ◉   │  □                │
-  │ Metal5     │ 1.8–2.0  │  ▣   │  □   │  ○   │  □  [Laden]       │
+  │ Metal5     │ 1.8–2.0  │  ▣   │  □   │  ○   │  □  [Load]        │
   │ Metal4     │ 1.2–1.8  │  ⟳   │  □   │  ○   │  □                │
   └────────────┴──────────┴──────┴──────┴──────┴───────────────────┘
 
 Modes
 -----
-  Cursor mode  — Z-Slider steuert welcher Layer Detail-Ansicht zeigt.
-  Free mode    — jede Zeile ist unabhängig schaltbar.
+  Cursor mode  — Z-slider controls which layer shows the detail view.
+  Free mode    — each row is independently toggleable.
 """
 
 import os
@@ -50,7 +50,7 @@ except ImportError:
         class LOADING: value = "loading"
         class DETAIL:  value = "detail"
 
-_LOD_BTN_WIDTH = 0   # kein separater Laden-Button mehr — LOD-Punkt ist klickbar
+_LOD_BTN_WIDTH = 0   # no separate Load button anymore — LOD dot is clickable
 
 
 # ── parallel frame worker (module-level so ThreadPoolExecutor can call it) ────
@@ -306,25 +306,25 @@ class _ZBar(QtWidgets.QWidget):
 
 class _LayerRow(QtWidgets.QWidget):
     """
-    Eine Zeile: [●Farbe] [Name          ] [Z-Range  ] [●] [□BBox] [□Det] [□Frame]
+    One row: [●Color] [Name          ] [Z-Range  ] [●] [□BBox] [□Det] [□Frame]
 
-    Der farbige LOD-Punkt (●) ist klickbar:
-      grau  ▸  noch nicht geladen → Klick startet Laden
-      amber ▸  wird geladen (deaktiviert)
-      grün  ▸  geladen → Klick könnte z.B. re-rendern (future)
+    The colored LOD dot (●) is clickable:
+      grey  ▸  not yet loaded → click starts loading
+      amber ▸  being loaded (disabled)
+      green ▸  loaded → click could e.g. re-render (future)
 
-    Kein separater "Laden"-Button mehr.
+    No separate "Load" button anymore.
     """
 
     toggled           = QtCore.Signal(bool)
     simplify_toggled  = QtCore.Signal(bool)
     frame_toggled     = QtCore.Signal(bool)
-    load_requested    = QtCore.Signal()          # Volume 3D (Doppelklick)
-    preview_requested = QtCore.Signal()          # Preview 2D (Einfachklick wenn SOLID)
+    load_requested    = QtCore.Signal()          # Volume 3D (double-click)
+    preview_requested = QtCore.Signal()          # Preview 2D (single-click when SOLID)
 
     COL_Z     = 110
-    COL_LOD   = 0    # kein Dot mehr
-    COL_BBOX  = 0   # Spalte entfernt
+    COL_LOD   = 0    # no dot anymore
+    COL_BBOX  = 0   # column removed
     COL_DET   = 34
     COL_FRAME = 34
 
@@ -345,7 +345,7 @@ class _LayerRow(QtWidgets.QWidget):
         lay.setContentsMargins(4, 1, 4, 1)
         lay.setSpacing(4)
 
-        # ── Farbkästchen ──────────────────────────────────────────────────────
+        # ── Color swatch ──────────────────────────────────────────────────────
         swatch = QtWidgets.QLabel()
         swatch.setFixedSize(14, 14)
         r, g, b = (int(c * 255) for c in color)
@@ -355,7 +355,7 @@ class _LayerRow(QtWidgets.QWidget):
         )
         lay.addWidget(swatch)
 
-        # ── Name ──────────────────────────────────────────────────────────────
+        # ── Name ─────────────────────────────────────────────────────────────
         self._lbl_name = QtWidgets.QLabel(label)
         self._lbl_name.setStyleSheet("font-size: 10px; color: black;")
         self._lbl_name.setMinimumWidth(80)
@@ -396,16 +396,16 @@ class _LayerRow(QtWidgets.QWidget):
         _fl.addWidget(self._frame_cb, 0, QtCore.Qt.AlignCenter)
         lay.addWidget(_fc)
 
-        # Doppelklick auf Zeile: laden wenn SOLID
+        # Double-click on row: load when SOLID
         self.setToolTip("Double-click: load as Volume 3D\nSingle-click when in placeholder: load as Preview 2D")
 
-        # Expliziter weißer Hintergrund — verhindert dass FreeCAD-Theme durchscheint
+        # Explicit white background — prevents FreeCAD theme from showing through
         self.setAutoFillBackground(True)
         pal = self.palette()
         pal.setColor(self.backgroundRole(), QtGui.QColor("white"))
         self.setPalette(pal)
 
-        # IC_Body_Solid bekommt Sonderformatierung
+        # IC_Body_Solid gets special formatting
         if is_body_solid:
             self.setStyleSheet(
                 "background: #0a2540; border-radius: 3px;"
@@ -416,7 +416,7 @@ class _LayerRow(QtWidgets.QWidget):
 
     def set_lod_state(self, state: str):
         self._lod_state = state
-        # Name ausgrauen während geladen wird
+        # Grey out name while loading
         if state == "loading":
             self._lbl_name.setStyleSheet("font-size: 10px; color: black;")
         elif not self._is_body_solid:
@@ -483,7 +483,7 @@ class _LayerRow(QtWidgets.QWidget):
         super().mouseDoubleClickEvent(event)
 
     def contextMenuEvent(self, event):
-        """Rechtsklick-Menü: Preview / Volume / Zurücksetzen."""
+        """Right-click menu: Preview / Volume / Reset."""
         menu = QtWidgets.QMenu(self)
         if self._lod_state == "solid":
             act_preview = menu.addAction("Load Preview  (2D, fast)")
@@ -501,7 +501,7 @@ class _LayerRow(QtWidgets.QWidget):
         elif self._lod_state == "detail":
             act_reset = menu.addAction("Reset to Placeholder")
             chosen = menu.exec_(event.globalPos())
-            # reset wird über simplify_toggled gehandelt (BBox)
+            # reset is handled via simplify_toggled (BBox)
             if chosen == act_reset:
                 self.simplify_toggled.emit(True)
 
@@ -548,7 +548,7 @@ class DetailLayerPanel(QtWidgets.QDockWidget):
         self._cursor_idx      = -1
         self._frame_template  = None
         self._frame_objs: dict = {}
-        self._lod_manager     = None   # wird von _connect_lod_manager() gesetzt
+        self._lod_manager     = None   # set by _connect_lod_manager()
 
         self._build_ui()
         self.populate()
@@ -566,7 +566,7 @@ class DetailLayerPanel(QtWidgets.QDockWidget):
 
         btn_refresh = QtWidgets.QPushButton("↺")
         btn_refresh.setFixedWidth(28)
-        btn_refresh.setToolTip("Re-render: Dokument neu scannen und Layer-Liste aktualisieren")
+        btn_refresh.setToolTip("Re-render: re-scan document and refresh layer list")
         btn_refresh.clicked.connect(self.populate)
         tb.addWidget(btn_refresh)
 
@@ -670,15 +670,15 @@ class DetailLayerPanel(QtWidgets.QDockWidget):
         _lbl_layer.setStyleSheet("font-size: 9px; color: #aaa; font-weight: bold;")
         _lbl_layer.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
         hdr_l.addWidget(_lbl_layer, 1)
-        # Z-Range + LOD-Dot gemeinsam in einer festen Breite
-        # (COL_Z + spacing + COL_LOD), damit Header exakt über den Row-Widgets steht
+        # Z-Range + LOD-Dot combined in a fixed width
+        # (COL_Z + spacing + COL_LOD), so that the header aligns exactly above the row widgets
         _lbl_z = QtWidgets.QLabel("Z-Range (µm)")
         _lbl_z.setStyleSheet("font-size: 9px; color: #aaa; font-weight: bold;")
         _lbl_z.setFixedWidth(_LayerRow.COL_Z)
         _lbl_z.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
         hdr_l.addWidget(_lbl_z)
 
-        # "BBox" → "Simpli-fied" wie im Screenshot
+        # "BBox" → "Simpli-fied" as shown in the screenshot
 
         # "Detail"
         _lbl_det = QtWidgets.QLabel("Volume")
@@ -759,12 +759,12 @@ class DetailLayerPanel(QtWidgets.QDockWidget):
             )
 
     def populate(self):
-        """Scannt das aktive Dokument und baut die Zeilen neu auf.
+        """Scans the active document and rebuilds the rows.
 
-        Wenn ein LODManager vorhanden ist, werden die Zeilen aus dessen
-        vollständiger Layer-Liste gebaut (all_layer_dicts) — das umfasst
-        auch Layer, die noch nicht geladen wurden und daher kein FreeCAD-
-        Objekt haben.  Ohne LODManager läuft der alte Scan weiter.
+        If a LODManager is available, rows are built from its complete layer
+        list (all_layer_dicts) — this includes layers that have not yet been
+        loaded and therefore have no FreeCAD object.  Without a LODManager
+        the old scan path continues to run.
         """
         self._clear_rows()
         self._layers = []
@@ -796,21 +796,21 @@ class DetailLayerPanel(QtWidgets.QDockWidget):
 
         self._update_status()
         FreeCAD.Console.PrintMessage(
-            f"[DetailLayerPanel] {len(self._rows)} Zeilen aufgebaut.\n"
+            f"[DetailLayerPanel] {len(self._rows)} rows built.\n"
         )
 
     def _populate_from_lod_manager(self, doc):
         """
-        Baut Zeilen aus der vollständigen Layer-Liste des LODManagers.
+        Builds rows from the complete layer list of the LODManager.
 
-        Reihenfolge: IC_Body_Solid ganz oben (hervorgehoben), dann alle
-        Layer von oben nach unten (höchste Z zuerst).
-        Layer ohne FreeCAD-Objekt (noch nicht geladen) bekommen obj=None.
+        Order: IC_Body_Solid at the top (highlighted), then all layers
+        from top to bottom (highest Z first).
+        Layers without a FreeCAD object (not yet loaded) get obj=None.
         """
         ihp_map  = self._lod_manager._aux.get("ihp_map", {})
         stack_mm = self._lod_manager._aux.get("stack_mm") or {}
 
-        # IC_Body_Solid existiert nicht mehr — Platzhalter übernehmen diese Rolle
+        # IC_Body_Solid no longer exists — placeholders take on this role
 
         for layer_dict in self._lod_manager.all_layer_dicts():
             key  = (layer_dict.get("layer_id", 0), layer_dict.get("datatype", 0))
@@ -826,7 +826,7 @@ class DetailLayerPanel(QtWidgets.QDockWidget):
                 obj_name = f"Layer_{name}_{key[0]}"
                 obj = next((o for o in doc.Objects if o.Name == obj_name), None)
 
-            # Farbe: aus Objekt oder LYP-Fallback
+            # Color: from object or LYP fallback
             color = (0.4, 0.4, 0.7)
             if obj is not None:
                 try:
@@ -875,7 +875,7 @@ class DetailLayerPanel(QtWidgets.QDockWidget):
             self._rows.append(row)
 
     def _populate_from_document(self, doc):
-        """Alter Scan-Pfad — wird benutzt wenn kein LODManager vorhanden."""
+        """Old scan path — used when no LODManager is available."""
         grp = _gds_group(doc)
         if grp is None:
             self._lbl_status.setText("No GDS_Die group — import a GDS file first.")
@@ -888,7 +888,7 @@ class DetailLayerPanel(QtWidgets.QDockWidget):
             z0    = _z_min(obj)
             z1    = _z_max(obj)
             base_label = obj.Label or obj.Name
-            # GDS-Layer-ID und Datatype anhängen wenn vorhanden
+            # Append GDS layer ID and datatype if available
             lid = getattr(obj, "GDSLayerID",  None)
             dt  = getattr(obj, "GDSDatatype", None)
             label = f"{base_label}  ({lid}/{dt})" if lid is not None else base_label
@@ -940,7 +940,7 @@ class DetailLayerPanel(QtWidgets.QDockWidget):
         self._lod_manager = mgr
         mgr.state_changed.connect(self._on_lod_state_changed)
         mgr.body_hidden.connect(self._update_status)
-        FreeCAD.Console.PrintMessage("[DetailLayerPanel] LOD-Manager verbunden.\n")
+        FreeCAD.Console.PrintMessage("[DetailLayerPanel] LOD manager connected.\n")
 
     # ── Slots ──────────────────────────────────────────────────────────────────
 
@@ -955,10 +955,10 @@ class DetailLayerPanel(QtWidgets.QDockWidget):
 
     def _on_load_requested(self, layer_key: tuple, preview_only: bool = False):
         """
-        Nutzer triggert Laden — delegiert an LOD-Manager.
+        User triggers loading — delegates to LOD manager.
 
-        preview_only=True  → schnelle 2D-Polygon-Vorschau
-        preview_only=False → vollständige 3D-Geometrie (Standard bei Doppelklick)
+        preview_only=True  → fast 2D polygon preview
+        preview_only=False → full 3D geometry (default on double-click)
         """
         doc = FreeCAD.activeDocument()
         if doc is None:
@@ -975,12 +975,12 @@ class DetailLayerPanel(QtWidgets.QDockWidget):
         self._lod_manager.promote(layer_key, preview_only=preview_only)
 
     def _on_lod_state_changed(self, layer_key: tuple, state_value: str):
-        """Callback vom LOD-Manager — aktualisiert die Zeilenanzeige."""
+        """Callback from the LOD manager — updates the row display."""
         self._set_row_lod_state(layer_key, state_value)
         self._update_status()
 
     def _set_row_lod_state(self, layer_key: tuple, state: str):
-        """Setzt den LOD-Indikator der passenden Zeile anhand des Layer-Keys."""
+        """Sets the LOD indicator of the matching row based on the layer key."""
         if self._lod_manager is None:
             return
         all_dicts = self._lod_manager.all_layer_dicts()
@@ -991,7 +991,7 @@ class DetailLayerPanel(QtWidgets.QDockWidget):
                 return
 
     def _promote_all(self):
-        """Lädt alle noch nicht geladenen Layer (Taste 'Alle laden')."""
+        """Loads all layers that have not yet been loaded (button 'Load all')."""
         doc = FreeCAD.activeDocument()
         if doc is None:
             return
@@ -999,7 +999,7 @@ class DetailLayerPanel(QtWidgets.QDockWidget):
         if self._lod_manager is not None:
             self._lod_manager.promote_all()
         else:
-            # Fallback: alle auf Detail setzen (alter Modus ohne LOD-Manager)
+            # Fallback: set all to detail (old mode without LOD manager)
             self._set_all_detail()
 
     def _on_z_changed(self, z: float):
@@ -1112,7 +1112,7 @@ class DetailLayerPanel(QtWidgets.QDockWidget):
     # ── batch actions ─────────────────────────────────────────────────────────
 
     def _promote_all_preview(self):
-        """Schnelle 2D-Polygon-Vorschau für alle noch nicht geladenen Layer."""
+        """Fast 2D polygon preview for all layers not yet loaded."""
         doc = FreeCAD.activeDocument()
         if doc is None:
             return
@@ -1408,23 +1408,23 @@ class DetailLayerPanel(QtWidgets.QDockWidget):
         mode   = "Z-Cursor" if self._cursor_mode else "Free"
         simp_txt = f"  |  {n_simp} BBox" if n_simp else ""
 
-        # LOD-Statistik aus dem Manager
+        # LOD statistics from the manager
         if self._lod_manager is not None:
             n_solid   = len(self._lod_manager.pending_keys())
             n_loading = len(self._lod_manager.loading_keys())
             lod_txt = ""
             if n_loading:
-                lod_txt = f"  |  ⟳ {n_loading} wird geladen"
+                lod_txt = f"  |  ⟳ {n_loading} loading"
             elif n_solid:
-                lod_txt = f"  |  ▣ {n_solid} nicht geladen"
+                lod_txt = f"  |  ▣ {n_solid} not loaded"
             else:
-                lod_txt = "  |  ◉ alle Layer geladen"
+                lod_txt = "  |  ◉ all layers loaded"
             self._lbl_status.setText(
                 f"Mode: {mode}  |  {n_det}/{n_tot} Volume{simp_txt}{lod_txt}"
             )
         else:
             self._lbl_status.setText(
-                f"Modus: {mode}  |  {n_det}/{n_tot} Detail{simp_txt}"
+                f"Mode: {mode}  |  {n_det}/{n_tot} Detail{simp_txt}"
             )
 
     def closeEvent(self, event):

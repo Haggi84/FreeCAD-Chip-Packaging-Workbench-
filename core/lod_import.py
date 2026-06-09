@@ -1,15 +1,15 @@
 """
 lod_import.py
 =============
-Einheitliche Import-Logik für den Level-of-Detail-Workflow.
+Unified import logic for the Level-of-Detail workflow.
 
-Zentrale Unterscheidung:
-  all_layers       — alle LYP-Layer die im GDS vorhanden sind (vollständige Liste)
-  initial_layers   — die Teilmenge, die beim Import sofort geladen wird
-                     (Kontakt-Layer + COMP; aus all_layers abgeleitet)
+Central distinction:
+  all_layers       — all LYP layers present in the GDS (complete list)
+  initial_layers   — the subset that is loaded immediately on import
+                     (contact layers + COMP; derived from all_layers)
 
-Der LODManager bekommt all_layers, damit er jeden beliebigen Layer
-nachträglich laden kann — unabhängig davon, ob er beim Import ausgewählt war.
+The LODManager receives all_layers so it can load any layer on demand —
+regardless of whether it was selected during import.
 """
 
 from __future__ import annotations
@@ -21,32 +21,32 @@ import FreeCAD
 
 from core import Core_Functionality
 
-# ── Konstanten ────────────────────────────────────────────────────────────────
+# ── Constants ─────────────────────────────────────────────────────────────────
 
 _PIN_ONLY = {"PIN", "LEFPIN"}
 _NON_PIN  = {"NET", "SPNET", "VIA", "DRAWING"}
 
 _MIN_AREA_BOND_MM2  = 0.0
-# Kein Flächenfilter für Kontakt-Layer — Verbindungsstege zwischen
-# Pads und Vias sind oft nur 10–20 µm breit (≈ 0.0001 mm²) und
-# würden bei jedem positiven Schwellwert weggefiltert.
-# Fill-Layer bekommen separat bbox-Behandlung, brauchen keinen Flächenfilter.
-_MAX_POLYS_CONTACT  = None    # Kein Polygon-Cap — alle Polygone laden
-# (inkl. schmale Verbindungsstege zwischen Pads und Vias)
+# No area filter for contact layers — connection bridges between
+# pads and vias are often only 10–20 µm wide (≈ 0.0001 mm²) and
+# would be filtered out at any positive threshold.
+# Fill layers receive separate bbox treatment and need no area filter.
+_MAX_POLYS_CONTACT  = None    # No polygon cap — load all polygons
+# (including narrow connection bridges between pads and vias)
 
 
-# ── Kategorisierung ───────────────────────────────────────────────────────────
+# ── Categorisation ────────────────────────────────────────────────────────────
 
 def categorize_layers(all_layers: list, ihp_map: dict) -> dict:
     """
-    Teilt alle verfügbaren Layer in Kategorien:
+    Splits all available layers into categories:
 
-      'contact'  — PIN/Bonding-Layer + COMP (sofort als 3D laden)
-      'routing'  — Metal, Via (lazy — auf Anfrage laden)
-      'fill'     — Fill/Dummy-Metal (immer BBox, nie tessellieren)
-      'pin_flat' — reine PIN-Marker (2D, nie extrudieren)
+      'contact'  — PIN/bonding layers + COMP (load immediately as 3D)
+      'routing'  — Metal, Via (lazy — load on demand)
+      'fill'     — Fill/Dummy-Metal (always BBox, never tessellate)
+      'pin_flat' — pure PIN markers (2D, never extrude)
 
-    Gibt {key: category} zurück.
+    Returns {key: category}.
     """
     fill_keys = {
         k for k, v in (ihp_map or {}).items()
@@ -86,8 +86,8 @@ def categorize_layers(all_layers: list, ihp_map: dict) -> dict:
 
 def initial_load_layers(all_layers: list, categories: dict) -> list:
     """
-    Gibt die Teilmenge zurück, die beim Import sofort geladen wird:
-    contact + pin_flat-Layer. Routing und Fill werden lazy geladen bzw. BBox.
+    Returns the subset that is loaded immediately on import:
+    contact + pin_flat layers. Routing and Fill are loaded lazily or as BBox.
     """
     return [
         l for l in all_layers
@@ -97,7 +97,7 @@ def initial_load_layers(all_layers: list, categories: dict) -> list:
     ]
 
 
-# ── Import-Parameter ──────────────────────────────────────────────────────────
+# ── Import parameters ─────────────────────────────────────────────────────────
 
 def build_lod_import_params(
     all_layers: list,
@@ -106,11 +106,11 @@ def build_lod_import_params(
     options: dict,
 ) -> tuple[dict, dict]:
     """
-    Leitet alle load_gds()-Parameter ab.
+    Derives all load_gds() parameters.
 
-    Gibt (load_kwargs, aux) zurück.
-    load_kwargs  → direkt in Core_Functionality.load_gds() spreaden
-    aux          → Hilfs-Flags für GDSCommand und LODManager
+    Returns (load_kwargs, aux).
+    load_kwargs  → spread directly into Core_Functionality.load_gds()
+    aux          → auxiliary flags for GDSCommand and LODManager
     """
     match_klayout      = bool(options.get("match_klayout",      True))
     highlight_bondable = bool(options.get("highlight_bondable", True))
@@ -126,7 +126,7 @@ def build_lod_import_params(
     contact_keys    = {k for k, c in categories.items() if c == "contact"}
 
     if lod_mode:
-        # Nur Kontakt-Layer + PIN-Flat sofort laden
+        # Load only contact layers + PIN-Flat immediately
         layers_to_load = initial_load_layers(all_layers, categories)
         extrude_3d     = True
         min_area       = _MIN_AREA_BOND_MM2
@@ -134,13 +134,13 @@ def build_lod_import_params(
         max_polys      = _MAX_POLYS_CONTACT
 
         FreeCAD.Console.PrintMessage(
-            f"[LOD] Sofortiger Import: {len(layers_to_load)} Layer "
-            f"({len(contact_keys)} Kontakt + {len(flat_layer_keys)} PIN-Flat)\n"
-            f"      Routing-Layer ({sum(1 for c in categories.values() if c=='routing')}) "
+            f"[LOD] Immediate import: {len(layers_to_load)} layers "
+            f"({len(contact_keys)} contact + {len(flat_layer_keys)} PIN-Flat)\n"
+            f"      Routing layers ({sum(1 for c in categories.values() if c=='routing')}) "
             f"→ lazy\n"
         )
     else:
-        # Vollimport — alle ausgewählten Layer sofort
+        # Full import — all selected layers immediately
         layers_to_load = all_layers
         extrude_3d     = bool(options.get("extrude_3d", False)) or mesh_3d
         min_area       = 0.0 if match_klayout else 0.0004
@@ -150,7 +150,7 @@ def build_lod_import_params(
     stack_mm = None
     if extrude_3d:
         stack_mm = Core_Functionality.build_stack_mm_from_xml(
-            all_layers, ihp_map, stackup_data   # immer über den gesamten Stack
+            all_layers, ihp_map, stackup_data   # always across the full stack
         )
 
     all_keys  = {(l["layer_id"], l["datatype"]) for l in all_layers}
@@ -181,8 +181,8 @@ def build_lod_import_params(
     aux = dict(
         lod_mode           = lod_mode,
         extrude_3d         = extrude_3d,
-        layers_to_load     = layers_to_load,   # was beim Import geladen wird
-        all_layers         = all_layers,        # alle verfügbaren Layer
+        layers_to_load     = layers_to_load,   # what is loaded during import
+        all_layers         = all_layers,        # all available layers
         categories         = categories,        # key → 'contact'/'routing'/'fill'/'pin_flat'
         contact_keys       = contact_keys,
         fill_layer_keys    = fill_layer_keys,
@@ -202,10 +202,10 @@ def build_lod_import_params(
 def get_lazy_load_params(layer_dict: dict, gds_path: str, aux: dict,
                           preview_2d: bool = False) -> dict:
     """
-    Parameter für das Nachladen eines einzelnen Layers durch den LOD-Manager.
+    Parameters for lazily loading a single layer by the LOD manager.
 
-    preview_2d=True  → schnelle 2D-Polygone (Preview-Stufe)
-    preview_2d=False → vollständige 3D-Extrusion (Volume-Stufe)
+    preview_2d=True  → fast 2D polygons (preview step)
+    preview_2d=False → full 3D extrusion (volume step)
     """
     stack_mm = aux.get("stack_mm") or {}
     key = (layer_dict.get("layer_id", 0), layer_dict.get("datatype", 0))

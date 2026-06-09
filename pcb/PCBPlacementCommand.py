@@ -1,11 +1,11 @@
 """
 PCBPlacementCommand.py
 ======================
-Erlaubt das nachträgliche Verschieben und Rotieren einer bereits geladenen PCB.
+Allows subsequent moving and rotating of an already loaded PCB.
 
-Öffnet einen Dialog mit den aktuellen Placement-Werten vorausgefüllt.
-Nach Bestätigung wird das PCB-Objekt und alle zugehörigen PCB-Pad-ContactPoints
-gemeinsam transformiert (relative Verschiebung).
+Opens a dialog pre-filled with the current placement values.
+After confirmation, the PCB object and all associated PCB-Pad ContactPoints
+are transformed together (relative translation).
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ class _MovePCBDialog(QtWidgets.QDialog):
             sb.setValue(val)
 
         try:
-            yaw = rot.toEuler()[0]   # Z-Rotation
+            yaw = rot.toEuler()[0]   # Z rotation
         except Exception:
             yaw = 0.0
         self._r.setRange(-180, 180)
@@ -81,7 +81,7 @@ class PCBPlacementCommand:
         if doc is None:
             return
 
-        # PCB-Objekt finden
+        # Find PCB object
         pcb = next(
             (o for o in doc.Objects if getattr(o, "IsPCBBoard", False)),
             None
@@ -100,7 +100,7 @@ class PCBPlacementCommand:
 
         new_pl  = dlg.placement
         old_pl  = pcb.Placement
-        # Relative Transformation: delta = new * old^-1
+        # Relative transformation: delta = new * old^-1
         delta   = new_pl.multiply(old_pl.inverse())
 
         try:
@@ -108,10 +108,10 @@ class PCBPlacementCommand:
         except Exception:
             pass
 
-        # PCB verschieben
+        # Move PCB
         pcb.Placement = new_pl
 
-        # Alle PCB-Pad-ContactPoints mitbewegen
+        # Move all PCB-Pad ContactPoints along with it
         for obj in doc.Objects:
             src = getattr(obj, "SourceObject", "")
             if not src.startswith("PCB_") and not src == pcb.Name:
@@ -123,7 +123,7 @@ class PCBPlacementCommand:
                 new_cp  = delta.multVec(old_cp)
                 obj.ContactPoint = new_cp
                 obj.Placement    = Base.Placement(new_cp, Base.Rotation())
-                # Shape neu positionieren
+                # Reposition shape
                 if hasattr(obj, "Shape") and obj.Shape:
                     obj.Shape = obj.Shape.copy()
                     obj.Shape.Placement = obj.Placement
@@ -140,7 +140,7 @@ class PCBPlacementCommand:
         doc.recompute()
         FreeCADGui.updateGui()
 
-        # ContactPointPanel aktualisieren
+        # Refresh ContactPointPanel
         try:
             mw = FreeCADGui.getMainWindow()
             panel = mw.findChild(__import__("compat").QtWidgets.QDockWidget,

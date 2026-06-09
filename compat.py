@@ -1,12 +1,12 @@
 """
-PySide-Kompatibilitäts-Shim für DI-PASSIONATE.
+PySide compatibility shim for DI-PASSIONATE.
 
-Unterstützt FreeCAD < 1.0  (PySide2 / Qt 5)
-        und FreeCAD >= 1.0  (PySide6 / Qt 6)
+Supports FreeCAD < 1.0  (PySide2 / Qt 5)
+      and FreeCAD >= 1.0  (PySide6 / Qt 6)
 
-Verwendung in allen Modulen:
+Usage in all modules:
     from compat import QtWidgets, QtCore, QtGui
-statt:
+instead of:
     from PySide2 import QtWidgets, QtCore, QtGui
 """
 
@@ -14,7 +14,7 @@ try:
     from PySide6 import QtWidgets, QtCore, QtGui       # FreeCAD >= 1.0
     _PYSIDE_VERSION = 6
 
-    # ── exec_() wurde in PySide6 entfernt ─────────────────────────────────
+    # ── exec_() was removed in PySide6 ───────────────────────────────────
     def _patch_exec(cls):
         if not hasattr(cls, "exec_"):
             cls.exec_ = cls.exec
@@ -23,7 +23,7 @@ try:
     _patch_exec(QtWidgets.QMenu)
     _patch_exec(QtWidgets.QApplication)
 
-    # ── QShortcut / QAction: QtWidgets → QtGui in PySide6 ─────────────────
+    # ── QShortcut / QAction: moved from QtWidgets → QtGui in PySide6 ─────
     if not hasattr(QtWidgets, "QShortcut"):
         QtWidgets.QShortcut = QtGui.QShortcut
     if not hasattr(QtWidgets, "QAction"):
@@ -36,12 +36,12 @@ except ImportError:
 
 def qenum_int(value) -> int:
     """
-    Qt-Enum-Wert sicher in int umwandeln.
+    Safely converts a Qt enum value to int.
 
-    PySide2: int(enum)          funktioniert direkt.
-    PySide6: scoped enums – int() schlägt fehl, .value liefert den int.
+    PySide2: int(enum)          works directly.
+    PySide6: scoped enums — int() fails, .value delivers the int.
 
-    Verwendung (statt int(QtWidgets.QDialogButtonBox.Ok | ...)):
+    Usage (instead of int(QtWidgets.QDialogButtonBox.Ok | ...)):
         qenum_int(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
     """
     try:

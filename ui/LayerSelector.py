@@ -1,17 +1,17 @@
 """
 LayerSelector
 =============
-Dialog zur Layer-Auswahl vor dem GDS-Import.
+Dialog for layer selection before GDS import.
 
-Im LOD-Workflow bedeutet die "Import"-Checkbox NICHT mehr "wird geladen",
-sondern "sofort beim Import laden". Alle anderen Layer werden trotzdem
-im LOD-Manager registriert und können im Detail Layer Panel nachgeladen werden.
+In the LOD workflow the "Import" checkbox no longer means "will be loaded"
+but "load immediately at import time". All other layers are still registered
+in the LOD manager and can be loaded later from the Detail Layer Panel.
 
-Entfernt gegenüber der alten Version:
-  - "Fast Mesh 3D" (intern verfügbar, aber kein UI-Schalter mehr nötig)
-  - "Fast 3D: render contact pads only" (ist jetzt immer der Standard)
-  - "Import All Layers" Checkbox (alle Layer sind immer bekannt; Auswahl = sofort)
-  - Legende (Farbcodierung erklärt sich durch Tooltips)
+Removed compared to the old version:
+  - "Fast Mesh 3D" (available internally, but no UI switch needed anymore)
+  - "Fast 3D: render contact pads only" (is now always the default)
+  - "Import All Layers" checkbox (all layers are always known; selection = immediately)
+  - Legend (color coding is explained by tooltips)
 """
 
 from compat import QtWidgets, QtCore, QtGui
@@ -21,20 +21,20 @@ _SIMPLIFY_THRESHOLD = 5_000
 
 class LayerSelector(QtWidgets.QDialog):
     """
-    Layer-Auswahl-Dialog.
+    Layer selection dialog.
 
-    Spalten
+    Columns
     -------
-    0  Import    — Checkbox: diesen Layer sofort beim Import laden
-    1  Layer     — Name (layer_id/datatype) + Kategorie-Badge
-    2  Polygons  — Schätzung, farblich nach Schwere
-    3  BBox      — Checkbox: Layer als Bounding-Box-Solid vereinfachen
+    0  Import    — Checkbox: load this layer immediately at import time
+    1  Layer     — Name (layer_id/datatype) + category badge
+    2  Polygons  — estimate, color-coded by complexity
+    3  BBox      — Checkbox: simplify layer as a bounding-box solid
     """
 
     def __init__(self, layers, selected_layers=None, parent=None,
                  options=None, ihp_map=None, poly_counts=None):
         super().__init__(parent)
-        self.setWindowTitle("Layer auswählen")
+        self.setWindowTitle("Select Layers")
         self.layers       = layers
         self.ihp_map      = ihp_map or {}
         self.poly_counts  = poly_counts or {}
@@ -51,7 +51,7 @@ class LayerSelector(QtWidgets.QDialog):
 
         layout = QtWidgets.QVBoxLayout(self)
 
-        # ── Globale Optionen ───────────────────────────────────────────────────
+        # ── Global options ────────────────────────────────────────────────────
         opt_top = QtWidgets.QVBoxLayout()
 
         self.check_match = QtWidgets.QCheckBox(
@@ -75,12 +75,12 @@ class LayerSelector(QtWidgets.QDialog):
 
         layout.addLayout(opt_top)
 
-        # ── Auswahlzeile ──────────────────────────────────────────────────────
+        # ── Selection row ─────────────────────────────────────────────────────
         opt_row = QtWidgets.QHBoxLayout()
 
-        # Hinweistext statt "Import All Layers"-Checkbox
+        # Info text instead of "Import All Layers" checkbox
         hint = QtWidgets.QLabel(
-            "✓ = sofort laden  —  alle Layer sind im Panel nachladbar")
+            "✓ = load immediately  —  all layers can be loaded later in the panel")
         hint.setStyleSheet("font-size: 9px; color: #888; padding: 2px 0;")
         opt_row.addWidget(hint, 1)
 
@@ -95,7 +95,7 @@ class LayerSelector(QtWidgets.QDialog):
             opt_row.addWidget(b)
         layout.addLayout(opt_row)
 
-        # ── Layer-Tabelle ──────────────────────────────────────────────────────
+        # ── Layer table ───────────────────────────────────────────────────────
         self.layer_tree = QtWidgets.QTreeWidget()
         self.layer_tree.setColumnCount(4)
         self.layer_tree.setHeaderLabels(["Import", "Layer", "Polygons", "BBox"])
@@ -112,16 +112,16 @@ class LayerSelector(QtWidgets.QDialog):
         self.layer_tree.setColumnWidth(2, 84)
         self.layer_tree.setColumnWidth(3, 44)
         self.layer_tree.header().setToolTip(
-            "Import: sofort beim Start laden (unkritisch wenn nicht gesetzt\n"
-            "— Layer kann danach im Detail Layer Panel nachgeladen werden).\n"
-            "BBox: Layer als Bounding-Box-Solid darstellen statt volle Geometrie."
+            "Import: load immediately at startup (non-critical if not set\n"
+            "— layer can be loaded later in the Detail Layer Panel).\n"
+            "BBox: display layer as a bounding-box solid instead of full geometry."
         )
 
         prev_bbox = self.options.get("layer_bbox", set())
         prev_keys = {(l.get("layer_id", 0), l.get("datatype", 0))
                      for l in self.selected_layers_prev}
 
-        # Kategorie-Badges via ihp_map
+        # Category badges via ihp_map
         _pin_only = {"PIN", "LEFPIN"}
         _non_pin  = {"NET", "SPNET", "VIA", "DRAWING"}
 
@@ -132,7 +132,7 @@ class LayerSelector(QtWidgets.QDialog):
             key        = (layer_id, datatype)
             count      = self.poly_counts.get(key, 0)
 
-            # EDI-Info
+            # EDI info
             _edi_types = set()
             _edi_name  = ""
             if self.ihp_map:
@@ -157,8 +157,8 @@ class LayerSelector(QtWidgets.QDialog):
                 | QtCore.Qt.ItemIsSelectable
             )
 
-            # ── Spalte 0: Import-Checkbox ──────────────────────────────────
-            # Standard: Kontakt/Bondable-Layer vorausgewählt; Rest nicht
+            # ── Column 0: Import checkbox ─────────────────────────────────
+            # Default: contact/bondable layers pre-selected; others not
             default_checked = _is_bond or _is_pin_flat
             item.setCheckState(
                 0,
@@ -167,48 +167,48 @@ class LayerSelector(QtWidgets.QDialog):
                 else QtCore.Qt.Unchecked
             )
 
-            # ── Spalte 1: Name + Kategorie-Badge ──────────────────────────
+            # ── Column 1: Name + category badge ───────────────────────────
             display = f"{layer_name}  ({layer_id}/{datatype})"
             item.setText(1, display)
             item.setData(0, QtCore.Qt.UserRole, layer)
 
-            # Tooltip mit Kategorie
+            # Tooltip with category
             if _is_fill:
-                item.setToolTip(1, "Fill / Dummy-Metal — wird immer als BBox dargestellt")
+                item.setToolTip(1, "Fill / Dummy-Metal — always displayed as BBox")
                 item.setForeground(1, QtGui.QBrush(QtGui.QColor("#888888")))
             elif _is_bond:
-                item.setToolTip(1, "Bondable / PIN — wird sofort geladen")
+                item.setToolTip(1, "Bondable / PIN — loaded immediately")
             elif _is_pin_flat:
-                item.setToolTip(1, "PIN-Marker — wird als 2D-Fläche geladen")
+                item.setToolTip(1, "PIN marker — loaded as a 2D surface")
 
-            # ── Spalte 2: Polygon-Anzahl ───────────────────────────────────
+            # ── Column 2: Polygon count ────────────────────────────────────
             if count > 0:
                 item.setText(2, f"{count:,}")
                 item.setTextAlignment(2, QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
                 if count > 50_000:
                     item.setForeground(2, QtGui.QBrush(QtGui.QColor("#ff4444")))
-                    item.setToolTip(2, f"{count:,} Polygone — sehr schwer (>50k). BBox empfohlen.")
+                    item.setToolTip(2, f"{count:,} polygons — very heavy (>50k). BBox recommended.")
                 elif count > 10_000:
                     item.setForeground(2, QtGui.QBrush(QtGui.QColor("#ff9800")))
-                    item.setToolTip(2, f"{count:,} Polygone — schwer (>10k). BBox erwägen.")
+                    item.setToolTip(2, f"{count:,} polygons — heavy (>10k). Consider BBox.")
                 elif count > _SIMPLIFY_THRESHOLD:
                     item.setForeground(2, QtGui.QBrush(QtGui.QColor("#ffd700")))
-                    item.setToolTip(2, f"{count:,} Polygone — mittel (>{_SIMPLIFY_THRESHOLD:,}).")
+                    item.setToolTip(2, f"{count:,} polygons — medium (>{_SIMPLIFY_THRESHOLD:,}).")
                 else:
                     item.setForeground(2, QtGui.QBrush(QtGui.QColor("#88cc88")))
-                    item.setToolTip(2, f"{count:,} Polygone — leicht.")
+                    item.setToolTip(2, f"{count:,} polygons — light.")
             else:
                 item.setText(2, "?")
                 item.setForeground(2, QtGui.QBrush(QtGui.QColor("#666666")))
 
-            # ── Spalte 3: BBox-Checkbox ────────────────────────────────────
-            # Auto-Tick: Fill-Layer und sehr schwere Layer; nie VIAs
+            # ── Column 3: BBox checkbox ────────────────────────────────────
+            # Auto-tick: fill layers and very heavy layers; never VIAs
             auto_bbox = (_is_fill or (count > _SIMPLIFY_THRESHOLD and not _is_via))
             use_bbox  = key in prev_bbox if prev_bbox else auto_bbox
             item.setCheckState(3, QtCore.Qt.Checked if use_bbox else QtCore.Qt.Unchecked)
-            item.setToolTip(3, "Als Bounding-Box-Solid darstellen statt voller Geometrie")
+            item.setToolTip(3, "Display as a bounding-box solid instead of full geometry")
 
-            # Fill-Layer: BBox gesperrt (kann nicht deaktiviert werden)
+            # Fill layers: BBox locked (cannot be deactivated)
             if _is_fill:
                 item.setFlags(item.flags() & ~QtCore.Qt.ItemIsUserCheckable)
                 item.setCheckState(3, QtCore.Qt.Checked)
@@ -217,7 +217,7 @@ class LayerSelector(QtWidgets.QDialog):
 
         layout.addWidget(self.layer_tree)
 
-        # ── Buttons ───────────────────────────────────────────────────────────
+        # ── Buttons ──────────────────────────────────────────────────────────
         button_box = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
         button_box.accepted.connect(self.accept)
@@ -232,7 +232,7 @@ class LayerSelector(QtWidgets.QDialog):
             QtGui.QKeySequence("Ctrl+A"), self.layer_tree,
             activated=self._select_all)
 
-    # ── Toolbar-Aktionen ──────────────────────────────────────────────────────
+    # ── Toolbar actions ───────────────────────────────────────────────────────
 
     def _select_all(self):
         for i in range(self.layer_tree.topLevelItemCount()):
@@ -258,15 +258,15 @@ class LayerSelector(QtWidgets.QDialog):
         self.options["highlight_bondable"] = self.check_hl.isChecked()
         self.options["extrude_3d"]         = self.check_3d.isChecked()
         self.options["auto_pin_contacts"]  = self.check_auto_pin.isChecked()
-        # mesh_3d und contacts_only_3d nicht mehr im Dialog — werden intern gesetzt
+        # mesh_3d and contacts_only_3d no longer in dialog — set internally
         self.options["mesh_3d"]          = False
         self.options["contacts_only_3d"] = False
 
         self.selected_layers = []
         layer_bbox = set()
 
-        # "selected_layers" = was sofort geladen wird (Import-Checkbox angehakt)
-        # Alle Layer werden als all_layers an GDSCommand übergeben (via self.layers)
+        # "selected_layers" = what is loaded immediately (Import checkbox ticked)
+        # All layers are passed as all_layers to GDSCommand (via self.layers)
         for i in range(self.layer_tree.topLevelItemCount()):
             item  = self.layer_tree.topLevelItem(i)
             layer = item.data(0, QtCore.Qt.UserRole)
@@ -277,5 +277,5 @@ class LayerSelector(QtWidgets.QDialog):
 
         self.options["layer_bbox"] = layer_bbox
 
-        # Kein Fehler wenn nichts angehakt — LOD-Manager kann alles nachladen
+        # No error if nothing is ticked — LOD manager can load everything later
         super().accept()

@@ -1,17 +1,17 @@
 """
 GDSCommand.py
 =============
-FreeCAD-Befehle für den GDS-Import.
+FreeCAD commands for GDS import.
 
-Interaktiver Pfad  : load_gds_layers()       — zeigt Dialoge
-Session-Replay     : load_gds_with_params()  — keine Dialoge
+Interactive path   : load_gds_layers()       — shows dialogs
+Session-Replay     : load_gds_with_params()  — no dialogs
 
-Beide Pfade nutzen core.lod_import.build_lod_import_params() für die
-Parameterableitung, damit keine Logik doppelt existiert.
+Both paths use core.lod_import.build_lod_import_params() for
+parameter derivation so that no logic exists twice.
 
-Standard-Importmodus ist LOD (Level of Detail):
-  • Sofort sichtbar: PIN-/Bond-Layer (3D) + IC_Body_Solid (BBox-Quader)
-  • Lazy:            Routing-Layer auf Anfrage über den LOD-Manager
+Default import mode is LOD (Level of Detail):
+  • Immediately visible: PIN-/Bond-Layer (3D) + IC_Body_Solid (BBox cuboid)
+  • Lazy:                Routing layers on demand via the LOD manager
 """
 
 from compat import QtWidgets, QtCore
@@ -29,11 +29,11 @@ from Get_Path import get_icon
 from session.SessionManager import session_manager
 
 
-# ── Farbauflösung ─────────────────────────────────────────────────────────────
+# ── Colour resolution ─────────────────────────────────────────────────────────
 
 def _layer_colors(layer: dict, ihp_map: dict,
                   match_klayout: bool, highlight_bondable: bool):
-    """Gibt (shape_rgb, line_rgb, transparency) für einen Layer zurück."""
+    """Returns (shape_rgb, line_rgb, transparency) for a layer."""
     lid = layer.get("layer_id", 0)
     dt  = layer.get("datatype",  0)
     m   = ihp_map.get((lid, dt))
@@ -55,19 +55,19 @@ def _layer_colors(layer: dict, ihp_map: dict,
     return sr, lr, tr
 
 
-# ── Dokument-Aufbau ───────────────────────────────────────────────────────────
+# ── Document construction ─────────────────────────────────────────────────────
 
 def _populate_document(doc, shapes, filtered_layers, ihp_map,
                        match_klayout, highlight_bondable, mesh_3d):
     """
-    Erstellt FreeCAD-Objekte für alle Shapes.
-    Gibt (layer_objects, pending_colors) zurück.
+    Creates FreeCAD objects for all shapes.
+    Returns (layer_objects, pending_colors).
     """
     layer_objects  = {}
     pending_colors = []
 
-    # IC_Body_Solid wird nicht mehr erstellt — LODManager übernimmt die
-    # optische Rolle mit Pro-Layer-Platzhaltern.
+    # IC_Body_Solid is no longer created — LODManager takes over the
+    # visual role with per-layer placeholders.
 
     for layer in filtered_layers:
         lid  = layer.get("layer_id", 0)
@@ -88,7 +88,7 @@ def _populate_document(doc, shapes, filtered_layers, ihp_map,
             obj = doc.addObject("Part::Feature", f"Layer_{name}_{lid}")
             obj.Shape = shp["shape"]
 
-        # LOD-Metadaten für den Manager speichern
+        # Store LOD metadata for the manager
         try:
             obj.addProperty("App::PropertyInteger", "GDSLayerID",  "LOD", "GDS Layer ID")
             obj.addProperty("App::PropertyInteger", "GDSDatatype", "LOD", "GDS Datatype")
@@ -128,11 +128,11 @@ def _setup_property_panel(doc, ihp_map, map_path, gds_path,
     return pp
 
 
-# ── Technologie-Datei auflösen ────────────────────────────────────────────────
+# ── Resolve technology file ───────────────────────────────────────────────────
 
 def _resolve_tech_file(tech_config, kind: str, title: str,
                         file_filter: str, optional: bool = False):
-    """Gibt Pfad aus tech_config oder Dateidialog zurück."""
+    """Returns path from tech_config or file dialog."""
     has_fn = getattr(tech_config, f"has_{kind}")
     get_fn = getattr(tech_config, f"get_{kind}")
 
@@ -144,7 +144,7 @@ def _resolve_tech_file(tech_config, kind: str, title: str,
     p, _ = QtWidgets.QFileDialog.getOpenFileName(None, title, "", file_filter)
     if not p:
         if optional:
-            FreeCAD.Console.PrintWarning(f"Kein {kind.upper()} gewählt — wird übersprungen.\n")
+            FreeCAD.Console.PrintWarning(f"No {kind.upper()} selected — skipping.\n")
             return None
         QtWidgets.QMessageBox.critical(None, "Fehler",
                                        f"{kind.upper()}-Datei nicht gefunden.")
@@ -155,12 +155,12 @@ def _resolve_tech_file(tech_config, kind: str, title: str,
     return p
 
 
-# ── Import mit Fortschrittsanzeige ────────────────────────────────────────────
+# ── Import with progress display ──────────────────────────────────────────────
 
 def _run_import(gds_path, selected_layers, load_kwargs):
     """
-    Führt Core_Functionality.load_gds() mit Fortschrittsdialog aus.
-    Gibt (shapes, cancelled) zurück.
+    Runs Core_Functionality.load_gds() with a progress dialog.
+    Returns (shapes, cancelled).
     """
     dlg = QtWidgets.QProgressDialog(
         "GDS-Layer werden importiert…", "Abbrechen", 0, 0,
@@ -188,9 +188,9 @@ def _run_import(gds_path, selected_layers, load_kwargs):
             rem = elapsed / current * (total - current)
             eta = (f"~{int(rem)}s" if rem < 60
                    else f"~{int(rem/60)}m {int(rem%60)}s")
-            dlg.setLabelText(f"{msg or 'Importiere…'}\n{eta} verbleibend")
+            dlg.setLabelText(f"{msg or 'Importing…'}\n{eta} remaining")
         else:
-            dlg.setLabelText(msg or "Importiere…")
+            dlg.setLabelText(msg or "Importing…")
 
         QtWidgets.QApplication.processEvents()
         if dlg.wasCanceled():
@@ -213,7 +213,7 @@ def _run_import(gds_path, selected_layers, load_kwargs):
 
 
 def _run_render(doc, layer_objects, pending_colors):
-    """Ruft doc.recompute() mit Fortschrittsdialog auf."""
+    """Calls doc.recompute() with a progress dialog."""
     n = sum(len(v) for v in layer_objects.values())
     dlg = QtWidgets.QProgressDialog(
         f"FreeCAD tesselliert {n} Shape(s)…\nBitte warten.",
@@ -230,22 +230,22 @@ def _run_render(doc, layer_objects, pending_colors):
     _apply_colors(pending_colors)
     dlg.close()
     FreeCAD.Console.PrintMessage(
-        f"[GDS] Tessellierung: {time.time()-t0:.1f}s\n"
+        f"[GDS] Tessellation: {time.time()-t0:.1f}s\n"
     )
 
 
-# ── Post-Import: PIN-Instances, Gruppe ────────────────────────────────────────
+# ── Post-import: PIN instances, group ────────────────────────────────────────
 
 def _post_import(doc, gds_path, ihp_map, selected_layers,
                  auto_pin_contacts, before_objs):
     """
-    Nach dem eigentlichen Import:
-    - GDS-Zellen namens "pin" als flache 2D-Shapes einblenden
-    - Auto-PIN-Erkennung (optional)
-    - GDS_Die-Gruppe erstellen
-    Gibt cp_count zurück (0 wenn auto_pin_contacts deaktiviert).
+    After the actual import:
+    - Display GDS cells named "pin" as flat 2D shapes
+    - Auto-PIN detection (optional)
+    - Create GDS_Die group
+    Returns cp_count (0 if auto_pin_contacts is disabled).
     """
-    # GDS-Zellen "pin"
+    # GDS cells "pin"
     pin_shp = Core_Functionality.load_pin_cell_shapes(gds_path)
     if pin_shp:
         po = doc.addObject("Part::Feature", "GDS_Pin_Instances")
@@ -253,7 +253,7 @@ def _post_import(doc, gds_path, ihp_map, selected_layers,
         po.ViewObject.ShapeColor   = (0.20, 0.80, 0.20)
         po.ViewObject.LineColor    = (0.10, 0.50, 0.10)
         po.ViewObject.Transparency = 30
-        FreeCAD.Console.PrintMessage("GDS pin-Zellen importiert.\n")
+        FreeCAD.Console.PrintMessage("GDS pin cells imported.\n")
 
     cp_count = 0
     if auto_pin_contacts:
@@ -262,7 +262,7 @@ def _post_import(doc, gds_path, ihp_map, selected_layers,
             selected_layers=selected_layers, top_n=3,
         )
 
-    # GDS_Die Gruppe
+    # GDS_Die group
     grp = doc.addObject("App::DocumentObjectGroup", "GDS_Die")
     grp.Label = "GDS_Die"
     for o in list(doc.Objects):
@@ -273,13 +273,13 @@ def _post_import(doc, gds_path, ihp_map, selected_layers,
 
 
 def _apply_performance_mode(doc, pending_colors):
-    """Performance-Modus nach Import; Farben danach neu setzen."""
+    """Performance mode after import; reapply colours afterwards."""
     try:
         from gds.TogglePerformanceModeCommand import apply_performance_mode
         apply_performance_mode(doc)
     except Exception as e:
-        FreeCAD.Console.PrintWarning(f"[GDS] Performance-Modus: {e}\n")
-    _apply_colors(pending_colors)   # nach Retessellierung erneut setzen
+        FreeCAD.Console.PrintWarning(f"[GDS] Performance mode: {e}\n")
+    _apply_colors(pending_colors)   # reapply after re-tessellation
     FreeCADGui.updateGui()
     v = FreeCADGui.activeDocument().activeView()
     if v:
@@ -287,13 +287,13 @@ def _apply_performance_mode(doc, pending_colors):
         v.fitAll()
 
 
-# ── Interaktiver Import ───────────────────────────────────────────────────────
+# ── Interactive import ────────────────────────────────────────────────────────
 
 def load_gds_layers():
     """
-    Vollständiger interaktiver Import mit Dateidialogen und Fortschrittsanzeige.
-    Gibt 8-Tupel zurück: (doc, layer_objects, selected_layers, unique_colors,
-                          gds_path, lyp_path, options, map_path)
+    Full interactive import with file dialogs and progress display.
+    Returns an 8-tuple: (doc, layer_objects, selected_layers, unique_colors,
+                         gds_path, lyp_path, options, map_path)
     """
     from ui.LayerSelector import LayerSelector
 
@@ -305,7 +305,7 @@ def load_gds_layers():
             QtWidgets.QMessageBox.critical(None, "Fehler", "GDS-Datei nicht gefunden.")
             return (None,) * 8
 
-        # ── Technologie-Konfiguration ──────────────────────────────────────
+        # ── Technology configuration ───────────────────────────────────────
         from core.TechConfig import tech_config
 
         if not tech_config.is_configured():
@@ -363,7 +363,7 @@ def load_gds_layers():
         pp  = _setup_property_panel(doc, ihp_map, map_path, gds_path,
                                      lyp_path, filtered_layers, unique_colors)
 
-        # ── Layer-Auswahl-Dialog ───────────────────────────────────────────
+        # ── Layer selection dialog ────────────────────────────────────────
         dialog = LayerSelector(filtered_layers, options=pp.options,
                                ihp_map=ihp_map, poly_counts=poly_counts)
         if not dialog.exec_():
@@ -371,28 +371,28 @@ def load_gds_layers():
                                               "Layer-Auswahl abgebrochen.")
             return (None,) * 8
 
-        # dialog.layers      = alle verfügbaren Layer (LYP ∩ GDS)
-        # dialog.selected_layers = die vom Nutzer angehakten (sofort laden)
-        # Wenn nichts angehakt: LOD-Manager lädt alles lazy → kein Fehler
-        all_avail_layers = dialog.layers          # vollständige Liste
-        immediate_layers = dialog.selected_layers  # sofort-Import-Teilmenge
+        # dialog.layers      = all available layers (LYP ∩ GDS)
+        # dialog.selected_layers = those ticked by the user (load immediately)
+        # If nothing ticked: LOD manager loads everything lazily → no error
+        all_avail_layers = dialog.layers          # complete list
+        immediate_layers = dialog.selected_layers  # immediate-import subset
         options          = dialog.options
 
         pp.options             = dict(options)
         pp.options["xml_path"] = xml_path
 
-        # ── Import-Parameter ableiten ──────────────────────────────────────
-        # all_avail_layers → LODManager (kennt alle)
-        # layers_to_load   → load_gds() (nur was sofort gebraucht wird)
+        # ── Derive import parameters ──────────────────────────────────────
+        # all_avail_layers → LODManager (knows all layers)
+        # layers_to_load   → load_gds() (only what is needed immediately)
         load_kwargs, aux = build_lod_import_params(
             all_avail_layers, ihp_map, stackup_data, options
         )
-        # Überschreibe die automatisch berechnete Sofort-Liste mit der
-        # Nutzerauswahl — er kann gezielt mehr oder weniger sofort laden
+        # Override the automatically computed immediate-load list with
+        # the user's selection — they may choose to load more or less right away
         if immediate_layers:
             layers_to_load = immediate_layers
         else:
-            layers_to_load = aux["layers_to_load"]  # Fallback: Kontakt-Layer
+            layers_to_load = aux["layers_to_load"]  # Fallback: contact layers
 
         before_objs = {o.Name for o in doc.Objects}
 
@@ -410,7 +410,7 @@ def load_gds_layers():
             QtWidgets.QMessageBox.warning(None, "Warnung", "Keine Shapes gefunden.")
             return (None,) * 8
 
-        # XY-Ausdehnung aus dem (nicht dargestellten) Body-Solid für LODManager
+        # XY extent from the (not displayed) body solid for the LODManager
         _body = next((s for s in shapes if s.get("is_body_solid")), None)
         if _body:
             try:
@@ -449,8 +449,8 @@ def load_gds_layers():
                     "Tipp: IHP .map-Datei laden für beste Ergebnisse.",
                 )
 
-        # LOD-Manager starten — registriert sich am Dokument und wartet auf
-        # Promote-Anfragen aus dem DetailLayerPanel.
+        # Start LOD manager — registers itself on the document and waits for
+        # promote requests from the DetailLayerPanel.
         _start_lod_manager(doc, gds_path, aux)
 
         _apply_performance_mode(doc, pending_colors)
@@ -461,24 +461,24 @@ def load_gds_layers():
     except Exception as e:
         import traceback
         FreeCAD.Console.PrintError(
-            f"[GDSCommand] Fehler: {e}\n{traceback.format_exc()}\n"
+            f"[GDSCommand] Error: {e}\n{traceback.format_exc()}\n"
         )
         QtWidgets.QMessageBox.critical(None, "Fehler", str(e))
         return (None,) * 8
 
 
 def _start_lod_manager(doc, gds_path, aux):
-    """Erstellt den LOD-Manager und registriert ihn in der globalen Registry."""
+    """Creates the LOD manager and registers it in the global registry."""
     try:
         from ui.LODManager import LODManager, register_lod_manager
         mgr = LODManager(doc, gds_path, aux)
         register_lod_manager(doc, mgr)
-        FreeCAD.Console.PrintMessage("[LOD] Manager gestartet.\n")
+        FreeCAD.Console.PrintMessage("[LOD] Manager started.\n")
     except Exception as e:
-        FreeCAD.Console.PrintWarning(f"[LOD] Manager-Fehler: {e}\n")
+        FreeCAD.Console.PrintWarning(f"[LOD] Manager error: {e}\n")
 
 
-# ── FreeCAD-Befehl ────────────────────────────────────────────────────────────
+# ── FreeCAD command ───────────────────────────────────────────────────────────
 
 class GDSCommand:
     def GetResources(self):
@@ -515,18 +515,18 @@ import FreeCADGui
 FreeCADGui.addCommand("GDSCommand", GDSCommand())
 
 
-# ── Session-Replay (kein Dialog) ──────────────────────────────────────────────
+# ── Session replay (no dialog) ────────────────────────────────────────────────
 
 def load_gds_with_params(gds_path, lyp_path, map_path, selected_layers, options):
     """
-    Importiert GDS ohne Dialoge (Session-Replay).
-    Gleicher 8-Tupel-Rückgabewert wie load_gds_layers().
+    Imports GDS without dialogs (session replay).
+    Same 8-tuple return value as load_gds_layers().
     """
     ihp_map = Core_Functionality.parse_map(map_path) if map_path else {}
 
     layers_with_colors = Core_Functionality.parse_lyp(lyp_path)
     if not layers_with_colors:
-        FreeCAD.Console.PrintError("load_gds_with_params: LYP-Fehler.\n")
+        FreeCAD.Console.PrintError("load_gds_with_params: LYP error.\n")
         return (None,) * 8
     layers, unique_colors = layers_with_colors
 
@@ -562,7 +562,7 @@ def load_gds_with_params(gds_path, lyp_path, map_path, selected_layers, options)
     )
 
     if not shapes:
-        FreeCAD.Console.PrintWarning("load_gds_with_params: keine Shapes.\n")
+        FreeCAD.Console.PrintWarning("load_gds_with_params: no shapes.\n")
         return (None,) * 8
 
     layer_objects, pending_colors = _populate_document(

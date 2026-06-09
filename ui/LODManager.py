@@ -1,24 +1,24 @@
 """
 LODManager.py
 =============
-Verwaltet den LOD-Zustand aller GDS-Layer eines Dokuments.
+Manages the LOD state of all GDS layers in a document.
 
-Drei Zustände pro Layer:
-  SOLID    ▣  Noch nicht geladen. Der IC_Body_Solid überbrückt den Stack optisch.
-  LOADING  ⟳  Tessellierung läuft im Hintergrund-Thread.
-  DETAIL   ◉  Vollgeometrie im Dokument sichtbar.
+Three states per layer:
+  SOLID    ▣  Not yet loaded. The IC_Body_Solid bridges the stack visually.
+  LOADING  ⟳  Tessellation is running in the background thread.
+  DETAIL   ◉  Full geometry visible in the document.
 
-Wichtig: Der Manager kennt ALLE in der LYP+GDS verfügbaren Layer (all_layers),
-nicht nur die die beim Import ausgewählt wurden. Damit kann er jeden Layer
-nachträglich laden — auch solche die im Import-Dialog nicht angehakt waren.
+Important: The manager knows ALL layers available in the LYP+GDS (all_layers),
+not only those that were selected during import. This allows it to load any layer
+after the fact — including those that were not checked in the import dialog.
 
-Kontakt-Layer (PIN, COMP) und PIN-Flat-Layer starten direkt als DETAIL,
-da sie beim Import sofort geladen werden. Alle Routing-Layer starten als SOLID.
-Fill-Layer bleiben dauerhaft SOLID (BBox, nie vollständig tessellieren).
+Contact layers (PIN, COMP) and PIN-Flat layers start directly as DETAIL,
+since they are loaded immediately during import. All routing layers start as SOLID.
+Fill layers remain permanently SOLID (BBox, never fully tessellate).
 
-Thread-Sicherheit: load_gds() läuft in einem QThread. Die OCCT-Objekte
-werden als BREP-String übergeben und im Haupt-Thread per Qt-Signal ins
-Dokument geschrieben.
+Thread safety: load_gds() runs in a QThread. The OCCT objects
+are passed as BREP strings and written into the document in the main thread
+via Qt signal.
 """
 
 from __future__ import annotations
@@ -35,37 +35,37 @@ from core import Core_Functionality
 from core.lod_import import get_lazy_load_params
 from gds.TogglePerformanceModeCommand import set_layer_detail
 
-# Globale Registry: doc.Name → LODManager
-# Nötig weil FreeCAD App.Document (C++) keine Python-Attribute erlaubt
+# Global registry: doc.Name → LODManager
+# Necessary because FreeCAD App.Document (C++) does not allow Python attributes
 _LOD_REGISTRY: dict = {}
 
 
 def get_lod_manager(doc):
-    """Gibt den LODManager für ein Dokument zurück, oder None."""
+    """Returns the LODManager for a document, or None."""
     if doc is None:
         return None
     return _LOD_REGISTRY.get(doc.Name)
 
 
 def register_lod_manager(doc, manager):
-    """Registriert einen LODManager für ein Dokument."""
+    """Registers a LODManager for a document."""
     if doc is not None:
         _LOD_REGISTRY[doc.Name] = manager
 
 
-# ── Zustandsmodell ────────────────────────────────────────────────────────────
+# ── State model ───────────────────────────────────────────────────────────────
 
 class LODState(enum.Enum):
-    SOLID    = "solid"     # Platzhalter-Quader sichtbar
-    LOADING  = "loading"   # Hintergrund-Thread aktiv
-    PREVIEW  = "preview"   # 2D-Polygone aus GDS (schnell, kein Z)
-    DETAIL   = "detail"    # vollständig 3D extrudiert
+    SOLID    = "solid"     # placeholder box visible
+    LOADING  = "loading"   # background thread active
+    PREVIEW  = "preview"   # 2D polygons from GDS (fast, no Z)
+    DETAIL   = "detail"    # fully 3D extruded
 
 
-# ── Hintergrund-Worker ────────────────────────────────────────────────────────
+# ── Background worker ─────────────────────────────────────────────────────────
 
 class _LayerLoadWorker(QtCore.QThread):
-    """Lädt einen einzelnen GDS-Layer im Hintergrund-Thread."""
+    """Loads a single GDS layer in the background thread."""
 
     finished = QtCore.Signal(object, object)   # (layer_key, shapes | None)
 
@@ -85,24 +85,24 @@ class _LayerLoadWorker(QtCore.QThread):
             self.finished.emit(key, shapes)
         except Exception as e:
             FreeCAD.Console.PrintWarning(
-                f"[LOD] Worker-Fehler {self._layer_dict.get('name')}: {e}\n"
+                f"[LOD] Worker error {self._layer_dict.get('name')}: {e}\n"
             )
             self.finished.emit(key, None)
 
 
-# ── Haupt-Manager ─────────────────────────────────────────────────────────────
+# ── Main manager ──────────────────────────────────────────────────────────────
 
 class LODManager(QtCore.QObject):
     """
-    Koordiniert das stufenweise Laden von GDS-Layern.
+    Coordinates the step-by-step loading of GDS layers.
 
-    Öffentliche API
-    ---------------
-    promote(layer_key)            — SOLID → DETAIL (startet Laden wenn nötig)
-    promote_all()                 — alle SOLID-Layer laden
-    demote(layer_key)             — DETAIL → SOLID (versteckt, Geometrie bleibt)
-    state(layer_key) → LODState   — aktuellen Zustand abfragen
-    all_layer_dicts() → list      — alle bekannten Layer-Dicts (für Panel-Aufbau)
+    Public API
+    ----------
+    promote(layer_key)            — SOLID → DETAIL (starts loading if necessary)
+    promote_all()                 — load all SOLID layers
+    demote(layer_key)             — DETAIL → SOLID (hidden, geometry is retained)
+    state(layer_key) → LODState   — query current state
+    all_layer_dicts() → list      — all known layer dicts (for panel construction)
     """
 
     state_changed = QtCore.Signal(tuple, str)   # (layer_key, LODState.value)
@@ -110,11 +110,11 @@ class LODManager(QtCore.QObject):
 
     def __init__(self, doc, gds_path: str, aux: dict):
         """
-        doc       — FreeCAD-Dokument
-        gds_path  — Pfad zur GDS-Datei
-        aux       — aux-Dict aus lod_import.build_lod_import_params()
-                    muss 'all_layers', 'categories', 'contact_keys',
-                    'fill_layer_keys' enthalten
+        doc       — FreeCAD document
+        gds_path  — path to the GDS file
+        aux       — aux dict from lod_import.build_lod_import_params()
+                    must contain 'all_layers', 'categories', 'contact_keys',
+                    'fill_layer_keys'
         """
         super().__init__()
 
@@ -137,31 +137,31 @@ class LODManager(QtCore.QObject):
             cat = categories.get(key, "routing")
 
             if cat in ("contact", "pin_flat"):
-                # Sofort beim Import geladen
+                # Loaded immediately during import
                 self._states[key] = LODState.DETAIL
             elif cat == "fill":
-                # Bleibt immer BBox — kein Laden möglich
-                self._states[key] = LODState.DETAIL   # "fertig" aus LOD-Sicht
+                # Always remains BBox — loading not possible
+                self._states[key] = LODState.DETAIL   # "done" from LOD perspective
             else:
-                # Routing-Layer: lazy
+                # Routing layer: lazy
                 self._states[key] = LODState.SOLID
 
-        # Bereits im Dokument vorhandene FreeCAD-Objekte registrieren
+        # Register FreeCAD objects already created during import
         self._scan_existing_objects()
 
-        # XY-Ausdehnung des Chips aus dem IC_Body_Solid lesen (einmalig)
+        # Read XY extent of the chip from IC_Body_Solid (once)
         self._chip_xy: tuple = self._read_chip_xy()
 
-        # Pro-Layer-Platzhalter erstellen für alle SOLID-Layer
+        # Create per-layer placeholders for all SOLID layers
         self._create_layer_placeholders()
 
         n_solid = sum(1 for s in self._states.values() if s == LODState.SOLID)
         FreeCAD.Console.PrintMessage(
-            f"[LOD] Manager: {len(all_layers)} Layer bekannt, "
-            f"{n_solid} lazy-ladbar\n"
+            f"[LOD] Manager: {len(all_layers)} layers known, "
+            f"{n_solid} lazily loadable\n"
         )
 
-    # ── Öffentliche Methoden ──────────────────────────────────────────────────
+    # ── Public methods ───────────────────────────────────────────────────────
 
     def state(self, key: tuple) -> LODState:
         return self._states.get(key, LODState.SOLID)
@@ -170,7 +170,7 @@ class LODManager(QtCore.QObject):
         return all(s != LODState.SOLID for s in self._states.values())
 
     def all_layer_dicts(self) -> list:
-        """Alle bekannten Layer-Dicts, sortiert nach stack_rank (oben → unten)."""
+        """All known layer dicts, sorted by stack_rank (top → bottom)."""
         from core.Core_Functionality import stack_rank_for_edi
         ihp_map = self._aux.get("ihp_map", {})
 
@@ -184,24 +184,24 @@ class LODManager(QtCore.QObject):
 
     def promote(self, key: tuple, preview_only: bool = False):
         """
-        Stuft einen Layer hoch.
+        Promotes a layer.
 
-        preview_only=False (Standard): SOLID → DETAIL (vollständige 3D-Geometrie)
-        preview_only=True:             SOLID/PREVIEW → PREVIEW (schnelle 2D-Polygone)
+        preview_only=False (default): SOLID → DETAIL (full 3D geometry)
+        preview_only=True:            SOLID/PREVIEW → PREVIEW (fast 2D polygons)
 
-        Idempotent: bereits in Zielzustand → nur Visibility setzen.
+        Idempotent: already in target state → only set visibility.
         """
         st = self._states.get(key)
         if st is None:
-            FreeCAD.Console.PrintWarning(f"[LOD] promote: unbekannter Key {key}\n")
+            FreeCAD.Console.PrintWarning(f"[LOD] promote: unknown key {key}\n")
             return
         if st == LODState.LOADING:
             return
 
-        # Zielzustand bestimmen
+        # Determine target state
         target = LODState.PREVIEW if preview_only else LODState.DETAIL
 
-        # Bereits im Zielzustand oder höher
+        # Already at target state or higher
         if st == LODState.DETAIL and not preview_only:
             self._show_layer(key)
             return
@@ -209,7 +209,7 @@ class LODManager(QtCore.QObject):
             self._show_layer(key)
             return
         if st == LODState.PREVIEW and not preview_only:
-            # Upgrade von PREVIEW → DETAIL
+            # Upgrade from PREVIEW → DETAIL
             pass
 
         layer_dict = self._layer_map.get(key)
@@ -230,10 +230,10 @@ class LODManager(QtCore.QObject):
 
         mode = "Preview 2D" if preview_only else "Volume 3D"
         name = layer_dict.get("name", str(key))
-        FreeCAD.Console.PrintMessage(f"[LOD] Starte {mode}: {name} {key}\n")
+        FreeCAD.Console.PrintMessage(f"[LOD] Starting {mode}: {name} {key}\n")
 
     def promote_all(self, preview_only: bool = False):
-        """Startet das Laden aller noch nicht vollständig geladenen Layer."""
+        """Starts loading all layers that have not yet been fully loaded."""
         for key, st in list(self._states.items()):
             if st == LODState.SOLID:
                 self.promote(key, preview_only=preview_only)
@@ -241,7 +241,7 @@ class LODManager(QtCore.QObject):
                 self.promote(key, preview_only=False)
 
     def demote(self, key: tuple):
-        """Versteckt einen Layer (Geometrie bleibt, kann sofort wieder eingeblendet werden)."""
+        """Hides a layer (geometry is retained and can be made visible again immediately)."""
         obj = self._obj_map.get(key)
         if obj:
             try:
@@ -261,20 +261,20 @@ class LODManager(QtCore.QObject):
     def detail_keys(self) -> list:
         return [k for k, s in self._states.items() if s == LODState.DETAIL]
 
-    # ── Internes ─────────────────────────────────────────────────────────────
+    # ── Internal ─────────────────────────────────────────────────────────────
 
-    # ── Platzhalter-Verwaltung ───────────────────────────────────────────────
+    # ── Placeholder management ───────────────────────────────────────────────
 
     def _read_chip_xy(self) -> tuple:
         """
-        Liest XY-Ausdehnung aus aux["chip_xy"] (vom GDSCommand beim Import gesetzt).
-        Fallback: aus vorhandenen Layer-Shapes im Dokument ableiten.
+        Reads XY extent from aux["chip_xy"] (set by GDSCommand during import).
+        Fallback: derive from existing layer shapes in the document.
         """
-        # Bevorzugt: direkt aus dem aux-Dict (body_solid XY ohne das Objekt anzuzeigen)
+        # Preferred: directly from the aux dict (body_solid XY without showing the object)
         if "chip_xy" in self._aux:
             return self._aux["chip_xy"]
 
-        # Fallback: aus vorhandenen FreeCAD-Layer-Shapes ableiten
+        # Fallback: derive from existing FreeCAD layer shapes
         doc = self._doc
         if doc is None:
             return (0.0, 0.0, 1.0, 1.0)
@@ -296,13 +296,13 @@ class LODManager(QtCore.QObject):
 
     def _create_layer_placeholders(self):
         """
-        Erstellt für jeden SOLID-Routing-Layer einen vereinfachten Quader
-        mit korrekter Z-Position aus stack_mm und der XY-Ausdehnung des Chips.
+        Creates a simplified box for each SOLID routing layer with the correct
+        Z position from stack_mm and the XY extent of the chip.
 
-        Diese Platzhalter sind mit IsLayerPlaceholder=True markiert und
-        werden beim echten Laden durch die GDS-Geometrie ersetzt.
-        Der globale IC_Body_Solid wird danach ausgeblendet (Platzhalter
-        übernehmen seine optische Funktion, aber layerweise).
+        These placeholders are marked with IsLayerPlaceholder=True and are
+        replaced by GDS geometry when actually loaded.
+        The global IC_Body_Solid is then hidden (placeholders take over
+        its visual role, but layer by layer).
         """
         doc = self._doc
         if doc is None:
@@ -339,14 +339,14 @@ class LODManager(QtCore.QObject):
             if not layer_dict:
                 continue
 
-            # Z-Position aus stack_mm
+            # Z position from stack_mm
             sm = stack_mm.get(key)
             if sm:
                 z0   = float(sm["z0_mm"])
                 t_mm = float(sm["t_mm"])
             else:
                 z0   = 0.0
-                t_mm = 0.001   # 1 µm Mindestdicke
+                t_mm = 0.001   # 1 µm minimum thickness
 
             t_mm = max(t_mm, 1e-4)
 
@@ -358,17 +358,17 @@ class LODManager(QtCore.QObject):
                 obj = doc.addObject("Part::Feature", obj_name)
                 obj.Shape = box
 
-                # Farbe aus LYP (gedimmt um als Platzhalter erkennbar zu sein)
+                # Colour from LYP (dimmed to be recognisable as a placeholder)
                 fc = layer_dict.get("fill-color", "#888888")
                 try:
                     r, g, b = hex_to_rgb(fc)
                 except Exception:
                     r, g, b = 0.5, 0.5, 0.5
                 obj.ViewObject.ShapeColor   = (r, g, b)
-                obj.ViewObject.Transparency = 60   # deutlich transparent = Platzhalter
+                obj.ViewObject.Transparency = 60   # clearly transparent = placeholder
                 obj.ViewObject.LineColor    = (0.3, 0.3, 0.3)
 
-                # Metadaten
+                # Metadata
                 for prop, val in (("GDSLayerID", key[0]), ("GDSDatatype", key[1])):
                     try:
                         obj.addProperty("App::PropertyInteger", prop, "LOD", prop)
@@ -377,7 +377,7 @@ class LODManager(QtCore.QObject):
                         pass
                 try:
                     obj.addProperty("App::PropertyBool", "IsLayerPlaceholder", "LOD",
-                                    "Vereinfachter Platzhalter — wird durch GDS-Geometrie ersetzt")
+                                    "Simplified placeholder — replaced by GDS geometry")
                     obj.IsLayerPlaceholder = True
                 except Exception:
                     pass
@@ -393,7 +393,7 @@ class LODManager(QtCore.QObject):
 
             except Exception as e:
                 FreeCAD.Console.PrintWarning(
-                    f"[LOD] Platzhalter für {name} fehlgeschlagen: {e}\n"
+                    f"[LOD] Placeholder for {name} failed: {e}\n"
                 )
 
         try:
@@ -405,10 +405,10 @@ class LODManager(QtCore.QObject):
             doc.recompute()
             FreeCADGui.updateGui()
             FreeCAD.Console.PrintMessage(
-                f"[LOD] {n_created} Layer-Platzhalter erstellt.\n"
+                f"[LOD] {n_created} layer placeholders created.\n"
             )
 
-        # IC_Body_Solid ausblenden — Platzhalter übernehmen jetzt die optische Rolle
+        # Hide IC_Body_Solid — placeholders now take over the visual role
         body = next(
             (o for o in doc.Objects
              if getattr(o, "IsBodySolid", False) or o.Name == "IC_Body_Solid"),
@@ -421,7 +421,7 @@ class LODManager(QtCore.QObject):
                 pass
 
     def _scan_existing_objects(self):
-        """Registriert FreeCAD-Objekte die schon beim Import erstellt wurden."""
+        """Registers FreeCAD objects that were already created during import."""
         doc = self._doc
         if doc is None:
             return
@@ -440,7 +440,7 @@ class LODManager(QtCore.QObject):
 
         if not shapes:
             FreeCAD.Console.PrintWarning(
-                f"[LOD] Keine Shapes für {key} — bleibt SOLID\n"
+                f"[LOD] No shapes for {key} — remains SOLID\n"
             )
             self._states[key] = LODState.SOLID
             self.state_changed.emit(key, LODState.SOLID.value)
@@ -450,14 +450,14 @@ class LODManager(QtCore.QObject):
 
     def _insert_layer(self, key: tuple, shapes: list,
                       target: LODState = None):
-        """Erstellt oder aktualisiert das FreeCAD-Feature. Läuft im Haupt-Thread."""
+        """Creates or updates the FreeCAD feature. Runs in the main thread."""
         if target is None:
             target = LODState.DETAIL
         doc = self._doc
         if doc is None:
             return
 
-        # Den passenden Shape-Eintrag finden
+        # Find the matching shape entry
         shp_entry = next(
             (s for s in shapes
              if s.get("layer_id") == key[0] and s.get("datatype") == key[1]),
@@ -472,7 +472,7 @@ class LODManager(QtCore.QObject):
         name       = layer_dict.get("name", f"Layer_{key[0]}")
         obj_name   = f"Layer_{name}_{key[0]}"
 
-        # Vorhandenes Objekt suchen oder neu anlegen
+        # Find existing object or create a new one
         existing = self._obj_map.get(key) or next(
             (o for o in doc.Objects if o.Name == obj_name), None
         )
@@ -492,7 +492,7 @@ class LODManager(QtCore.QObject):
                 existing = doc.addObject("Part::Feature", obj_name)
             existing.Shape = shp_entry["shape"]
 
-        # LOD-Metadaten setzen (falls neu)
+        # Set LOD metadata (if new)
         for prop, val in (("GDSLayerID", key[0]), ("GDSDatatype", key[1])):
             try:
                 if not hasattr(existing, prop):
@@ -501,7 +501,7 @@ class LODManager(QtCore.QObject):
             except Exception:
                 pass
 
-        # Farbe
+        # Colour
         from gds.GDSCommand import _layer_colors
         sr, lr, tr = _layer_colors(
             layer_dict,
@@ -509,14 +509,14 @@ class LODManager(QtCore.QObject):
             self._aux.get("match_klayout", True),
             self._aux.get("highlight_bondable", True),
         )
-        # Platzhalter-Markierung entfernen / aktualisieren
+        # Remove / update placeholder marker
         try:
             if hasattr(existing, "IsLayerPlaceholder"):
                 existing.IsLayerPlaceholder = False
         except Exception:
             pass
 
-        # PREVIEW: leichte Transparenz als Hinweis dass es kein echtes 3D ist
+        # PREVIEW: slight transparency as a hint that it is not real 3D
         display_tr = 30 if target == LODState.PREVIEW else tr
         try:
             existing.ViewObject.ShapeColor   = sr
@@ -527,7 +527,7 @@ class LODManager(QtCore.QObject):
         except Exception:
             pass
 
-        # In GDS_Die-Gruppe aufnehmen (falls noch nicht drin)
+        # Add to GDS_Die group (if not already in it)
         try:
             grp = next(
                 (o for o in doc.Objects
@@ -551,11 +551,11 @@ class LODManager(QtCore.QObject):
         self._states[key]  = target
         self.state_changed.emit(key, target.value)
 
-        FreeCAD.Console.PrintMessage(f"[LOD] {name} geladen ✓\n")
+        FreeCAD.Console.PrintMessage(f"[LOD] {name} loaded ✓\n")
         self._update_body_solid()
 
     def _show_layer(self, key: tuple):
-        """Macht ein bereits geladenes Objekt wieder sichtbar."""
+        """Makes an already-loaded object visible again."""
         obj = self._obj_map.get(key)
         if obj:
             try:
@@ -567,9 +567,9 @@ class LODManager(QtCore.QObject):
 
     def _update_body_solid(self):
         """
-        IC_Body_Solid bleibt dauerhaft ausgeblendet — Platzhalter übernehmen
-        die optische Rolle layerweise. Diese Methode signalisiert nur noch
-        wenn alle Layer vollständig geladen sind.
+        IC_Body_Solid remains permanently hidden — placeholders take over
+        the visual role layer by layer. This method only signals
+        when all layers are fully loaded.
         """
         if self.is_all_loaded():
             FreeCAD.Console.PrintMessage("[LOD] All layers loaded.\n")

@@ -1,25 +1,25 @@
 """
 PCBImportCommand.py
 ===================
-Lädt eine PCB als STEP-Datei, platziert sie frei im 3D-Raum und
-erstellt automatisch ContactPoints auf den erkannten Pad-Flächen.
+Loads a PCB as a STEP file, places it freely in 3D space, and
+automatically creates ContactPoints on the detected pad faces.
 
-Ablauf
-------
-1. Dateidialog → .step / .stp wählen
-2. STEP via Part.read() importieren → FreeCAD Part::Feature "PCB_Board"
-3. Platzier-Dialog: X / Y / Z Offset + Rotation um Z-Achse
-4. Pad-Erkennung: kleine flache Topflächen (copper pads) → ContactPoints
-5. ContactPoints werden mit SourceObject="PCB_Pad_*" markiert
-   → ContactPointPanel erkennt sie als neue Gruppe "PCB"
+Workflow
+--------
+1. File dialog → select .step / .stp
+2. Import STEP via Part.read() → FreeCAD Part::Feature "PCB_Board"
+3. Placement dialog: X / Y / Z offset + rotation around Z axis
+4. Pad detection: small flat top faces (copper pads) → ContactPoints
+5. ContactPoints are marked with SourceObject="PCB_Pad_*"
+   → ContactPointPanel recognises them as the new group "PCB"
 
-Pad-Erkennung
+Pad Detection
 -------------
-Heuristik für typische PCB-STEP-Dateien (KiCad, Altium-Export):
-  - Fläche muss horizontal sein (Normale ≈ +Z)
-  - Flächeninhalt zwischen 0.01 mm² und 100 mm² (kein Substrat, kein Gehäuse)
-  - Z-Position nahe am Top der Platine (oberstes 5% der Z-Ausdehnung)
-  - Noch kein ContactPoint an dieser Position vorhanden (Deduplizierung)
+Heuristic for typical PCB STEP files (KiCad, Altium export):
+  - Face must be horizontal (normal ≈ +Z)
+  - Face area between 0.01 mm² and 100 mm² (no substrate, no housing)
+  - Z position near the top of the board (top 5% of Z extent)
+  - No ContactPoint already present at this position (deduplication)
 """
 
 from __future__ import annotations
@@ -34,19 +34,19 @@ from compat import QtWidgets, QtCore
 from Get_Path import get_icon
 
 
-# ── Konstanten ────────────────────────────────────────────────────────────────
+# ── Constants ────────────────────────────────────────────────────────────────
 
-_PAD_AREA_MIN_MM2   =  0.01    # kleinste akzeptierte Pad-Fläche
-_PAD_AREA_MAX_MM2   = 150.0    # größte akzeptierte Pad-Fläche (keine Kupferfläche)
-_PAD_Z_TOP_FRAC     =  0.04    # Pad muss im obersten X% der Platinen-Z liegen
-_PAD_NORMAL_Z_MIN   =  0.85    # cos(Winkel) — Fläche muss "fast horizontal" sein
-_PAD_DEDUP_MM       =  0.05    # ContactPoints näher als X mm gelten als gleich
+_PAD_AREA_MIN_MM2   =  0.01    # smallest accepted pad area
+_PAD_AREA_MAX_MM2   = 150.0    # largest accepted pad area (no copper pour)
+_PAD_Z_TOP_FRAC     =  0.04    # pad must be within the top X% of board Z extent
+_PAD_NORMAL_Z_MIN   =  0.85    # cos(angle) — face must be "nearly horizontal"
+_PAD_DEDUP_MM       =  0.05    # ContactPoints closer than X mm are considered identical
 
 
-# ── Hilfsfunktionen ───────────────────────────────────────────────────────────
+# ── Helper functions ──────────────────────────────────────────────────────────
 
 def _face_normal_z(face) -> float:
-    """Gibt die Z-Komponente der Flächennormale zurück (0–1)."""
+    """Returns the Z component of the face normal (0–1)."""
     try:
         n = face.normalAt(0, 0)
         return abs(n.z)
@@ -70,9 +70,9 @@ def _face_center(face) -> Base.Vector:
 
 def detect_pads(shape, z_threshold_frac: float = _PAD_Z_TOP_FRAC) -> list[Base.Vector]:
     """
-    Gibt eine Liste von Pad-Mittelpunkten zurück.
+    Returns a list of pad centre points.
 
-    Filtert horizontale Top-Flächen im richtigen Größenbereich.
+    Filters horizontal top faces within the correct area range.
     """
     bb      = shape.BoundBox
     z_top   = bb.ZMax
@@ -82,20 +82,20 @@ def detect_pads(shape, z_threshold_frac: float = _PAD_Z_TOP_FRAC) -> list[Base.V
     pad_positions = []
 
     for face in shape.Faces:
-        # Nur horizontale Flächen
+        # Horizontal faces only
         if _face_normal_z(face) < _PAD_NORMAL_Z_MIN:
             continue
-        # Nur Topflächen
+        # Top faces only
         c = _face_center(face)
         if c.z < z_min_pad:
             continue
-        # Größenfilter
+        # Size filter
         area = _face_area(face)
         if not (_PAD_AREA_MIN_MM2 <= area <= _PAD_AREA_MAX_MM2):
             continue
         pad_positions.append(c)
 
-    # Deduplizierung
+    # Deduplication
     unique = []
     for p in pad_positions:
         if not any(
@@ -120,7 +120,7 @@ def _next_cp_index(doc) -> int:
 
 def create_pad_contact_points(doc, pad_positions: list[Base.Vector],
                                pcb_obj_name: str) -> list:
-    """Erstellt ContactPoint-Marker für alle erkannten Pads."""
+    """Creates ContactPoint markers for all detected pads."""
     created = []
     cp_idx  = _next_cp_index(doc)
 
@@ -128,9 +128,9 @@ def create_pad_contact_points(doc, pad_positions: list[Base.Vector],
         pad_name = f"PCB_Pad_{_next_pcb_pad_index(doc) + i - 1}"
 
         marker = doc.addObject("Part::Feature", pad_name)
-        # Kleiner Quader als sichtbarer Marker
+        # Small box as a visible marker
         try:
-            sz  = 0.15   # 150 µm Markergröße
+            sz  = 0.15   # 150 µm marker size
             box = Part.makeBox(sz, sz, 0.02,
                                FreeCAD.Vector(pos.x - sz/2, pos.y - sz/2, pos.z))
             marker.Shape = box
@@ -138,11 +138,11 @@ def create_pad_contact_points(doc, pad_positions: list[Base.Vector],
             marker.Shape = Part.makeBox(0.1, 0.1, 0.01,
                                         FreeCAD.Vector(pos.x, pos.y, pos.z))
 
-        marker.ViewObject.ShapeColor   = (0.20, 0.60, 1.00)   # blau = PCB-Pad
+        marker.ViewObject.ShapeColor   = (0.20, 0.60, 1.00)   # blue = PCB pad
         marker.ViewObject.LineColor    = (0.10, 0.30, 0.60)
         marker.ViewObject.Transparency = 0
 
-        # ContactPoint-Metadaten
+        # ContactPoint metadata
         def _add(ptype, name, grp, desc, val):
             try:
                 marker.addProperty(ptype, name, grp, desc)
@@ -168,17 +168,17 @@ def create_pad_contact_points(doc, pad_positions: list[Base.Vector],
     return created
 
 
-# ── STEP-Farbextraktion ───────────────────────────────────────────────────────
+# ── STEP colour extraction ────────────────────────────────────────────────────
 
 def _parse_step_colors(path: str) -> dict:
     """
-    Liest COLOUR_RGB-Einträge aus einer STEP-Datei.
+    Reads COLOUR_RGB entries from a STEP file.
 
-    Schnelle Variante: prüft nur Zeilen die 'COLOUR_RGB' enthalten —
-    alle anderen Zeilen werden übersprungen ohne weiteres Parsing.
-    Typische Laufzeit: < 5 ms auch bei großen STEP-Dateien.
+    Fast variant: only checks lines containing 'COLOUR_RGB' —
+    all other lines are skipped without further parsing.
+    Typical runtime: < 5 ms even for large STEP files.
 
-    Gibt {"colors": {entity_id: (r, g, b)}} zurück.
+    Returns {"colors": {entity_id: (r, g, b)}}.
     """
     colors: dict[int, tuple[float, float, float]] = {}
 
@@ -203,21 +203,21 @@ def _parse_step_colors(path: str) -> dict:
                 except (ValueError, IndexError):
                     pass
     except Exception as exc:
-        FreeCAD.Console.PrintWarning(f"[PCB] STEP-Farbparse fehlgeschlagen: {exc}\n")
+        FreeCAD.Console.PrintWarning(f"[PCB] STEP colour parsing failed: {exc}\n")
 
     return {"colors": colors}
 
 
 def _apply_step_colors(path: str, vobj) -> bool:
     """
-    Wendet STEP-Farben auf das ViewObject eines Part::Feature an.
+    Applies STEP colours to the ViewObject of a Part::Feature.
 
-    Strategie:
-    1. STEP parsen → dict {entity_id: (r,g,b)}
-    2. Shapes (Solids + Shells) in Reihenfolge den geparsten Farben zuordnen
-    3. DiffuseColor pro Face setzen
+    Strategy:
+    1. Parse STEP → dict {entity_id: (r,g,b)}
+    2. Assign parsed colours to shapes (Solids + Shells) in order
+    3. Set DiffuseColor per face
 
-    Gibt True zurück wenn mindestens eine Farbe gesetzt wurde.
+    Returns True if at least one colour was applied.
     """
     parsed = _parse_step_colors(path)
     if not parsed:
@@ -227,13 +227,13 @@ def _apply_step_colors(path: str, vobj) -> bool:
     if not colors_by_id:
         return False
 
-    # Alle eindeutigen Farben in Reihenfolge ihres ersten Auftretens
+    # All unique colours in order of first occurrence
     seen = []
     for rgb in colors_by_id.values():
         if rgb not in seen:
             seen.append(rgb)
 
-    # Farben den Sub-Shapes zuordnen: Solids zuerst, dann Shells
+    # Assign colours to sub-shapes: Solids first, then Shells
     try:
         shape = vobj.Object.Shape
         sub_shapes = list(shape.Solids) + list(shape.Shells)
@@ -241,14 +241,14 @@ def _apply_step_colors(path: str, vobj) -> bool:
         return False
 
     if not sub_shapes:
-        # Kein Compound — einfarbig mit erster Farbe
+        # No compound — single colour using the first colour
         if seen:
             r, g, b = seen[0]
             vobj.ShapeColor = (r, g, b)
             return True
         return False
 
-    # Baue Face→Farbe Mapping: Jede Face gehört zum Sub-Shape mit engster BoundBox
+    # Build Face→Colour mapping: each face belongs to the sub-shape with the tightest BoundBox
     face_colors = []
     for face in shape.Faces:
         best_idx = 0
@@ -257,7 +257,7 @@ def _apply_step_colors(path: str, vobj) -> bool:
             try:
                 sb = sub.BoundBox
                 fb = face.BoundBox
-                # Face muss innerhalb des Sub-Shape-BBox liegen
+                # Face must lie within the sub-shape BBox
                 if (sb.XMin <= fb.XMin + 1e-4 and sb.XMax >= fb.XMax - 1e-4 and
                         sb.YMin <= fb.YMin + 1e-4 and sb.YMax >= fb.YMax - 1e-4 and
                         sb.ZMin <= fb.ZMin + 1e-4 and sb.ZMax >= fb.ZMax - 1e-4):
@@ -273,18 +273,18 @@ def _apply_step_colors(path: str, vobj) -> bool:
     try:
         vobj.DiffuseColor = face_colors
         FreeCAD.Console.PrintMessage(
-            f"[PCB] {len(set(face_colors))} Farben auf {len(face_colors)} Faces gesetzt.\n"
+            f"[PCB] {len(set(face_colors))} colours applied to {len(face_colors)} faces.\n"
         )
         return True
     except Exception as exc:
-        FreeCAD.Console.PrintWarning(f"[PCB] DiffuseColor fehlgeschlagen: {exc}\n")
+        FreeCAD.Console.PrintWarning(f"[PCB] DiffuseColor failed: {exc}\n")
         return False
 
 
 
 
 class _PlacementDialog(QtWidgets.QDialog):
-    """Einfacher Dialog zur freien Platzierung der PCB im 3D-Raum."""
+    """Simple dialog for freely placing the PCB in 3D space."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -334,7 +334,7 @@ class _PlacementDialog(QtWidgets.QDialog):
         return self._detect_pads.isChecked()
 
 
-# ── FreeCAD-Befehl ────────────────────────────────────────────────────────────
+# ── FreeCAD command ───────────────────────────────────────────────────────────
 
 class PCBImportCommand:
     def GetResources(self):
@@ -346,7 +346,7 @@ class PCBImportCommand:
         }
 
     def Activated(self):
-        # ── 1. Datei wählen ───────────────────────────────────────────────
+        # ── 1. Select file ────────────────────────────────────────────────
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
             None, "Select PCB STEP file", "",
             "STEP Files (*.step *.stp *.STEP *.STP)"
@@ -358,7 +358,7 @@ class PCBImportCommand:
         if doc is None:
             doc = FreeCAD.newDocument("PCB_Assembly")
 
-        # ── 2. STEP importieren ──────────────────────────────────────────
+        # ── 2. Import STEP ───────────────────────────────────────────────
         try:
             shape = Part.read(path)
         except Exception as e:
@@ -366,7 +366,7 @@ class PCBImportCommand:
                                            f"Could not read STEP file:\n{e}")
             return
 
-        # ── 3. Platzier-Dialog ───────────────────────────────────────────
+        # ── 3. Placement dialog ──────────────────────────────────────────
         dlg = _PlacementDialog(FreeCADGui.getMainWindow())
         if not dlg.exec_():
             return
@@ -374,7 +374,7 @@ class PCBImportCommand:
         placement  = dlg.placement
         do_pads    = dlg.detect_pads
 
-        # ── 4. PCB-Objekt erstellen ──────────────────────────────────────
+        # ── 4. Create PCB object ─────────────────────────────────────────
         try:
             doc.openTransaction("Import PCB")
         except Exception:
@@ -387,14 +387,14 @@ class PCBImportCommand:
         pcb_obj.ViewObject.LineColor    = (0.05, 0.25, 0.10)
         pcb_obj.ViewObject.Transparency = 0
 
-        # Farben aus STEP-Datei lesen; Fallback: PCB-Grün
+        # Read colours from STEP file; fallback: PCB green
         if not _apply_step_colors(path, pcb_obj.ViewObject):
             pcb_obj.ViewObject.ShapeColor = (0.15, 0.55, 0.20)
             FreeCAD.Console.PrintWarning(
-                "[PCB] Keine STEP-Farben gefunden — Fallback-Farbe verwendet.\n"
+                "[PCB] No STEP colours found — fallback colour used.\n"
             )
 
-        # Metadaten
+        # Metadata
         try:
             pcb_obj.addProperty("App::PropertyString", "PCBFilePath", "PCB",
                                  "Source STEP file path")
@@ -405,11 +405,11 @@ class PCBImportCommand:
         except Exception:
             pass
 
-        # ── 5. Pad-Erkennung ─────────────────────────────────────────────
+        # ── 5. Pad detection ─────────────────────────────────────────────
         n_pads = 0
         if do_pads:
             try:
-                # Shape mit Placement transformieren
+                # Transform shape with placement
                 placed_shape = shape.copy()
                 placed_shape.Placement = placement
                 pad_positions = detect_pads(placed_shape)
@@ -418,7 +418,7 @@ class PCBImportCommand:
                     cps = create_pad_contact_points(doc, pad_positions, pcb_obj.Name)
                     n_pads = len(cps)
 
-                    # In PCB-Gruppe einordnen
+                    # Add to PCB group
                     try:
                         grp = next(
                             (o for o in doc.Objects
@@ -435,14 +435,14 @@ class PCBImportCommand:
                         pass
 
                     FreeCAD.Console.PrintMessage(
-                        f"[PCB] {n_pads} pad ContactPoints erstellt.\n"
+                        f"[PCB] {n_pads} pad ContactPoints created.\n"
                     )
                 else:
                     FreeCAD.Console.PrintWarning(
-                        "[PCB] Keine Pads erkannt. Bitte manuell ContactPoints setzen.\n"
+                        "[PCB] No pads detected. Please set ContactPoints manually.\n"
                     )
             except Exception as e:
-                FreeCAD.Console.PrintWarning(f"[PCB] Pad-Erkennung fehlgeschlagen: {e}\n")
+                FreeCAD.Console.PrintWarning(f"[PCB] Pad detection failed: {e}\n")
 
         try:
             doc.commitTransaction()
@@ -456,7 +456,7 @@ class PCBImportCommand:
         if v:
             v.fitAll()
 
-        # ── 6. ContactPoint-Panel aktualisieren ──────────────────────────
+        # ── 6. Refresh ContactPoint panel ────────────────────────────────
         _refresh_contact_panel()
 
         msg = f"PCB imported: {os.path.basename(path)}"
@@ -471,7 +471,7 @@ class PCBImportCommand:
 
 
 def _refresh_contact_panel():
-    """Aktualisiert das ContactPointPanel falls es offen ist."""
+    """Refreshes the ContactPointPanel if it is open."""
     try:
         mw = FreeCADGui.getMainWindow()
         panel = mw.findChild(QtWidgets.QDockWidget, "ContactPointPanel")
