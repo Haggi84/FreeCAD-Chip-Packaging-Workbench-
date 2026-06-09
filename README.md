@@ -1,7 +1,7 @@
 # DI-PASSIONATE-FreeCAD
 
-![Version](https://img.shields.io/badge/version-0.6.0-green?style=flat-square)
-![FreeCAD](https://img.shields.io/badge/FreeCAD-1.0-blue?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.5.0-green?style=flat-square)
+![FreeCAD](https://img.shields.io/badge/FreeCAD-1.1-blue?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.11-yellow?style=flat-square)
 ![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-informational?style=flat-square)
 
@@ -19,11 +19,16 @@ This Python AddIn for [FreeCAD](https://www.freecad.org/downloads.php) provides 
 
 | Tool | Description |
 |---|---|
-| **Load GDSII** | Import `.gds` files with layer colours from a KLayout `.lyp` file, optional IHP `.map` technology file, and optional stackup `.xml` for accurate 3-D Z-heights |
+| **PCB Import** | Load a PCB as a STEP file and automatically detect copper pad faces as ContactPoints (grouped as type "PCB") |
+| **Move / Rotate PCB** | Reposition and rotate an already-loaded PCB together with all its auto-detected pad ContactPoints |
+| **Load GDSII** | Import `.gds` files with layer colours from a KLayout `.lyp` file, optional IHP `.map` technology file, and optional stackup `.xml` for accurate 3-D Z-heights. Supports LOD mode (contact layers first, routing layers lazy) |
+| **Toggle Performance Mode** | Switch all GDS layer objects between shaded Detail mode and fast Wireframe mode for viewport responsiveness |
+| **Detail Layer Control** | LOD dock panel: shows all GDS layers with load state (SOLID / LOADING / DETAIL); click a row to load a routing layer on demand or use Z-cursor mode to auto-promote layers as you scroll through the stack |
+| **Layer Slider** | Prusa-Slicer-style vertical slider — step through GDS layers from bottom to top for a quick stack review |
 | **Leadframe Library** | Browse and import STEP package models from the MirrorSemi online CAD catalogue directly into the active GDS document |
 | **Move / Rotate Chip** | Modeless dialog to translate and rotate all GDS chip objects as a group using arrow buttons or keyboard shortcuts |
 | **Set Contact Points on Face** | Grid-based interactive tool: Ctrl+click faces → generate UV grid → click grid points → confirm to create contact point markers |
-| **Contact Point Browser** | Dock panel listing all contact points grouped by type (die-side / housing), with 3-D highlight on hover |
+| **Contact Point Browser** | Dock panel listing all contact points grouped by type (die-side / housing / PCB), with 3-D highlight on hover |
 | **Wire Bond** | Interactive 3-D wire bonding session — click a die-pad contact point, then a housing contact point; a solid swept-pipe bond wire is created |
 | **Wire Bump Configurator** | Place parametric bump shapes (Ball, Wedge, Stitch, Nail Head) at both endpoints of selected bond wires via a netlist browser |
 | **Cancel Wire Bonding** | Exit an active wire-bonding session |
@@ -86,6 +91,39 @@ When loading a GDSII file the **Layer Selector** dialog exposes several import o
 | **Auto PIN contact detection** | Automatically create `ContactPoint` markers on the top PIN layers (uses DT=2 pin markers for accurate pad-centre placement) |
 
 Filler layers (marked `FILL` in the `.map` file or datatype 22) are represented as a single bounding-box solid to keep import performance high. A progress dialog with a **Cancel** button and ETA is shown during import.
+
+---
+
+## Level-of-Detail (LOD) Import
+
+When **LOD mode** is active (the default), the importer categorises every layer before loading anything and only fetches full geometry for the layers you need immediately:
+
+| Category | Layers | Import behaviour |
+|---|---|---|
+| **contact** | PIN, COMP, top/bottom metal bond layers | Full 3-D extrusion — loaded immediately |
+| **pin_flat** | Pure PIN-marker layers | 2-D flat polygons — loaded immediately |
+| **fill** | FILL / dummy-metal layers | Bounding-box solid only — never tessellated |
+| **routing** | All remaining metal, via, drawing layers | Transparent placeholder box at correct Z — **lazy** |
+
+Routing layers start as semi-transparent placeholder boxes that occupy the correct Z-range in the stack. Use the **Detail Layer Control** panel to promote individual layers to full geometry at any time:
+
+- **Z-cursor mode** — drag a vertical cursor; the layer at that height is promoted automatically.
+- **Free mode** — toggle each layer row independently.
+- **Load All** — promotes every pending layer in parallel background threads.
+
+This keeps initial import fast (seconds instead of minutes for large chips) while preserving the ability to inspect any layer in full detail on demand.
+
+---
+
+## PCB Integration
+
+Import a PCB sub-board alongside the chip for package-on-package or SiP assemblies:
+
+1. **PCB Import** — select a `.step` / `.stp` file; the tool places it as a `PCB_Board` object and auto-detects copper pad faces as ContactPoints (`PCB_Pad_NNN`).
+2. **Move / Rotate PCB** — adjust X / Y / Z position and Z-rotation after import; the PCB and all its pad ContactPoints move as a unit.
+3. Wire-bond from die pads to PCB pads exactly as you would to leadframe housing pads — the ContactPoint Browser lists PCB pads in a dedicated **PCB** group.
+
+Pad detection heuristics: horizontal face, area between 0.01 mm² and 150 mm², Z-position in the top 4 % of the board's Z extent.
 
 ---
 
@@ -173,13 +211,32 @@ DI-PASSIONATE-FreeCAD/
 ├── Get_Path.py                 # Path helpers (icons, HTML resources)
 ├── core/
 │   ├── Core_Functionality.py   # GDS parsing, shape building, layer styling, auto PIN detection
+│   ├── lod_import.py           # LOD layer categorisation + import-parameter helpers
 │   ├── leadframe.py            # Leadframe solid geometry builder
 │   ├── housing.py              # Housing solid geometry builder
-│   └── Color.py                # Colour utilities
+│   ├── Color.py                # Colour utilities
+│   ├── gds_io/
+│   │   ├── cache.py            # Disk-cache helpers (cache key, load/save BREP cache)
+│   │   ├── inspect.py          # Cheap GDS inspection (layer list, polygon counts, scale)
+│   │   └── extract.py          # Shim → Core_Functionality load_gds / PIN import helpers
+│   ├── tech/
+│   │   ├── parsers.py          # parse_lyp, parse_map, parse_stackup_xml
+│   │   ├── stackup.py          # Stack rank, build_stack_mm, build_stack_mm_from_xml
+│   │   └── layer_info.py       # is_bondable, identify_contact_layers, style_for_material
+│   └── geometry/
+│       ├── transform.py        # transform_point, vec_transform, arr_to_tuples
+│       ├── polygon.py          # polygon_area_mm2, simplify_poly, iter_xy
+│       └── mesh.py             # ear_clip_triangulate, polygon_to_mesh_facets
 ├── gds/
-│   ├── GDSCommand.py           # "Load GDSII" command + full import pipeline
+│   ├── GDSCommand.py           # "Load GDSII" command + LOD-aware import pipeline
 │   ├── ChipTransformCommand.py # "Move / Rotate Chip" modeless dialog
+│   ├── ShowDetailLayerPanelCommand.py  # Opens Detail Layer Control dock panel
+│   ├── ShowLayerSliderCommand.py       # Opens Layer Slider dock panel
+│   ├── TogglePerformanceModeCommand.py # Toggles Detail ↔ Wireframe viewport mode
 │   └── PropertyPanel.py        # Layer properties dock panel
+├── pcb/
+│   ├── PCBImportCommand.py     # "PCB Import" — load STEP, auto-detect pad ContactPoints
+│   └── PCBPlacementCommand.py  # "Move / Rotate PCB" — reposition PCB + its pad CPs
 ├── leadframe/
 │   ├── LeadframeCommand.py     # Leadframe Configurator + Center Leadframe commands
 │   ├── LeadframeConfigurator.py# QFN / QFP / BGA configuration dialog
@@ -194,7 +251,7 @@ DI-PASSIONATE-FreeCAD/
 │   ├── ManualWireBonding.py    # Interactive bonding session (solid swept-pipe geometry)
 │   ├── WireBumpConfigurator.py # Bump shape configurator with netlist browser
 │   ├── ContactPointTool.py     # "Define Contact Points" command
-│   ├── ContactPointPanel.py    # Contact Point Browser dock panel
+│   ├── ContactPointPanel.py    # Contact Point Browser dock panel (die / housing / PCB)
 │   ├── SetContactPointsOnFaceCommand.py  # Grid-based face contact point placement
 │   └── Wirebon_Confi_Support.py# Prerequisite checks for wire bond activation
 ├── session/
@@ -204,6 +261,8 @@ DI-PASSIONATE-FreeCAD/
 │   └── SessionMenuCommand.py   # Combined Save/Load dropdown toolbar button
 ├── ui/
 │   ├── LayerSelector.py        # Layer selection dialog (used during GDS import)
+│   ├── LODManager.py           # LOD state machine + background load workers (QThread)
+│   ├── DetailLayerPanel.py     # Detail Layer Control dock panel (LOD panel)
 │   ├── ExtendedPropertyPanel.py
 │   └── LayeronLeadframeConfigurator.py
 ├── help/
@@ -220,7 +279,11 @@ DI-PASSIONATE-FreeCAD/
 
 | File | Used by |
 |---|---|
+| `PCB_Import.svg` | PCB Import |
+| `PCB_Move.svg` | Move / Rotate PCB |
 | `Load GDS.png` | Load GDSII |
+| `Performance_Mode.svg` | Toggle Performance Mode / Detail Layer Control |
+| `Layer_Slider.svg` | Layer Slider |
 | `Leadframe_Library.svg` | Leadframe Library |
 | `Chip_Transform.svg` | Move / Rotate Chip |
 | `Set_Contact_Points.svg` | Set Contact Points on Face |
@@ -250,7 +313,7 @@ See **[INSTALL.md](INSTALL.md)** for the full step-by-step guide.
 git clone <repository-url> "%APPDATA%/FreeCAD/Mod/DI-PASSIONATE-FreeCAD"
 
 # Install the gdstk dependency into FreeCAD's Python
-"C:/Program Files/FreeCAD 1.0/bin/python.exe" -m pip install gdstk
+"C:/Program Files/FreeCAD 1.1/bin/python.exe" -m pip install gdstk
 ```
 
 Restart FreeCAD — the **Chip-Packaging Workbench** will appear in the workbench selector.
