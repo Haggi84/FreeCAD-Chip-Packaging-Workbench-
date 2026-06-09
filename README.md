@@ -15,6 +15,8 @@ This Python AddIn for [FreeCAD](https://www.freecad.org/downloads.php) provides 
 
 > For detailed setup instructions see **[INSTALL.md](INSTALL.md)**.
 
+**This project is still under progress and not completely stable yet!**
+
 ---
 
 ## Features
