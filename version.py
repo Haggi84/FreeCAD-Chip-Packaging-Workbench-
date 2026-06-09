@@ -8,7 +8,7 @@ Follows Semantic Versioning (https://semver.org/):
 """
 
 MAJOR = 0
-MINOR = 4
+MINOR = 5
 PATCH = 0
 
 VERSION = (MAJOR, MINOR, PATCH)
