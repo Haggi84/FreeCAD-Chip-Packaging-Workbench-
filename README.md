@@ -4,10 +4,14 @@ see [LICENSE](LICENSE) for details.
 
 # FreeCAD-Chip-Packaging Workbench (DI-PASSIONATE)
 
-![Version](https://img.shields.io/badge/version-0.5.0-green?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.6.0-green?style=flat-square)
 ![FreeCAD](https://img.shields.io/badge/FreeCAD-1.1-blue?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.11-yellow?style=flat-square)
 ![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-informational?style=flat-square)
+![Semiconductor](https://img.shields.io/badge/semiconductor-orange?style=flat-square)
+![EDA](https://img.shields.io/badge/eda-yellow?style=flat-square)
+![Wirebonding](https://img.shields.io/badge/wirebonding-blue?style=flat-square)
+![GDSII](https://img.shields.io/badge/GDSII-green?style=flat-square)
 
 **A FreeCAD workbench for chip-packaging workflows, developed as part of the BMBF project DI-PASSIONATE.**
 
