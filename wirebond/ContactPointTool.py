@@ -29,6 +29,21 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from Get_Path import get_icon
 
 
+def _add_to_contact_points_group(doc, obj):
+    """Add *obj* to the document-level ContactPoints group, creating it if absent."""
+    try:
+        grp = next(
+            (o for o in doc.Objects if o.Name == "ContactPoints"),
+            None,
+        )
+        if grp is None:
+            grp = doc.addObject("App::DocumentObjectGroup", "ContactPoints")
+            grp.Label = "ContactPoints"
+        grp.addObject(obj)
+    except Exception:
+        pass
+
+
 # ── snap-point helpers ─────────────────────────────────────────────────────────
 
 def _top_face_center(shape: Part.Shape) -> Base.Vector:
@@ -143,6 +158,7 @@ def define_contact_points() -> List[str]:
                 sub_names = sel.SubElementNames or []
                 if idx < len(sub_names):
                     marker.Label = f"{obj.Label}:{sub_names[idx]}"
+                _add_to_contact_points_group(doc, marker)
                 created.append(marker.Name)
         else:
             # Whole-object selection — snap to top face centre
@@ -151,6 +167,7 @@ def define_contact_points() -> List[str]:
                 doc, obj.Name, pt, _next_marker_index(doc)
             )
             marker.Label = f"CP_{obj.Label}"
+            _add_to_contact_points_group(doc, marker)
             created.append(marker.Name)
 
     if created:

@@ -563,6 +563,15 @@ class WireBumpConfiguratorDialog(QtWidgets.QDialog):
 
         doc.openTransaction("Place Wire Bumps")
         try:
+            # Get or create the WireBumps group
+            grp = next(
+                (o for o in doc.Objects if o.Name == "WireBumps"),
+                None,
+            )
+            if grp is None:
+                grp = doc.addObject("App::DocumentObjectGroup", "WireBumps")
+                grp.Label = "WireBumps"
+
             for row in selected_rows:
                 if row >= len(self._wire_objects):
                     continue
@@ -580,6 +589,7 @@ class WireBumpConfiguratorDialog(QtWidgets.QDialog):
                     idx  = _next_bump_index(doc)
                     bump = _place_bump(doc, pos, shape, params, idx)
                     if bump is not None:
+                        grp.addObject(bump)
                         placed += 1
 
             doc.commitTransaction()

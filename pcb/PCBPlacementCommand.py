@@ -83,7 +83,7 @@ class PCBPlacementCommand:
         if doc is None:
             return
 
-        # Find PCB object
+        # Find the PCB root (marked at import time)
         pcb = next(
             (o for o in doc.Objects if getattr(o, "IsPCBBoard", False)),
             None
@@ -100,34 +100,50 @@ class PCBPlacementCommand:
         if not dlg.exec_():
             return
 
-        new_pl  = dlg.placement
-        old_pl  = pcb.Placement
-        # Relative transformation: delta = new * old^-1
-        delta   = new_pl.multiply(old_pl.inverse())
+        new_pl = dlg.placement
+        old_pl = pcb.Placement
+        # Relative transformation applied to all body objects and ContactPoints
+        delta  = new_pl.multiply(old_pl.inverse())
 
         try:
             doc.openTransaction("Move PCB")
         except Exception:
             pass
 
-        # Move PCB
+        # Move the PCB root to the new absolute placement
         pcb.Placement = new_pl
 
-        # Move all PCB-Pad ContactPoints along with it
+        # For flat imports (no App::Part hierarchy) additional root-level body
+        # objects were recorded at import time — apply the same delta to each.
+        body_names = {
+            n.strip()
+            for n in getattr(pcb, "PCBBodyObjects", "").split(",")
+            if n.strip() and n.strip() != pcb.Name
+        }
+        for obj in doc.Objects:
+            if obj.Name not in body_names:
+                continue
+            try:
+                obj.Placement = delta.multiply(obj.Placement)
+            except Exception as e:
+                FreeCAD.Console.PrintWarning(
+                    f"[PCB] Could not move body object {obj.Name}: {e}\n"
+                )
+
+        # Move all PCB pad ContactPoints by the same delta
         for obj in doc.Objects:
             src = getattr(obj, "SourceObject", "")
-            if not src.startswith("PCB_") and not src == pcb.Name:
+            if not src.startswith("PCB_") and src != pcb.Name:
                 continue
             if not getattr(obj, "IsContactPoint", False):
                 continue
             try:
-                old_cp  = getattr(obj, "ContactPoint", obj.Placement.Base)
-                new_cp  = delta.multVec(old_cp)
+                old_cp       = getattr(obj, "ContactPoint", obj.Placement.Base)
+                new_cp       = delta.multVec(old_cp)
                 obj.ContactPoint = new_cp
                 obj.Placement    = Base.Placement(new_cp, Base.Rotation())
-                # Reposition shape
                 if hasattr(obj, "Shape") and obj.Shape:
-                    obj.Shape = obj.Shape.copy()
+                    obj.Shape           = obj.Shape.copy()
                     obj.Shape.Placement = obj.Placement
             except Exception as e:
                 FreeCAD.Console.PrintWarning(

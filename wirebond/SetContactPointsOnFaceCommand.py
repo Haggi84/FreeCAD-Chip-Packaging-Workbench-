@@ -28,6 +28,21 @@ from Get_Path import get_icon
 # ── palette ────────────────────────────────────────────────────────────────────
 
 _COLOR_CANDIDATE = (0.55, 0.55, 0.55)   # grey  — candidate
+
+
+def _add_to_contact_points_group(doc, obj):
+    """Add *obj* to the document-level ContactPoints group, creating it if absent."""
+    try:
+        grp = next(
+            (o for o in doc.Objects if o.Name == "ContactPoints"),
+            None,
+        )
+        if grp is None:
+            grp = doc.addObject("App::DocumentObjectGroup", "ContactPoints")
+            grp.Label = "ContactPoints"
+        grp.addObject(obj)
+    except Exception:
+        pass
 _COLOR_SELECTED  = (1.00, 1.00, 0.00)   # yellow — chosen housing/package contact point
 _POINT_SIZE      = 10
 
@@ -442,6 +457,7 @@ class _GridContactPanel:
                         m = _create_gds_marker(doc, src, pt, _next_gds_index(doc))
                     else:
                         m = _create_housing_marker(doc, src, pt, _next_housing_index(doc))
+                    _add_to_contact_points_group(doc, m)
                     placed.append(m.Name)
                 except Exception as exc:
                     FreeCAD.Console.PrintWarning(
