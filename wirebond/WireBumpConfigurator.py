@@ -132,8 +132,75 @@ def _build_bump_shape(shape_name: str, params: dict) -> Part.Shape:
     return Part.makeSphere(0.03)
 
 
+def _keep_largest_solid(shape: Part.Shape) -> Part.Shape:
+    """Return the solid with the greatest volume from a (possibly compound) shape."""
+    solids = shape.Solids
+    if not solids:
+        return shape
+    if len(solids) == 1:
+        return solids[0]
+    return max(solids, key=lambda s: s.Volume)
+
+
+def _trim_bump_at_pad(shape: Part.Shape, cp_obj, doc) -> Part.Shape:
+    """
+    Cut off the portion of *shape* that intersects the pad it sits on.
+
+    Same two-stage strategy as wire trimming in ManualWireBonding:
+    1. Exact boolean cut against the closest sub-solid of the source pad.
+    2. Inflated bounding-box cutter as fallback when OCCT rejects
+       coplanar-face boolean operations.
+    Only the largest resulting solid is kept; any offcut is discarded.
+    """
+    src_name = getattr(cp_obj, "SourceObject", None)
+    if not src_name:
+        return shape
+    src_obj = doc.getObject(src_name)
+    if src_obj is None or not hasattr(src_obj, "Shape") or not src_obj.Shape.isValid():
+        return shape
+
+    cp_pos = FreeCAD.Vector(getattr(cp_obj, "ContactPoint", FreeCAD.Vector()))
+
+    solids = src_obj.Shape.Solids
+    if solids:
+        def _dist(s):
+            c = s.BoundBox.Center
+            return ((c.x - cp_pos.x)**2 + (c.y - cp_pos.y)**2 + (c.z - cp_pos.z)**2) ** 0.5
+        cutter = min(solids, key=_dist)
+    else:
+        cutter = src_obj.Shape
+
+    # Stage 1 — exact cut
+    try:
+        result = shape.cut(cutter)
+        if result.isValid() and not result.isNull():
+            return _keep_largest_solid(result)
+    except Exception:
+        pass
+
+    # Stage 2 — inflated bbox cutter (avoids coplanar-face degeneracy)
+    try:
+        bb  = cutter.BoundBox
+        m   = 0.05
+        box = Part.makeBox(
+            bb.XLength + 2 * m,
+            bb.YLength + 2 * m,
+            bb.ZLength + 2 * m,
+            FreeCAD.Vector(bb.XMin - m, bb.YMin - m, bb.ZMin - m),
+        )
+        result = shape.cut(box)
+        if result.isValid() and not result.isNull():
+            return _keep_largest_solid(result)
+    except Exception as e:
+        FreeCAD.Console.PrintWarning(
+            f"WireBump: trim at pad '{cp_obj.Name}' failed: {e}\n"
+        )
+
+    return shape
+
+
 def _place_bump(doc, position: FreeCAD.Vector, shape_name: str,
-                params: dict, index: int):
+                params: dict, index: int, cp_obj=None):
     """Create a bump solid in *doc* at *position* and return it."""
     try:
         geom = _build_bump_shape(shape_name, params)
@@ -141,6 +208,9 @@ def _place_bump(doc, position: FreeCAD.Vector, shape_name: str,
     except Exception as exc:
         FreeCAD.Console.PrintWarning(f"WireBump: geometry failed: {exc}\n")
         return None
+
+    if cp_obj is not None:
+        geom = _trim_bump_at_pad(geom, cp_obj, doc)
 
     safe_name = shape_name.replace(" ", "")[:3]
     obj = doc.addObject("Part::Feature", f"WireBump_{safe_name}_{index:03d}")
@@ -577,8 +647,10 @@ class WireBumpConfiguratorDialog(QtWidgets.QDialog):
                     continue
                 wire_obj = self._wire_objects[row]
 
-                for pt_attr in ("StartPoint", "EndPoint"):
-                    raw = getattr(wire_obj, pt_attr, None)
+                for pt_attr, cp_attr in (("StartPoint", "StartCP"),
+                                          ("EndPoint",   "EndCP")):
+                    raw     = getattr(wire_obj, pt_attr, None)
+                    cp_name = getattr(wire_obj, cp_attr, None)
                     if raw is None:
                         continue
                     try:
@@ -586,8 +658,9 @@ class WireBumpConfiguratorDialog(QtWidgets.QDialog):
                     except Exception:
                         continue
 
-                    idx  = _next_bump_index(doc)
-                    bump = _place_bump(doc, pos, shape, params, idx)
+                    cp_obj = doc.getObject(cp_name) if cp_name else None
+                    idx    = _next_bump_index(doc)
+                    bump   = _place_bump(doc, pos, shape, params, idx, cp_obj)
                     if bump is not None:
                         grp.addObject(bump)
                         placed += 1

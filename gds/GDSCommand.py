@@ -588,10 +588,8 @@ def load_gds_with_params(gds_path, lyp_path, map_path, selected_layers, options)
     _start_lod_manager(doc, gds_path, aux)
 
     FreeCADGui.setActiveDocument(doc.Name)
-    FreeCADGui.updateGui()
-    v = FreeCADGui.activeDocument().activeView()
-    if v:
-        v.viewIsometric()
-        v.fitAll()
+
+    # Default to triangulated (fast-mesh) view, same as the interactive import.
+    _apply_performance_mode(doc, pending_colors)
 
     return doc, layer_objects, filtered, unique_colors, gds_path, lyp_path, options, map_path

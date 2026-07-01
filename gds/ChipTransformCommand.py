@@ -166,51 +166,135 @@ def _restore_placements(objects, saved):
 
 # ── Align helpers ──────────────────────────────────────────────────────────────
 
-def _chip_zmin(objects):
-    """Return the minimum Z coordinate (bottom face) of the chip group."""
-    zmin = float("inf")
+def _world_placement_of(obj):
+    """Accumulated world Placement for *obj*, walking up the InList chain."""
+    pl = obj.Placement.copy()
+    current = obj
+    while current.InList:
+        parent = current.InList[0]
+        if hasattr(parent, "Placement"):
+            pl = parent.Placement.multiply(pl)
+        current = parent
+    return pl
+
+
+def _world_bbox_of_objects(objects):
+    """
+    Return a world-space FreeCAD.BoundBox by applying each object's full
+    accumulated Placement (including parent containers) to its local bbox corners.
+    Returns None when no valid geometry is found.
+    """
+    xmin = ymin = zmin = float("inf")
+    xmax = ymax = zmax = float("-inf")
+    found = False
     for obj in objects:
         try:
-            zmin = min(zmin, obj.Shape.BoundBox.ZMin)
+            bb = obj.Shape.BoundBox
+            if not bb.isValid():
+                continue
+            mat = _world_placement_of(obj).toMatrix()
+            for lx in (bb.XMin, bb.XMax):
+                for ly in (bb.YMin, bb.YMax):
+                    for lz in (bb.ZMin, bb.ZMax):
+                        wp = mat.multVec(FreeCAD.Vector(lx, ly, lz))
+                        if wp.x < xmin: xmin = wp.x
+                        if wp.x > xmax: xmax = wp.x
+                        if wp.y < ymin: ymin = wp.y
+                        if wp.y > ymax: ymax = wp.y
+                        if wp.z < zmin: zmin = wp.z
+                        if wp.z > zmax: zmax = wp.z
+            found = True
         except Exception:
-            pass
-    return zmin if zmin != float("inf") else 0.0
+            continue
+    if not found:
+        return None
+    return FreeCAD.BoundBox(xmin, ymin, zmin, xmax, ymax, zmax)
+
+
+def _chip_zmin(objects):
+    """Return the world-space minimum Z coordinate (bottom face) of the chip group."""
+    bb = _world_bbox_of_objects(objects)
+    return bb.ZMin if bb is not None else 0.0
 
 
 def _chip_xy_center(objects):
-    """Return the XY bounding-box centre of the chip group as (cx, cy)."""
-    xmin = ymin = float("inf")
-    xmax = ymax = float("-inf")
-    for obj in objects:
-        try:
-            b = obj.Shape.BoundBox
-            xmin = min(xmin, b.XMin); xmax = max(xmax, b.XMax)
-            ymin = min(ymin, b.YMin); ymax = max(ymax, b.YMax)
-        except Exception:
-            pass
-    if xmin == float("inf"):
+    """Return the world-space XY bounding-box centre of the chip group as (cx, cy)."""
+    bb = _world_bbox_of_objects(objects)
+    if bb is None:
         return 0.0, 0.0
-    return (xmin + xmax) / 2.0, (ymin + ymax) / 2.0
+    return (bb.XMin + bb.XMax) / 2.0, (bb.YMin + bb.YMax) / 2.0
 
 
 def _target_z_top(obj):
-    """Return the highest Z coordinate (top surface) of a target object."""
+    """Return the world-space highest Z coordinate (top surface) of a target object."""
+    bb = _world_bbox_of_objects([obj])
+    if bb is not None:
+        return bb.ZMax
+    return 0.0
+
+
+def _target_z_snap(sel_ex):
+    """Return the world-space Z to snap the chip bottom to.
+
+    Priority order:
+      1. PickedPoints[0].z — the exact world Z of the 3-D click position.
+         Already in world space, unaffected by Placement chain issues.
+         This is the same source used by _target_xy_pick for XY centering.
+      2. Sub-element CenterOfMass transformed to world space (fallback when
+         no click point is stored, e.g. selection loaded from Python).
+      3. Whole-object world ZMax (last resort).
+    """
+    # Priority 1: world-space click position Z (reliable regardless of
+    # Placement chain complexity or face coordinate system)
     try:
-        return obj.Shape.BoundBox.ZMax
+        pts = sel_ex.PickedPoints
+        if pts:
+            FreeCAD.Console.PrintMessage(
+                f"[ChipAlign] _target_z_snap: PickedPoint Z={pts[0].z:.4f}\n"
+            )
+            return pts[0].z
     except Exception:
-        return 0.0
+        pass
+
+    # Priority 2: face/edge CenterOfMass in world space
+    subs = list(sel_ex.SubElementNames or [])
+    try:
+        world_mat = _world_placement_of(sel_ex.Object).toMatrix()
+        for sub_name in subs:
+            sub = sel_ex.Object.Shape.getElement(sub_name)
+            if hasattr(sub, "CenterOfMass"):
+                wp = world_mat.multVec(sub.CenterOfMass)
+                FreeCAD.Console.PrintMessage(
+                    f"[ChipAlign] _target_z_snap: {sub_name} CenterOfMass world Z={wp.z:.4f}\n"
+                )
+                return wp.z
+            if hasattr(sub, "Vertexes") and sub.Vertexes:
+                z_max = max(world_mat.multVec(v.Point).z for v in sub.Vertexes)
+                FreeCAD.Console.PrintMessage(
+                    f"[ChipAlign] _target_z_snap: {sub_name} vertex ZMax={z_max:.4f}\n"
+                )
+                return z_max
+    except Exception as exc:
+        FreeCAD.Console.PrintWarning(f"[ChipAlign] _target_z_snap sub-element failed: {exc}\n")
+
+    # Priority 3: whole object world ZMax
+    z = _target_z_top(sel_ex.Object)
+    FreeCAD.Console.PrintMessage(
+        f"[ChipAlign] _target_z_snap: no sub-element ({subs}), using object ZMax={z:.4f}\n"
+    )
+    return z
 
 
 def _target_xy_pick(sel_ex):
     """
-    Return (x, y) of the picked point from a FreeCADGui SelectionObject.
+    Return world-space (x, y) of the picked point from a FreeCADGui SelectionObject.
 
     Priority:
-      1. Sub-element vertex position (most precise — user clicked a vertex)
-      2. Sub-element face centre  (user clicked a face)
-      3. Object bounding-box XY centre (fallback)
+      1. PickedPoints — already in world space (stored by FreeCAD's 3D picker)
+      2. Sub-element vertex / face centre, transformed to world space via Placement
+      3. Object world bounding-box XY centre (fallback)
     """
-    # Try the picked point stored directly on the selection
+    # PickedPoints are already in world coordinates
     try:
         pt = sel_ex.PickedPoints
         if pt:
@@ -218,24 +302,25 @@ def _target_xy_pick(sel_ex):
     except Exception:
         pass
 
-    # Try sub-element geometry centre
+    # Sub-element geometry centre — local coords, must apply world placement
     try:
+        world_mat = _world_placement_of(sel_ex.Object).toMatrix()
         for sub_name in (sel_ex.SubElementNames or []):
             sub = sel_ex.Object.Shape.getElement(sub_name)
             if hasattr(sub, "Point"):           # Vertex
-                return sub.Point.x, sub.Point.y
+                wp = world_mat.multVec(sub.Point)
+                return wp.x, wp.y
             if hasattr(sub, "CenterOfMass"):    # Face / Edge
-                c = sub.CenterOfMass
-                return c.x, c.y
+                wp = world_mat.multVec(sub.CenterOfMass)
+                return wp.x, wp.y
     except Exception:
         pass
 
-    # Fallback: object BBox centre
-    try:
-        b = sel_ex.Object.Shape.BoundBox
-        return (b.XMin + b.XMax) / 2.0, (b.YMin + b.YMax) / 2.0
-    except Exception:
-        return 0.0, 0.0
+    # Fallback: world BBox centre
+    bb = _world_bbox_of_objects([sel_ex.Object])
+    if bb is not None:
+        return (bb.XMin + bb.XMax) / 2.0, (bb.YMin + bb.YMax) / 2.0
+    return 0.0, 0.0
 
 
 # ── Dialog ─────────────────────────────────────────────────────────────────────
@@ -573,9 +658,12 @@ class ChipTransformDialog(QtWidgets.QDialog):
         dx = dy = dz = 0.0
 
         if snap_z:
-            target_z = _target_z_top(self._sel_object)
+            target_z = _target_z_snap(self._sel_ex)
             chip_z   = _chip_zmin(objs)
             dz = target_z - chip_z
+            FreeCAD.Console.PrintMessage(
+                f"[ChipAlign] Snap Z: face_z={target_z:.4f}  chip_zmin={chip_z:.4f}  dz={dz:.4f}\n"
+            )
 
         if center_xy:
             tx, ty = _target_xy_pick(self._sel_ex)

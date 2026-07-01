@@ -21,25 +21,9 @@ DEFAULT_LIBRARY_URL = "https://www.mirrorsemi.com/CAD.html"
 ACCEPTED_DOWNLOAD_EXTS = (
     ".stp",
     ".step",
-    ".igs",
-    ".iges",
-    ".dxf",
-    ".dwg",
-    ".fcstd",
-    ".zip",
-    ".rar",
-    ".7z",
 )
 
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp")
-
-FORMAT_GROUPS = {
-    "All formats": None,
-    "3D models (STEP / IGES)": (".stp", ".step", ".igs", ".iges"),
-    "2D drawings (DXF / DWG)": (".dxf", ".dwg"),
-    "FreeCAD files": (".fcstd",),
-    "Archives (ZIP / RAR / 7Z)": (".zip", ".rar", ".7z"),
-}
 
 
 class LeadframeEntry:
@@ -331,6 +315,34 @@ def _world_placement_of(obj):
     return pl
 
 
+# Name prefixes that identify GDS die objects (mirrors ChipTransformCommand._GDS_PREFIXES).
+# Used to compute the die XY center when aligning an imported package, so that large
+# non-die objects in the GDS document (PCB, substrate, frames) don't skew the target.
+_GDS_DIE_PREFIXES = (
+    "Layer_", "IC_Body_Solid", "GDS_Pin_", "GDS_PINs_",
+    "ContactPoint_", "contact_point_", "BondWire_", "WireBump_", "GridPt",
+)
+
+
+def _gds_die_objects(doc):
+    """Return GDS die objects from *doc*, falling back to all shapes if none found."""
+    all_shapes = [
+        o for o in doc.Objects
+        if hasattr(o, "Shape") and o.Shape and not o.Shape.isNull()
+    ]
+    die_objs = [o for o in all_shapes if any(o.Name.startswith(p) for p in _GDS_DIE_PREFIXES)]
+    # Also include objects inside a "Substrate_Frames" group
+    frames_grp = next(
+        (o for o in doc.Objects if o.Name == "Substrate_Frames" or o.Label == "Substrate Frames"),
+        None,
+    )
+    if frames_grp is not None:
+        for fo in getattr(frames_grp, "Group", []):
+            if hasattr(fo, "Shape") and fo.Shape and not fo.Shape.isNull() and fo not in die_objs:
+                die_objs.append(fo)
+    return die_objs if die_objs else all_shapes
+
+
 def _rotate_pkg_doc(doc, rotation: "FreeCAD.Rotation"):
     """
     Apply *rotation* to the package model, pivoting around the world-space
@@ -472,6 +484,9 @@ class _PackageOrientationPanel:
 
         # current picking mode
         self._pick_mode = self._MODE_TOP
+
+        # guard against multiple QTimer callbacks firing accept() more than once
+        self._accepted = False
 
         self._observer = _FaceSelectionObserver(self._on_face_selected)
         FreeCADGui.Selection.addObserver(self._observer)
@@ -698,6 +713,9 @@ class _PackageOrientationPanel:
 
     def _auto_accept(self):
         """Called automatically after the die-attach face is picked; merges and closes."""
+        if self._accepted:
+            return
+        self._accepted = True
         self.accept()
         FreeCADGui.Control.closeDialog()
 
@@ -767,6 +785,7 @@ class _PackageOrientationPanel:
     # ── ok / cancel ───────────────────────────────────────────────────────────
 
     def accept(self):
+        self._accepted = True
         self._cleanup()
         if self._radio_merge.isChecked() and self._gds_doc_name:
             self._merge_into_gds()
@@ -810,12 +829,9 @@ class _PackageOrientationPanel:
             )
             return
 
-        # XY target = centre of existing GDS geometry (world-space, respects Placement).
-        gds_shape_objs = [
-            o for o in gds_doc.Objects
-            if hasattr(o, "Shape") and o.Shape and not o.Shape.isNull()
-        ]
-        gds_bb = _world_bbox_of_objects(gds_shape_objs)
+        # XY/Z target = world-space bbox of the GDS die only (excludes PCB, substrate,
+        # and other non-die objects that would skew the center calculation).
+        gds_bb = _world_bbox_of_objects(_gds_die_objects(gds_doc))
         if gds_bb:
             target_cx = (gds_bb.XMin + gds_bb.XMax) / 2.0
             target_cy = (gds_bb.YMin + gds_bb.YMax) / 2.0
@@ -1134,14 +1150,8 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
         self.search_edit.setPlaceholderText("Search by name…")
         self.search_edit.textChanged.connect(self._apply_filter)
 
-        self.format_combo = QtWidgets.QComboBox()
-        for label in FORMAT_GROUPS:
-            self.format_combo.addItem(label)
-        self.format_combo.currentIndexChanged.connect(self._apply_filter)
-
         filter_layout = QtWidgets.QHBoxLayout()
-        filter_layout.addWidget(QtWidgets.QLabel("Filter:"))
-        filter_layout.addWidget(self.format_combo)
+        filter_layout.addWidget(QtWidgets.QLabel("Search:"))
         filter_layout.addWidget(self.search_edit)
 
         # --- list ---
@@ -1236,14 +1246,12 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
 
     def _apply_filter(self):
         text = self.search_edit.text().lower()
-        label = self.format_combo.currentText()
-        allowed_exts = FORMAT_GROUPS.get(label)
 
         self.list_widget.clear()
         self.entries = []
         for entry in self._all_entries:
             ext = os.path.splitext(entry.name.lower())[1]
-            if allowed_exts is not None and ext not in allowed_exts:
+            if ext not in ACCEPTED_DOWNLOAD_EXTS:
                 continue
             if text and text not in entry.name.lower():
                 continue

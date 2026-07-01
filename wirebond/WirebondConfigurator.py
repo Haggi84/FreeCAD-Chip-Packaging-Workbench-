@@ -59,6 +59,19 @@ class WirebondConfigurator(QtWidgets.QDialog):
         layout.addWidget(QtWidgets.QLabel("Bond Finger Margin:"))
         layout.addWidget(self.bond_finger_margin)
 
+        # Bond type
+        self.bond_type = QtWidgets.QComboBox()
+        self.bond_type.addItems(["Ball-Wedge", "Wedge-Wedge"])
+        layout.addWidget(QtWidgets.QLabel("Bond Type:"))
+        layout.addWidget(self.bond_type)
+
+        # Wedge end style: cut the tube flat on the pad (no extra geometry)
+        # vs. fuse a separate wedge/stitch solid onto the tube.
+        self.wedge_style = QtWidgets.QComboBox()
+        self.wedge_style.addItems(["Cut (flatten wire on pad)", "Solid (fused wedge block)"])
+        layout.addWidget(QtWidgets.QLabel("Wedge End Style:"))
+        layout.addWidget(self.wedge_style)
+
         # Buttons
         button_box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
         button_box.accepted.connect(self.accept)
@@ -79,10 +92,13 @@ class WirebondConfigurator(QtWidgets.QDialog):
     def get_config(self):
         """Return wire bonding configuration."""
         return {
-            "loop_height": self.loop_height.value(),
-            "diameter": self.diameter.value(),
-            "min_wire_spacing": self.min_wire_spacing.value(),
-            "min_wire_length": self.min_wire_length.value(),
-            "max_wire_length": self.max_wire_length.value(),
-            "bond_finger_margin": self.bond_finger_margin.value()
+            "loop_height":       self.loop_height.value(),
+            "diameter":          self.diameter.value(),
+            "min_wire_spacing":  self.min_wire_spacing.value(),
+            "min_wire_length":   self.min_wire_length.value(),
+            "max_wire_length":   self.max_wire_length.value(),
+            "bond_finger_margin":self.bond_finger_margin.value(),
+            "bond_type":         self.bond_type.currentText(),
+            "wedge_style":       ("cut" if self.wedge_style.currentIndex() == 0
+                                   else "solid"),
         }
