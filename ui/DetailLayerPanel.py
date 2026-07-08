@@ -43,6 +43,7 @@ import FreeCADGui
 import Part
 from FreeCAD import Base
 from compat import QtWidgets, QtCore, QtGui
+from core.via_clustering import cluster_boxes, DEFAULT_CLUSTER_GAP_MM
 
 try:
     from ui.LODManager import LODState
@@ -96,6 +97,13 @@ def _frame_worker(profile_brep: str, profile_z: float,
         return frame.exportBrepToString()
     except Exception:
         return None
+
+
+def _is_via_layer(obj) -> bool:
+    """True for GDS via/contact-cut layers (same heuristic as ToggleViaDetailCommand)."""
+    name  = (getattr(obj, "Name",  "") or "").lower()
+    label = (getattr(obj, "Label", "") or "").lower()
+    return "via" in name or "via" in label
 
 
 # ── per-session simplification store ─────────────────────────────────────────
@@ -550,6 +558,7 @@ class DetailLayerPanel(QtWidgets.QDockWidget):
         self._cursor_idx      = -1
         self._frame_template  = None
         self._frame_objs: dict = {}
+        self._frame_simplify_vias = True   # default: fast block cutout for VIA layers
         self._lod_manager     = None   # set by _connect_lod_manager()
 
         self._build_ui()
@@ -632,6 +641,48 @@ class DetailLayerPanel(QtWidgets.QDockWidget):
         ftb.addWidget(btn_frames_off)
 
         root_l.addLayout(ftb)
+
+        # ── frame VIA fill option ─────────────────────────────────────────────
+        # The encapsulant/substrate frame is built by subtracting a union of
+        # all chip layer shapes.  VIA layers are dense arrays of many tiny cuts
+        # and are by far the most expensive part of that union+cut — this
+        # checkbox lets the user swap them for a single bounding block
+        # (fast, approximate cutout) instead of the full detailed via geometry
+        # (slow, exact cutout) when (re)building the frame.
+        ftb2 = QtWidgets.QHBoxLayout()
+        self._chk_simplify_vias = QtWidgets.QCheckBox("Simplify VIAs in frame fill")
+        self._chk_simplify_vias.setChecked(self._frame_simplify_vias)
+        self._chk_simplify_vias.setToolTip(
+            "Checked  → VIA layers are replaced by a simple bounding block\n"
+            "           when cutting the chip footprint out of the frame\n"
+            "           (fast — recommended for large dies).\n"
+            "Unchecked → VIA layers keep their full detailed geometry in the\n"
+            "           frame cutout (slow, but exact around every via).\n"
+            "\n"
+            "Takes effect the next time 'Set Frame' rebuilds the frame."
+        )
+        self._chk_simplify_vias.toggled.connect(self._on_simplify_vias_toggled)
+        ftb2.addWidget(self._chk_simplify_vias)
+
+        ftb2.addWidget(QtWidgets.QLabel("cluster gap:"))
+        self._via_cluster_gap = QtWidgets.QDoubleSpinBox()
+        self._via_cluster_gap.setRange(0.1, 1000.0)
+        self._via_cluster_gap.setValue(DEFAULT_CLUSTER_GAP_MM * 1000.0)  # mm → µm
+        self._via_cluster_gap.setDecimals(2)
+        self._via_cluster_gap.setSuffix(" µm")
+        self._via_cluster_gap.setFixedWidth(90)
+        self._via_cluster_gap.setToolTip(
+            "Via solids closer than this distance are merged into one block;\n"
+            "solids farther apart stay as separate blocks.\n"
+            "Increase if separate pads still merge into one giant block;\n"
+            "decrease if vias within one pad still show as separate blocks.\n"
+            "Takes effect the next time 'Set Frame' rebuilds the frame."
+        )
+        self._via_cluster_gap.valueChanged.connect(self._on_cluster_gap_changed)
+        ftb2.addWidget(self._via_cluster_gap)
+
+        ftb2.addStretch()
+        root_l.addLayout(ftb2)
 
         # ── mode selector ─────────────────────────────────────────────────────
         mode_box = QtWidgets.QGroupBox("Mode")
@@ -1161,6 +1212,15 @@ class DetailLayerPanel(QtWidgets.QDockWidget):
 
     # ── frame extrusions ─────────────────────────────────────────────────────
 
+    def _on_simplify_vias_toggled(self, checked: bool):
+        self._frame_simplify_vias = checked
+        if self._frame_template is not None:
+            self._build_frames()
+
+    def _on_cluster_gap_changed(self, _value: float):
+        if self._frame_simplify_vias and self._frame_template is not None:
+            self._build_frames()
+
     def _pick_frame_template(self):
         """Read current FreeCAD selection and use that object as the frame profile."""
         sel = FreeCADGui.Selection.getSelection()
@@ -1230,14 +1290,35 @@ class DetailLayerPanel(QtWidgets.QDockWidget):
         profile_brep = profile.exportBrepToString()
 
         # ── Chip union ────────────────────────────────────────────────────────
-        # Fuse all loaded layer shapes into one solid to subtract from frame
+        # Fuse all loaded layer shapes into one solid to subtract from frame.
+        #
+        # VIA layers are dense arrays of many tiny cuts — by far the most
+        # expensive contributors to this union+cut.  When "Simplify VIAs in
+        # frame fill" is checked, each via layer's detailed shape is replaced
+        # by one bounding block per proximity CLUSTER of via solids (see
+        # core.via_clustering) for this cutout only — a tightly packed via
+        # array collapses into one filled block, while physically separate
+        # arrays/pads stay separate.  The layer's own displayed geometry
+        # elsewhere is untouched.
+        gap = self._via_cluster_gap.value() / 1000.0   # µm → mm
+        via_simplified = 0
         chip_shapes = []
         for _z0, _z1, _obj, _label, _color in self._layers:
             if _obj is None:
                 continue
             _ls = getattr(_obj, "Shape", None)
-            if _ls and not _ls.isNull() and _ls.Volume > 0:
-                chip_shapes.append(_ls.copy())
+            if not _ls or _ls.isNull() or _ls.Volume <= 0:
+                continue
+            if self._frame_simplify_vias and _is_via_layer(_obj):
+                _ls = cluster_boxes(_ls, gap)
+                via_simplified += 1
+            chip_shapes.append(_ls.copy())
+
+        if via_simplified:
+            FreeCAD.Console.PrintMessage(
+                f"[FrameExtrusion] {via_simplified} via layer(s) simplified to "
+                f"blocks for the frame cutout.\n"
+            )
 
         chip_union_brep = None
         if chip_shapes:

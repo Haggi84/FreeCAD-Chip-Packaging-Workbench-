@@ -67,6 +67,7 @@ class PackageSpec:
 
     # Display
     tags:  List[str]  = field(default_factory=list)  # e.g. ["RF", "open-cavity"]
+    datasheet_url: str = ""   # direct link to a PDF datasheet, if known
 
     # ── derived ────────────────────────────────────────────────────────────
 

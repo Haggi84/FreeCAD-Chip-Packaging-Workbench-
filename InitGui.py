@@ -16,6 +16,7 @@ try:
     from gds import ChipTransformCommand
     from gds import ShowLayerSliderCommand
     from gds import TogglePerformanceModeCommand
+    from gds import ToggleViaDetailCommand
     from gds import ShowDetailLayerPanelCommand
     from leadframe import LeadframeCommand
     from leadframe import LeadframeLibraryCommand
@@ -118,6 +119,7 @@ class MyWorkbench(FreeCADGui.Workbench):
                     "PCBPlacementCommand",
                     "GDSCommand",
                     "TogglePerformanceModeCommand",
+                    "ToggleViaDetailCommand",
                     "ShowDetailLayerPanelCommand",
                     "ShowLayerSliderCommand",
                     "LeadframeLibraryCommand",

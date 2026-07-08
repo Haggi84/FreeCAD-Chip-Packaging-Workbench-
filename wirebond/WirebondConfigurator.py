@@ -72,6 +72,17 @@ class WirebondConfigurator(QtWidgets.QDialog):
         layout.addWidget(QtWidgets.QLabel("Wedge End Style:"))
         layout.addWidget(self.wedge_style)
 
+        # Wire profile: realistic multi-point BSpline loop vs. the
+        # simplified JEDEC-style trapezoid (straight rise / flat kink /
+        # vertical drop) used for quick, standardized bond-wire models.
+        self.wire_profile = QtWidgets.QComboBox()
+        self.wire_profile.addItems([
+            "Realistic (Spline Loop)",
+            "Simplified (JEDEC Trapezoid)",
+        ])
+        layout.addWidget(QtWidgets.QLabel("Wire Profile:"))
+        layout.addWidget(self.wire_profile)
+
         # Buttons
         button_box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
         button_box.accepted.connect(self.accept)
@@ -101,4 +112,6 @@ class WirebondConfigurator(QtWidgets.QDialog):
             "bond_type":         self.bond_type.currentText(),
             "wedge_style":       ("cut" if self.wedge_style.currentIndex() == 0
                                    else "solid"),
+            "wire_profile":      ("spline" if self.wire_profile.currentIndex() == 0
+                                   else "jedec"),
         }

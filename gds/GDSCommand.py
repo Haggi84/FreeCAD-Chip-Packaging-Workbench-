@@ -281,6 +281,13 @@ def _apply_performance_mode(doc, pending_colors):
         apply_performance_mode(doc)
     except Exception as e:
         FreeCAD.Console.PrintWarning(f"[GDS] Performance mode: {e}\n")
+    # VIA layers → simple outlined blocks by default (full detail on demand
+    # via the Toggle VIA Detail button).
+    try:
+        from gds.ToggleViaDetailCommand import apply_via_simplified
+        apply_via_simplified(doc)
+    except Exception as e:
+        FreeCAD.Console.PrintWarning(f"[GDS] Via simplify: {e}\n")
     _apply_colors(pending_colors)   # reapply after re-tessellation
     FreeCADGui.updateGui()
     v = FreeCADGui.activeDocument().activeView()

@@ -122,6 +122,11 @@ class PackageSelectorDialog(QtWidgets.QDialog):
 
         # ── buttons ───────────────────────────────────────────────────
         btns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Cancel)
+        self._btn_datasheet = QtWidgets.QPushButton("📄 Open Datasheet")
+        self._btn_datasheet.setEnabled(False)
+        self._btn_datasheet.setToolTip("No datasheet PDF known for this package.")
+        self._btn_datasheet.clicked.connect(self._open_datasheet)
+        btns.addButton(self._btn_datasheet, QtWidgets.QDialogButtonBox.ActionRole)
         self._btn_use = QtWidgets.QPushButton("Use this package")
         self._btn_use.setDefault(True)
         self._btn_use.setEnabled(False)
@@ -164,6 +169,7 @@ class PackageSelectorDialog(QtWidgets.QDialog):
                if any(p.tags for p in packages) else "")
         )
         self._btn_use.setEnabled(False)
+        self._btn_datasheet.setEnabled(False)
         self._lbl_detail.setText("Select a package to see details.")
 
     # ── slots ─────────────────────────────────────────────────────────
@@ -194,12 +200,18 @@ class PackageSelectorDialog(QtWidgets.QDialog):
         if not items:
             self._lbl_detail.setText("Select a package to see details.")
             self._btn_use.setEnabled(False)
+            self._btn_datasheet.setEnabled(False)
             self._selected = None
             return
 
         pkg: PackageSpec = items[0].data(QtCore.Qt.UserRole)
         self._selected = pkg
         self._btn_use.setEnabled(True)
+        self._btn_datasheet.setEnabled(bool(pkg.datasheet_url))
+        self._btn_datasheet.setToolTip(
+            pkg.datasheet_url if pkg.datasheet_url
+            else "No datasheet PDF known for this package."
+        )
 
         if pkg.family == "BGA":
             extra = (f"Ball ⌀ {pkg.bga_ball_dia_mm} mm  |  "
@@ -221,6 +233,10 @@ class PackageSelectorDialog(QtWidgets.QDialog):
     def _on_double_click(self, _index):
         if self._selected is not None:
             self.accept()
+
+    def _open_datasheet(self):
+        if self._selected is not None and self._selected.datasheet_url:
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl(self._selected.datasheet_url))
 
     # ── result ────────────────────────────────────────────────────────
 

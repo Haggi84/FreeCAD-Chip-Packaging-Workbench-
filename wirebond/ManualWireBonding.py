@@ -17,9 +17,15 @@ Session flow
 
 Wire geometry
 -------------
-Ball-Wedge: oblate-spheroid ball at die pad + BSpline-swept tube + flat
-elliptical wedge at leadframe pad.  Wedge-Wedge: flat wedge at both ends.
-All parts are fused into one solid.  Falls back to a plain tube, then a line.
+Ball-Wedge: oblate-spheroid ball at die pad + swept tube + flat elliptical
+wedge at leadframe pad.  Wedge-Wedge: flat wedge at both ends.  All parts are
+fused into one solid.  Falls back to a plain tube, then a line.
+
+Wire profile (config['wire_profile']):
+  'spline' (default) — multi-point BSpline loop, a smooth realistic arc.
+  'jedec'            — simplified JEDEC-style trapezoid: one straight rise,
+                        a short flat "kink" segment (1/8 of the span), then a
+                        straight vertical drop into the landing pad.
 """
 
 import math
@@ -41,7 +47,7 @@ from session.SessionManager import session_manager
 # and again per wire, so the FreeCAD Report view immediately reveals whether the
 # freshly edited module is the one actually running (vs. a cached / installed
 # copy, or stale .pyc in __pycache__).
-_GEOM_VERSION = "2026-07-01 wedge-flat-cut vertical-stub v7"
+_GEOM_VERSION = "2026-07-07 jedec-trapezoid-profile v8"
 FreeCAD.Console.PrintMessage(
     f"[DI-PASSIONATE wirebond] ManualWireBonding loaded — geometry {_GEOM_VERSION}\n"
     f"    file: {os.path.abspath(__file__)}\n"
@@ -252,6 +258,80 @@ def _sweep_circle_along(points, r: float) -> Part.Shape:
     return spine_wire.makePipe(profile)
 
 
+def _jedec_trapezoid_points(a_xy: Base.Vector, e_xy: Base.Vector, L: float,
+                            z_start: float, z_end: float, peak_z: float,
+                            kink_frac: float = 0.125):
+    """
+    Return the 4 key spine points of a JEDEC-style trapezoidal bond-wire
+    profile — the simplified alternative to the multi-point BSpline loop:
+
+        start ────────────────────── peak
+                                         \\  flat top, length = kink_frac · L
+                                          kink
+                                           |   vertical drop
+                                          end
+
+    One long straight rise from *start* to *peak* (at height *peak_z*), a
+    short flat segment of horizontal length ``kink_frac * L`` to *kink* (same
+    height, same XY as *end*), then a straight vertical drop into *end*.
+    ``kink_frac`` defaults to 1/8, matching the "d/8" proportion of the
+    reference JEDEC wire-bond profile diagram.
+    """
+    t_peak = max(0.0, 1.0 - kink_frac)
+    return [
+        _spine_point(a_xy, e_xy, L, 0.00,   z_start),
+        _spine_point(a_xy, e_xy, L, t_peak, peak_z),
+        _spine_point(a_xy, e_xy, L, 1.00,   peak_z),
+        _spine_point(a_xy, e_xy, L, 1.00,   z_end),
+    ]
+
+
+def _sweep_circle_along_polyline(points, r: float) -> Part.Shape:
+    """
+    Sweep a circular profile of radius *r* along a straight-segment polyline
+    through *points* — no BSpline smoothing.  Used for the simplified/JEDEC
+    wire profile, whose shape is defined by sharp corner points rather than a
+    smooth loop.  Consecutive duplicate points (zero-length segments, e.g. the
+    vertical stub inserted for a 'cut' wedge end) are merged since OCCT
+    rejects degenerate edges.
+
+    Uses a rounded-corner sweep transition so OCCT does not self-intersect at
+    the direction change — a slightly filleted kink instead of a mathematically
+    sharp corner, and far more robust than forcing a sharp join.
+    """
+    pts = [points[0]]
+    for p in points[1:]:
+        if (p - pts[-1]).Length > 1e-9:
+            pts.append(p)
+    if len(pts) < 2:
+        raise ValueError("_sweep_circle_along_polyline: fewer than 2 distinct points")
+
+    edges = [Part.LineSegment(pts[i], pts[i + 1]).toShape()
+             for i in range(len(pts) - 1)]
+    spine_wire = Part.Wire(edges)
+
+    first_edge = spine_wire.Edges[0]
+    t0 = first_edge.tangentAt(first_edge.FirstParameter).normalize()
+    circ0   = Part.makeCircle(r, pts[0], t0)
+    profile = Part.Wire([Part.Edge(circ0)])
+
+    try:
+        solid = spine_wire.makePipeShell([profile], True, False, 2)   # 2 = round corner
+        if (solid is not None and not solid.isNull()
+                and solid.isValid() and solid.Solids):
+            return solid.Solids[0] if len(solid.Solids) == 1 else solid
+    except Exception:
+        pass
+    try:
+        solid = spine_wire.makePipeShell([profile], True, False)
+        if (solid is not None and not solid.isNull()
+                and solid.isValid() and solid.Solids):
+            return solid.Solids[0] if len(solid.Solids) == 1 else solid
+    except Exception:
+        pass
+    return spine_wire.makePipe(profile)
+
+
 # ── public entry point ─────────────────────────────────────────────────────────
 
 def _cut_below_contact(shape: Part.Shape, p_end: Base.Vector,
@@ -318,15 +398,17 @@ def create_bond_wire_3d(start: Base.Vector, end: Base.Vector,
     Proportions scale with config['diameter'].  Falls back to a plain swept
     tube, then a straight line, on OCCT failure.
     """
-    bond_type   = config.get("bond_type", "Ball-Wedge")
-    wedge_style = config.get("wedge_style", "cut")   # 'cut' or 'solid'
-    loop_height = float(config.get("loop_height", 0.3))
-    d           = float(config.get("diameter",    0.025))
-    r           = d / 2.0
+    bond_type    = config.get("bond_type", "Ball-Wedge")
+    wedge_style  = config.get("wedge_style", "cut")   # 'cut' or 'solid'
+    wire_profile = config.get("wire_profile", "spline")  # 'spline' or 'jedec'
+    loop_height  = float(config.get("loop_height", 0.3))
+    d            = float(config.get("diameter",    0.025))
+    r            = d / 2.0
 
     FreeCAD.Console.PrintMessage(
         f"[wirebond] create_bond_wire_3d {_GEOM_VERSION}: "
-        f"type={bond_type} wedge_style={wedge_style} d={d:.4f} loop={loop_height:.4f}\n"
+        f"type={bond_type} wedge_style={wedge_style} profile={wire_profile} "
+        f"d={d:.4f} loop={loop_height:.4f}\n"
     )
 
     A = Base.Vector(start)
@@ -380,20 +462,26 @@ def create_bond_wire_3d(start: Base.Vector, end: Base.Vector,
     try:
         if bond_type == "Wedge-Wedge":
             # ── Wedge at both ends — shallow entry/exit ────────────────────
-            pts = [
-                _spine_point(a_xy, e_xy, L, 0.00, wedge_end_z(zA)),
-                _spine_point(a_xy, e_xy, L, 0.20, z_hi + 0.80 * H),
-                _spine_point(a_xy, e_xy, L, 0.50, z_hi + H),
-                _spine_point(a_xy, e_xy, L, 0.80, z_hi + 0.80 * H),
-                _spine_point(a_xy, e_xy, L, 1.00, wedge_end_z(zB)),
-            ]
+            if wire_profile == "jedec":
+                pts = _jedec_trapezoid_points(
+                    a_xy, e_xy, L, wedge_end_z(zA), wedge_end_z(zB), z_hi + H)
+                sweep_fn = _sweep_circle_along_polyline
+            else:
+                pts = [
+                    _spine_point(a_xy, e_xy, L, 0.00, wedge_end_z(zA)),
+                    _spine_point(a_xy, e_xy, L, 0.20, z_hi + 0.80 * H),
+                    _spine_point(a_xy, e_xy, L, 0.50, z_hi + H),
+                    _spine_point(a_xy, e_xy, L, 0.80, z_hi + 0.80 * H),
+                    _spine_point(a_xy, e_xy, L, 1.00, wedge_end_z(zB)),
+                ]
+                sweep_fn = _sweep_circle_along
             if cut_wedge:
                 # Dip straight *down* at each contact XY (a short vertical stub)
                 # so the flat cut lands a full face exactly on the contact point
                 # — not short of it, which a diagonal descent would cause.
                 pts.insert(0, _spine_point(a_xy, e_xy, L, 0.00, term_z(zA)))
                 pts.append(   _spine_point(a_xy, e_xy, L, 1.00, term_z(zB)))
-            tube = _sweep_circle_along(pts, r)
+            tube = sweep_fn(pts, r)
 
             if cut_wedge:
                 # Flatten the tube on each pad — no separate wedge solids.
@@ -411,19 +499,25 @@ def create_bond_wire_3d(start: Base.Vector, end: Base.Vector,
             footA  = _make_oblate_ball(b_r, b_h, A)
             z_neck = zA + b_h * 0.80            # tube exits near the ball top
 
-            pts = [
-                _spine_point(a_xy, e_xy, L, 0.00, z_neck),
-                _spine_point(a_xy, e_xy, L, 0.05, z_neck + 0.55 * H),   # steep neck
-                _spine_point(a_xy, e_xy, L, 0.28, z_hi + H),            # apex near ball
-                _spine_point(a_xy, e_xy, L, 0.62, z_hi + 0.42 * H),
-                _spine_point(a_xy, e_xy, L, 0.87, wedge_end_z(zB) + 0.15 * H),
-                _spine_point(a_xy, e_xy, L, 1.00, wedge_end_z(zB)),     # stitch landing
-            ]
+            if wire_profile == "jedec":
+                pts = _jedec_trapezoid_points(
+                    a_xy, e_xy, L, z_neck, wedge_end_z(zB), z_hi + H)
+                sweep_fn = _sweep_circle_along_polyline
+            else:
+                pts = [
+                    _spine_point(a_xy, e_xy, L, 0.00, z_neck),
+                    _spine_point(a_xy, e_xy, L, 0.05, z_neck + 0.55 * H),   # steep neck
+                    _spine_point(a_xy, e_xy, L, 0.28, z_hi + H),            # apex near ball
+                    _spine_point(a_xy, e_xy, L, 0.62, z_hi + 0.42 * H),
+                    _spine_point(a_xy, e_xy, L, 0.87, wedge_end_z(zB) + 0.15 * H),
+                    _spine_point(a_xy, e_xy, L, 1.00, wedge_end_z(zB)),     # stitch landing
+                ]
+                sweep_fn = _sweep_circle_along
             if cut_wedge:
                 # Dip straight down at the contact XY (short vertical stub) so
                 # the flat cut leaves a full face exactly on the contact point.
                 pts.append(_spine_point(a_xy, e_xy, L, 1.00, term_z(zB)))
-            tube = _sweep_circle_along(pts, r)
+            tube = sweep_fn(pts, r)
 
             if cut_wedge:
                 # Ball foot stays; the stitch end is the tube cut flat on the

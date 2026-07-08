@@ -86,14 +86,17 @@ def fetch_leadframe_entries(library_url: str = DEFAULT_LIBRARY_URL) -> List[Lead
 
 def _fetch_package_detail(package_page_url: str):
     """
-    Fetch a per-package detail page and return ``(photos, info_text)``.
+    Fetch a per-package detail page and return ``(photos, info_text, datasheets)``.
 
     *photos* is a list of absolute image URLs (product photos only).
     *info_text* is a plain-text summary of any spec table rows, headings, and
     description paragraphs found on the page — ready to display in the preview
     panel.
+    *datasheets* is a list of absolute PDF URLs found on the page (usually the
+    package datasheet; a page may legitimately link more than one, e.g. a
+    datasheet plus an application note).
 
-    Both parts are derived from a single HTTP request so the page is only
+    All three parts are derived from a single HTTP request so the page is only
     downloaded once per selection.
     """
     import html as _html_mod
@@ -109,6 +112,16 @@ def _fetch_package_detail(package_page_url: str):
     for src in srcs:
         if pkg_stem.lower() in src.lower() and any(src.lower().endswith(e) for e in IMAGE_EXTS):
             photos.append(urljoin(package_page_url, src))
+
+    # ── datasheet PDFs ────────────────────────────────────────────────────────
+    pdf_hrefs = re.findall(r'href="([^"]+\.pdf)"', raw_html, re.IGNORECASE)
+    datasheets: List[str] = []
+    seen_pdf = set()
+    for href in pdf_hrefs:
+        full = urljoin(package_page_url, href)
+        if full not in seen_pdf:
+            seen_pdf.add(full)
+            datasheets.append(full)
 
     # ── text info ─────────────────────────────────────────────────────────────
     def _strip(fragment: str) -> str:
@@ -142,24 +155,29 @@ def _fetch_package_detail(package_page_url: str):
                 lines.append(f"{key}: {val}")
 
     info_text = "\n".join(lines)
-    return photos, info_text
+    return photos, info_text, datasheets
 
 
 _DOWNLOAD_TIMEOUT_S = 30
 _DOWNLOAD_MAX_BYTES = 50 * 1024 * 1024  # 50 MB
 
 
+def _download_url_to_path(url: str, dest_path: str) -> str:
+    """Download *url* to *dest_path*, enforcing the same size limit as leadframe downloads."""
+    with urllib.request.urlopen(url, timeout=_DOWNLOAD_TIMEOUT_S) as response:
+        data = response.read(_DOWNLOAD_MAX_BYTES + 1)
+    if len(data) > _DOWNLOAD_MAX_BYTES:
+        raise ValueError(f"Download exceeded the {_DOWNLOAD_MAX_BYTES // (1024 * 1024)} MB size limit.")
+    with open(dest_path, "wb") as f:
+        f.write(data)
+    return dest_path
+
+
 def _download_to_temp(entry: LeadframeEntry) -> str:
     target_dir = tempfile.mkdtemp(prefix="leadframe_download_")
     target_name = os.path.basename(entry.url.split("?")[0]) or entry.name
     target_path = os.path.join(target_dir, target_name)
-    with urllib.request.urlopen(entry.url, timeout=_DOWNLOAD_TIMEOUT_S) as response:
-        data = response.read(_DOWNLOAD_MAX_BYTES + 1)
-    if len(data) > _DOWNLOAD_MAX_BYTES:
-        raise ValueError(f"Download exceeded the {_DOWNLOAD_MAX_BYTES // (1024 * 1024)} MB size limit.")
-    with open(target_path, "wb") as f:
-        f.write(data)
-    return target_path
+    return _download_url_to_path(entry.url, target_path)
 
 
 def _bbox_of(objects):
@@ -1071,11 +1089,13 @@ class _PreviewWorker(QtCore.QThread):
     Fetches the package detail page in one request, then:
     - downloads the best product photo  → emits loaded(bytes)
     - extracts textual spec info        → emits text_loaded(str)
+    - extracts datasheet PDF link(s)    → emits datasheets_loaded(list)
     On any error emits failed(str).
     """
-    loaded      = QtCore.Signal(bytes)
-    text_loaded = QtCore.Signal(str)
-    failed      = QtCore.Signal(str)
+    loaded             = QtCore.Signal(bytes)
+    text_loaded        = QtCore.Signal(str)
+    datasheets_loaded  = QtCore.Signal(list)
+    failed             = QtCore.Signal(str)
 
     def __init__(self, entry: LeadframeEntry, parent=None):
         super().__init__(parent)
@@ -1087,11 +1107,12 @@ class _PreviewWorker(QtCore.QThread):
                 self.failed.emit("No package detail page available.")
                 return
 
-            photos, info_text = _fetch_package_detail(self._entry.package_page_url)
+            photos, info_text, datasheets = _fetch_package_detail(self._entry.package_page_url)
 
-            # Always emit text info (even when no photo was found)
+            # Always emit text info and datasheet links (even when no photo was found)
             if info_text:
                 self.text_loaded.emit(info_text)
+            self.datasheets_loaded.emit(datasheets)
 
             if not photos:
                 self.failed.emit("No product photos found on the package page.")
@@ -1125,6 +1146,23 @@ class _DownloadWorker(QtCore.QThread):
             self.failed.emit(str(exc))
 
 
+class _DatasheetSaveWorker(QtCore.QThread):
+    """Downloads a datasheet PDF URL to a user-chosen destination path."""
+    finished = QtCore.Signal(str)
+    failed = QtCore.Signal(str)
+
+    def __init__(self, url: str, dest_path: str, parent=None):
+        super().__init__(parent)
+        self._url = url
+        self._dest_path = dest_path
+
+    def run(self):
+        try:
+            self.finished.emit(_download_url_to_path(self._url, self._dest_path))
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 # ---------------------------------------------------------------------------
 # Dialog
 # ---------------------------------------------------------------------------
@@ -1139,11 +1177,14 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
 
         self.entries: List[LeadframeEntry] = []
         self._all_entries: List[LeadframeEntry] = []
-        self._preview_cache: dict = {}   # package_page_url → QPixmap (or None)
-        self._text_cache: dict = {}      # package_page_url → str (or "")
+        self._preview_cache: dict = {}     # package_page_url → QPixmap (or None)
+        self._text_cache: dict = {}        # package_page_url → str (or "")
+        self._datasheet_cache: dict = {}   # package_page_url → List[str] (PDF URLs)
+        self._current_datasheet_url: Optional[str] = None
         self._preview_worker: Optional[_PreviewWorker] = None
         self._fetch_worker: Optional[_FetchWorker] = None
         self._download_worker: Optional[_DownloadWorker] = None
+        self._datasheet_save_worker: Optional[_DatasheetSaveWorker] = None
 
         # --- filter row ---
         self.search_edit = QtWidgets.QLineEdit()
@@ -1179,6 +1220,26 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
         self._info_browser.setPlaceholderText("Package information will appear here.")
         self._info_browser.setOpenExternalLinks(False)
 
+        # Datasheet PDF actions — populated once the package detail page has
+        # been scanned for PDF links; disabled when none are found.
+        self.datasheet_open_button = QtWidgets.QPushButton("📄 Open Datasheet")
+        self.datasheet_open_button.setToolTip(
+            "Open the package datasheet PDF in your system browser / PDF viewer."
+        )
+        self.datasheet_open_button.setEnabled(False)
+        self.datasheet_open_button.clicked.connect(self._open_datasheet)
+
+        self.datasheet_save_button = QtWidgets.QPushButton("Save Datasheet As…")
+        self.datasheet_save_button.setToolTip(
+            "Download the package datasheet PDF to a location on disk."
+        )
+        self.datasheet_save_button.setEnabled(False)
+        self.datasheet_save_button.clicked.connect(self._save_datasheet_as)
+
+        datasheet_row = QtWidgets.QHBoxLayout()
+        datasheet_row.addWidget(self.datasheet_open_button)
+        datasheet_row.addWidget(self.datasheet_save_button)
+
         self.status_label = QtWidgets.QLabel("Fetching leadframe library…")
         self.status_label.setWordWrap(True)
 
@@ -1195,6 +1256,7 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
         side_layout = QtWidgets.QVBoxLayout()
         side_layout.addWidget(self.preview_label)
         side_layout.addWidget(self._info_browser)
+        side_layout.addLayout(datasheet_row)
         side_layout.addWidget(self.status_label)
         side_layout.addStretch()
         side_layout.addWidget(self.import_button)
@@ -1273,6 +1335,7 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
             self.preview_label.setText("No matching entries.")
             self.preview_label.setPixmap(QtGui.QPixmap())
             self.import_button.setEnabled(False)
+            self._set_datasheet_urls([])
 
     # ------------------------------------------------------------------
     # Preview
@@ -1284,6 +1347,7 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
             self.preview_label.setPixmap(QtGui.QPixmap())
             self._info_browser.clear()
             self.import_button.setEnabled(False)
+            self._set_datasheet_urls([])
             return
         entry: LeadframeEntry = current.data(QtCore.Qt.UserRole)
         self.import_button.setEnabled(True)
@@ -1295,6 +1359,7 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
             self.preview_label.setPixmap(QtGui.QPixmap())
             self.preview_label.setText("No package detail page available.")
             self._info_browser.clear()
+            self._set_datasheet_urls([])
             return
 
         # Serve from cache if available
@@ -1308,17 +1373,20 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
             # Restore cached text (may be empty string when not yet fetched)
             cached_text = self._text_cache.get(pkg_url, "")
             self._info_browser.setPlainText(cached_text)
+            self._set_datasheet_urls(self._datasheet_cache.get(pkg_url, []))
             return
 
         self.preview_label.setText("Loading preview…")
         self.preview_label.setPixmap(QtGui.QPixmap())
         self._info_browser.clear()
+        self._set_datasheet_urls([])
 
         # Cancel previous in-flight request
         if self._preview_worker and self._preview_worker.isRunning():
             try:
                 self._preview_worker.loaded.disconnect()
                 self._preview_worker.text_loaded.disconnect()
+                self._preview_worker.datasheets_loaded.disconnect()
                 self._preview_worker.failed.disconnect()
             except Exception:
                 pass
@@ -1329,6 +1397,9 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
         )
         self._preview_worker.text_loaded.connect(
             lambda text, url=pkg_url: self._on_text_loaded(text, url)
+        )
+        self._preview_worker.datasheets_loaded.connect(
+            lambda urls, url=pkg_url: self._on_datasheets_loaded(urls, url)
         )
         self._preview_worker.failed.connect(
             lambda msg, url=pkg_url: self._on_preview_failed(msg, url)
@@ -1366,6 +1437,75 @@ class LeadframeLibraryDialog(QtWidgets.QDialog):
             if entry.package_page_url == pkg_url:
                 self.preview_label.setPixmap(QtGui.QPixmap())
                 self.preview_label.setText("No product photos available.")
+
+    def _on_datasheets_loaded(self, urls: list, pkg_url: str):
+        """Cache and display datasheet PDF link(s) found on *pkg_url*."""
+        self._datasheet_cache[pkg_url] = urls
+        current = self.list_widget.currentItem()
+        if current:
+            entry: LeadframeEntry = current.data(QtCore.Qt.UserRole)
+            if entry.package_page_url == pkg_url:
+                self._set_datasheet_urls(urls)
+
+    # ------------------------------------------------------------------
+    # Datasheet actions
+    # ------------------------------------------------------------------
+
+    def _set_datasheet_urls(self, urls: list):
+        """Update the datasheet buttons for the currently selected entry.
+
+        When more than one PDF is found on the page, the one whose file name
+        contains "datasheet" is preferred; otherwise the first one found.
+        """
+        preferred = next(
+            (u for u in urls if "datasheet" in os.path.basename(u).lower()),
+            urls[0] if urls else None,
+        )
+        self._current_datasheet_url = preferred
+        self.datasheet_open_button.setEnabled(preferred is not None)
+        self.datasheet_save_button.setEnabled(preferred is not None)
+        if preferred is not None:
+            n = len(urls)
+            extra = f"  ({n} PDFs found — showing '{os.path.basename(preferred)}')" if n > 1 else ""
+            self.datasheet_open_button.setToolTip(f"Open {preferred}{extra}")
+        else:
+            self.datasheet_open_button.setToolTip(
+                "Open the package datasheet PDF in your system browser / PDF viewer."
+            )
+
+    def _open_datasheet(self):
+        if not self._current_datasheet_url:
+            return
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl(self._current_datasheet_url))
+
+    def _save_datasheet_as(self):
+        if not self._current_datasheet_url:
+            return
+        default_name = os.path.basename(self._current_datasheet_url.split("?")[0]) or "datasheet.pdf"
+        dest_path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save Datasheet As", default_name, "PDF Files (*.pdf)"
+        )
+        if not dest_path:
+            return
+
+        self.datasheet_save_button.setEnabled(False)
+        self.status_label.setText(f"Downloading datasheet '{os.path.basename(dest_path)}'…")
+
+        self._datasheet_save_worker = _DatasheetSaveWorker(
+            self._current_datasheet_url, dest_path, parent=self
+        )
+        self._datasheet_save_worker.finished.connect(self._on_datasheet_saved)
+        self._datasheet_save_worker.failed.connect(self._on_datasheet_save_failed)
+        self._datasheet_save_worker.start()
+
+    def _on_datasheet_saved(self, path: str):
+        self.datasheet_save_button.setEnabled(True)
+        self.status_label.setText(f"Datasheet saved to '{path}'.")
+
+    def _on_datasheet_save_failed(self, msg: str):
+        self.datasheet_save_button.setEnabled(True)
+        self.status_label.setText("Datasheet download failed.")
+        QtWidgets.QMessageBox.critical(self, "Datasheet download failed", msg)
 
     def _display_pixmap(self, pixmap: QtGui.QPixmap):
         scaled = pixmap.scaled(

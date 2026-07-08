@@ -70,11 +70,39 @@ _FRAME_NAMES = (
 )
 
 
+def _has_geometry(o):
+    """True for objects carrying movable geometry — B-rep (Shape) or mesh (Mesh)."""
+    return hasattr(o, "Shape") or hasattr(o, "Mesh")
+
+
+def _obj_boundbox(o):
+    """Local bounding box of *o* regardless of whether it is a B-rep or a mesh."""
+    shp = getattr(o, "Shape", None)
+    if shp is not None:
+        try:
+            return shp.BoundBox
+        except Exception:
+            pass
+    msh = getattr(o, "Mesh", None)
+    if msh is not None:
+        try:
+            return msh.BoundBox
+        except Exception:
+            pass
+    return None
+
+
 def _all_objects(doc):
-    """Every object in the document that has a Shape and a Placement."""
+    """
+    Every object in the document that carries movable geometry and a Placement.
+
+    Includes both B-rep (Part::Feature, .Shape) and mesh (Mesh::Feature, .Mesh)
+    objects so the fast-mesh proxies move together with their source shapes
+    instead of being left behind.
+    """
     return [
         o for o in (doc.Objects if doc else [])
-        if hasattr(o, "Shape") and hasattr(o, "Placement")
+        if hasattr(o, "Placement") and _has_geometry(o)
     ]
 
 
@@ -103,7 +131,7 @@ def _gds_objects(doc):
     if frames_grp is not None:
         grp_members = getattr(frames_grp, "Group", [])
         for fo in grp_members:
-            if hasattr(fo, "Shape") and hasattr(fo, "Placement") and fo not in objs:
+            if hasattr(fo, "Placement") and _has_geometry(fo) and fo not in objs:
                 objs.append(fo)
 
     return objs
@@ -111,21 +139,20 @@ def _gds_objects(doc):
 
 def _selected_objects():
     return [s.Object for s in FreeCADGui.Selection.getSelectionEx()
-            if hasattr(s.Object, "Shape")]
+            if _has_geometry(s.Object)]
 
 
 def _bounding_center(objects):
-    """World-space bounding box centre of a list of shaped objects."""
+    """World-space bounding box centre of a list of shaped/mesh objects."""
     xmin = ymin = zmin = float("inf")
     xmax = ymax = zmax = float("-inf")
     for obj in objects:
-        try:
-            b = obj.Shape.BoundBox
-            xmin = min(xmin, b.XMin); xmax = max(xmax, b.XMax)
-            ymin = min(ymin, b.YMin); ymax = max(ymax, b.YMax)
-            zmin = min(zmin, b.ZMin); zmax = max(zmax, b.ZMax)
-        except Exception:
-            pass
+        b = _obj_boundbox(obj)
+        if b is None:
+            continue
+        xmin = min(xmin, b.XMin); xmax = max(xmax, b.XMax)
+        ymin = min(ymin, b.YMin); ymax = max(ymax, b.YMax)
+        zmin = min(zmin, b.ZMin); zmax = max(zmax, b.ZMax)
     if xmin == float("inf"):
         return FreeCAD.Vector(0, 0, 0)
     return FreeCAD.Vector((xmin + xmax) / 2, (ymin + ymax) / 2, (zmin + zmax) / 2)
@@ -189,8 +216,8 @@ def _world_bbox_of_objects(objects):
     found = False
     for obj in objects:
         try:
-            bb = obj.Shape.BoundBox
-            if not bb.isValid():
+            bb = _obj_boundbox(obj)
+            if bb is None or not bb.isValid():
                 continue
             mat = _world_placement_of(obj).toMatrix()
             for lx in (bb.XMin, bb.XMax):

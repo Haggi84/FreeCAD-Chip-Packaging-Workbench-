@@ -71,8 +71,16 @@ def _gds_layer_objects(doc):
     ]
     for obj in candidates:
         vobj = getattr(obj, "ViewObject", None)
-        if vobj is not None and hasattr(obj, "Shape"):
-            yield obj, vobj
+        if vobj is None or not hasattr(obj, "Shape"):
+            continue
+        # VIA layers are managed separately by ToggleViaDetailCommand
+        # (simple outlined block vs full detail) — skip them here so the two
+        # mechanisms never fight over a via layer's visibility.
+        nm = (obj.Name or "").lower()
+        lb = (obj.Label or "").lower()
+        if "via" in nm or "via" in lb:
+            continue
+        yield obj, vobj
 
 
 def _make_progress(title: str, n: int) -> QtWidgets.QProgressDialog:

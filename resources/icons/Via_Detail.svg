@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- Simplified block outline -->
+  <rect x="6" y="6" width="52" height="52" rx="3"
+        fill="#9ec6e0" fill-opacity="0.35"
+        stroke="#1f5b80" stroke-width="3"/>
+  <!-- VIA cut array (the detail hidden behind the block) -->
+  <g fill="#1f5b80">
+    <rect x="16" y="16" width="7" height="7"/>
+    <rect x="29" y="16" width="7" height="7"/>
+    <rect x="42" y="16" width="7" height="7"/>
+    <rect x="16" y="29" width="7" height="7"/>
+    <rect x="29" y="29" width="7" height="7"/>
+    <rect x="42" y="29" width="7" height="7"/>
+    <rect x="16" y="42" width="7" height="7"/>
+    <rect x="29" y="42" width="7" height="7"/>
+    <rect x="42" y="42" width="7" height="7"/>
+  </g>
+</svg>
