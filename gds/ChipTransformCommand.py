@@ -781,4 +781,5 @@ class ChipTransformCommand:
         return FreeCAD.activeDocument() is not None
 
 
-FreeCADGui.addCommand("ChipTransformCommand", ChipTransformCommand())
+if FreeCAD.GuiUp:
+    FreeCADGui.addCommand("ChipTransformCommand", ChipTransformCommand())

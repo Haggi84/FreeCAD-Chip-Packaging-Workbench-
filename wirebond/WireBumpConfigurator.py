@@ -706,4 +706,5 @@ class WireBumpConfiguratorCommand:
         return True
 
 
-FreeCADGui.addCommand("WireBumpConfiguratorCommand", WireBumpConfiguratorCommand())
+if FreeCAD.GuiUp:
+    FreeCADGui.addCommand("WireBumpConfiguratorCommand", WireBumpConfiguratorCommand())

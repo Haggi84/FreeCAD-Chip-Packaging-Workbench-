@@ -403,5 +403,7 @@ class TechConfigCommand:
         return True
 
 
+import FreeCAD
 import FreeCADGui
-FreeCADGui.addCommand("TechConfigCommand", TechConfigCommand())
+if FreeCAD.GuiUp:
+    FreeCADGui.addCommand("TechConfigCommand", TechConfigCommand())

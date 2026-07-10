@@ -17,7 +17,20 @@ Workflow
 First toggle  → bakes one Mesh::Feature per GDS layer (shows progress),
                 then hides B-rep shapes and shows meshes.
 Next toggle   → restores B-rep shapes, hides meshes (instant).
-Rebake        → delete the "GDS_PerfMeshes" group and toggle again.
+Rebake        → delete the "GDS_PerfMeshes" group and toggle again, or call
+                invalidate_layer_mesh() for just one layer.
+
+Relationship to the other GDS performance mechanisms
+------------------------------------------------------
+One of four independent, cooperating mechanisms — see ui/LODManager.py's
+module docstring for the full picture and how they divide responsibility.
+In short: this module only decides *how* already-loaded geometry renders
+(native vs. mesh); ui.LODManager decides whether that geometry has been
+loaded into the document at all; gds.ToggleViaDetailCommand owns via-layer
+simplification (which is dispatched to from sync_new_layer_display() below,
+not handled here); ui.DetailLayerPanel's bbox-simplify toggle is a fourth,
+independent per-layer Shape swap that must call invalidate_layer_mesh() to
+avoid leaving a stale mesh cached under the old geometry.
 """
 
 import FreeCAD
@@ -109,6 +122,31 @@ def _perf_mesh_group(doc):
     return grp
 
 
+def invalidate_layer_mesh(doc, obj_name: str):
+    """
+    Delete the cached fast-mesh companion for *obj_name*, if any, forcing a
+    fresh bake next time performance mode is (re)applied to this layer.
+
+    _bake_layer_mesh() permanently reuses whatever mesh object already
+    exists under this name — it never checks whether the source object's
+    Shape has changed since baking.  Anything that replaces a layer's Shape
+    in place after it may have been baked (e.g. DetailLayerPanel's
+    bbox-simplify toggle) must call this, or the mesh companion silently
+    keeps showing geometry baked from the Shape's *previous* contents
+    indefinitely — a stale mesh that no longer matches its source.
+    """
+    if doc is None:
+        return
+    mesh_obj = doc.getObject(obj_name + _PERF_MESH_SUFFIX)
+    if mesh_obj is not None:
+        try:
+            doc.removeObject(mesh_obj.Name)
+        except Exception as exc:
+            FreeCAD.Console.PrintWarning(
+                f"[PerfMode] invalidate_layer_mesh '{obj_name}': {exc}\n"
+            )
+
+
 def _bake_layer_mesh(doc, obj, grp):
     """
     Tessellate obj.Shape into a Mesh::Feature and add it to grp.
@@ -133,16 +171,17 @@ def _bake_layer_mesh(doc, obj, grp):
         mesh_obj.Mesh  = mesh
         mesh_obj.Label = (obj.Label or obj.Name) + " [fast]"
 
-        # Mirror the layer's colour and transparency so it looks identical
-        vobj      = obj.ViewObject
-        mesh_vobj = mesh_obj.ViewObject
-        for prop in ("ShapeColor", "LineColor", "Transparency"):
-            try:
-                setattr(mesh_vobj, prop, getattr(vobj, prop))
-            except Exception:
-                pass
-        mesh_vobj.DisplayMode = "Shaded"   # filled faces, no triangle-edge clutter
-        mesh_vobj.Visibility  = False       # hidden until fast mode is active
+        if FreeCAD.GuiUp:
+            # Mirror the layer's colour and transparency so it looks identical
+            vobj      = obj.ViewObject
+            mesh_vobj = mesh_obj.ViewObject
+            for prop in ("ShapeColor", "LineColor", "Transparency"):
+                try:
+                    setattr(mesh_vobj, prop, getattr(vobj, prop))
+                except Exception:
+                    pass
+            mesh_vobj.DisplayMode = "Shaded"   # filled faces, no triangle-edge clutter
+            mesh_vobj.Visibility  = False       # hidden until fast mode is active
 
         grp.addObject(mesh_obj)
         return mesh_obj
@@ -266,6 +305,67 @@ def apply_detail_mode(doc):
     _fast_mode = False
 
 
+def is_fast_mode() -> bool:
+    """True when the document is currently showing fast-mesh proxies."""
+    return _fast_mode
+
+
+def sync_new_layer_display(doc, obj):
+    """
+    Apply the document's CURRENT global render mode to *obj* — a layer that
+    just finished loading (e.g. the LOD manager promoting a lazily-loaded
+    routing layer from a placeholder to real geometry).
+
+    Without this, a layer loaded while fast-mesh mode is active would always
+    land in full B-rep Detail mode (the LOD loader's own default), creating a
+    visibly and performance-inconsistent mix with the rest of an
+    already-meshed document — one freshly loaded layer rendering as slow
+    native geometry while everything else around it is a fast pre-baked
+    mesh.  This is the single integration point between the LOD loading
+    system (ui/LODManager.py) and fast-mesh rendering (this module); the two
+    stay otherwise independent — LOD decides *whether* a layer's real
+    geometry has been loaded into the document at all, this module decides
+    *how* already-loaded geometry is rendered.
+
+    VIA layers are dispatched to gds.ToggleViaDetailCommand instead of being
+    mesh-baked here — that module owns via-specific simplification (cluster
+    boxes, not a full-detail mesh) and already skips via layers in its own
+    bulk baking pass (_gds_layer_objects), so this keeps the two mechanisms
+    from fighting over the same layer.
+    """
+    name = (obj.Name or "").lower()
+    label = (obj.Label or "").lower()
+    if "via" in name or "via" in label:
+        try:
+            from gds.ToggleViaDetailCommand import sync_new_via_layer
+            sync_new_via_layer(doc, obj)
+        except Exception as exc:
+            FreeCAD.Console.PrintWarning(
+                f"[PerfMode] via dispatch for '{obj.Name}': {exc}\n"
+            )
+            set_layer_detail(obj, True)
+        return
+
+    if not _fast_mode:
+        set_layer_detail(obj, True)
+        return
+    try:
+        grp = _perf_mesh_group(doc)
+        mesh_obj = _bake_layer_mesh(doc, obj, grp)
+        if mesh_obj is not None:
+            obj.ViewObject.Visibility      = False
+            mesh_obj.ViewObject.Visibility = True
+        else:
+            # Baking failed — at least show the real geometry rather than
+            # leaving the layer invisible.
+            set_layer_detail(obj, True)
+    except Exception as exc:
+        FreeCAD.Console.PrintWarning(
+            f"[PerfMode] sync_new_layer_display '{obj.Name}': {exc}\n"
+        )
+        set_layer_detail(obj, True)
+
+
 def set_layer_detail(obj, detail: bool):
     """
     Toggle a single layer between Detail and fast display.
@@ -354,4 +454,5 @@ class TogglePerformanceModeCommand:
         FreeCAD.Console.PrintMessage(f"[PerfMode] Now in {mode_str} mode.\n")
 
 
-FreeCADGui.addCommand("TogglePerformanceModeCommand", TogglePerformanceModeCommand())
+if FreeCAD.GuiUp:
+    FreeCADGui.addCommand("TogglePerformanceModeCommand", TogglePerformanceModeCommand())

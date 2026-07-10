@@ -148,8 +148,8 @@ def _resolve_tech_file(tech_config, kind: str, title: str,
         if optional:
             FreeCAD.Console.PrintWarning(f"No {kind.upper()} selected — skipping.\n")
             return None
-        QtWidgets.QMessageBox.critical(None, "Fehler",
-                                       f"{kind.upper()}-Datei nicht gefunden.")
+        QtWidgets.QMessageBox.critical(None, "Error",
+                                       f"{kind.upper()} file not found.")
         return None
 
     kw = {"map_": p} if kind == "map" else {kind: p}
@@ -165,7 +165,7 @@ def _run_import(gds_path, selected_layers, load_kwargs):
     Returns (shapes, cancelled).
     """
     dlg = QtWidgets.QProgressDialog(
-        "GDS-Layer werden importiert…", "Abbrechen", 0, 0,
+        "Importing GDS layers…", "Cancel", 0, 0,
         FreeCADGui.getMainWindow()
     )
     dlg.setWindowModality(QtCore.Qt.ApplicationModal)
@@ -218,7 +218,7 @@ def _run_render(doc, layer_objects, pending_colors):
     """Calls doc.recompute() with a progress dialog."""
     n = sum(len(v) for v in layer_objects.values())
     dlg = QtWidgets.QProgressDialog(
-        f"FreeCAD tesselliert {n} Shape(s)…\nBitte warten.",
+        f"FreeCAD is tessellating {n} shape(s)…\nPlease wait.",
         None, 0, 0, FreeCADGui.getMainWindow()
     )
     dlg.setWindowTitle("Rendering")
@@ -308,10 +308,10 @@ def load_gds_layers():
 
     try:
         gds_path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            None, "GDS-Datei wählen", "", "GDS Files (*.gds *.GDS)"
+            None, "Select GDS File", "", "GDS Files (*.gds *.GDS)"
         )
         if not gds_path or not os.path.exists(gds_path):
-            QtWidgets.QMessageBox.critical(None, "Fehler", "GDS-Datei nicht gefunden.")
+            QtWidgets.QMessageBox.critical(None, "Error", "GDS file not found.")
             return (None,) * 8
 
         # ── Technology configuration ───────────────────────────────────────
@@ -319,15 +319,15 @@ def load_gds_layers():
 
         if not tech_config.is_configured():
             msg = QtWidgets.QMessageBox(None)
-            msg.setWindowTitle("Technologie-Konfiguration")
-            msg.setText("Kein Technologie-Profil konfiguriert.")
+            msg.setWindowTitle("Technology Configuration")
+            msg.setText("No technology profile configured.")
             msg.setInformativeText(
-                "Eingebaute IHP SG13G2-Konfiguration verwenden "
-                "oder Dateien manuell wählen?"
+                "Use the built-in IHP SG13G2 configuration, "
+                "or select files manually?"
             )
-            btn_std = msg.addButton("Standard (IHP SG13G2)",
+            btn_std = msg.addButton("Default (IHP SG13G2)",
                                     QtWidgets.QMessageBox.ButtonRole.AcceptRole)
-            msg.addButton("Manuell wählen",
+            msg.addButton("Select Manually",
                           QtWidgets.QMessageBox.ButtonRole.ActionRole)
             msg.addButton(QtWidgets.QMessageBox.StandardButton.Cancel)
             msg.setDefaultButton(btn_std)
@@ -339,22 +339,22 @@ def load_gds_layers():
             if clicked == btn_std:
                 tech_config.apply_builtin_to_local()
 
-        lyp_path = _resolve_tech_file(tech_config, "lyp", "LYP-Datei wählen",
+        lyp_path = _resolve_tech_file(tech_config, "lyp", "Select LYP File",
                                       "LYP Files (*.lyp *.LYP)")
         if lyp_path is None:
             return (None,) * 8
 
-        map_path = _resolve_tech_file(tech_config, "map", "IHP MAP wählen (optional)",
+        map_path = _resolve_tech_file(tech_config, "map", "Select IHP MAP (optional)",
                                       "MAP Files (*.map *.MAP)", optional=True)
         ihp_map  = Core_Functionality.parse_map(map_path) if map_path else {}
 
-        xml_path = _resolve_tech_file(tech_config, "xml", "Stackup XML wählen (optional)",
+        xml_path = _resolve_tech_file(tech_config, "xml", "Select Stackup XML (optional)",
                                       "XML Files (*.xml *.XML)", optional=True)
         stackup_data = Core_Functionality.parse_stackup_xml(xml_path) if xml_path else {}
 
         layers_with_colors = Core_Functionality.parse_lyp(lyp_path)
         if not layers_with_colors:
-            QtWidgets.QMessageBox.critical(None, "Fehler", "Keine Layer in LYP gefunden.")
+            QtWidgets.QMessageBox.critical(None, "Error", "No layers found in LYP.")
             return (None,) * 8
 
         layers, unique_colors = layers_with_colors
@@ -364,8 +364,8 @@ def load_gds_layers():
         filtered_layers = [l for l in layers
                            if (l.get("layer_id", 0), l.get("datatype", 0)) in gds_layers]
         if not filtered_layers:
-            QtWidgets.QMessageBox.warning(None, "Warnung",
-                                          "Keine übereinstimmenden Layer in GDS und LYP.")
+            QtWidgets.QMessageBox.warning(None, "Warning",
+                                          "No matching layers between GDS and LYP.")
             return (None,) * 8
 
         doc = FreeCAD.newDocument("GDSII_Document")
@@ -376,8 +376,8 @@ def load_gds_layers():
         dialog = LayerSelector(filtered_layers, options=pp.options,
                                ihp_map=ihp_map, poly_counts=poly_counts)
         if not dialog.exec_():
-            QtWidgets.QMessageBox.information(None, "Abgebrochen",
-                                              "Layer-Auswahl abgebrochen.")
+            QtWidgets.QMessageBox.information(None, "Cancelled",
+                                              "Layer selection cancelled.")
             return (None,) * 8
 
         # dialog.layers      = all available layers (LYP ∩ GDS)
@@ -413,10 +413,10 @@ def load_gds_layers():
         shapes, cancelled = _run_import(gds_path, layers_to_load, load_kwargs)
 
         if cancelled:
-            QtWidgets.QMessageBox.information(None, "Abgebrochen", "Import abgebrochen.")
+            QtWidgets.QMessageBox.information(None, "Cancelled", "Import cancelled.")
             return (None,) * 8
         if not shapes:
-            QtWidgets.QMessageBox.warning(None, "Warnung", "Keine Shapes gefunden.")
+            QtWidgets.QMessageBox.warning(None, "Warning", "No shapes found.")
             return (None,) * 8
 
         # XY extent from the (not displayed) body solid for the LODManager
@@ -448,14 +448,14 @@ def load_gds_layers():
             if cp_count:
                 QtWidgets.QMessageBox.information(
                     None, "Auto-PIN",
-                    f"{cp_count} Kontaktpunkte auf PIN-Layern erstellt.\n"
-                    "Bereit für Wire-Bonding.",
+                    f"{cp_count} contact point(s) created on PIN layers.\n"
+                    "Ready for wire bonding.",
                 )
             else:
                 QtWidgets.QMessageBox.warning(
                     None, "Auto-PIN",
-                    "Keine PIN-Pads gefunden.\n"
-                    "Tipp: IHP .map-Datei laden für beste Ergebnisse.",
+                    "No PIN pads found.\n"
+                    "Tip: load an IHP .map file for best results.",
                 )
 
         # Start LOD manager — registers itself on the document and waits for
@@ -472,7 +472,7 @@ def load_gds_layers():
         FreeCAD.Console.PrintError(
             f"[GDSCommand] Error: {e}\n{traceback.format_exc()}\n"
         )
-        QtWidgets.QMessageBox.critical(None, "Fehler", str(e))
+        QtWidgets.QMessageBox.critical(None, "Error", str(e))
         return (None,) * 8
 
 
@@ -492,8 +492,8 @@ def _start_lod_manager(doc, gds_path, aux):
 class GDSCommand:
     def GetResources(self):
         return {
-            "MenuText": "GDSII laden",
-            "ToolTip":  "GDS-Datei importieren (LOD: Bonding-Layer sofort, Rest lazy)",
+            "MenuText": "Load GDSII",
+            "ToolTip":  "Import GDS file (LOD: bonding layers immediate, rest lazy)",
             "Pixmap":   get_icon("Load GDS.png"),
         }
 
@@ -510,9 +510,9 @@ class GDSCommand:
                 "options":         options,
             })
             QtWidgets.QMessageBox.information(
-                None, "Fertig",
-                "GDS importiert — Routing-Layer können im Detail Layer Panel\n"
-                "per Klick nachgeladen werden.",
+                None, "Done",
+                "GDS imported — routing layers can be loaded on demand\n"
+                "via the Detail Layer Panel.",
                 QtWidgets.QMessageBox.Ok,
             )
 
@@ -521,7 +521,8 @@ class GDSCommand:
 
 
 import FreeCADGui
-FreeCADGui.addCommand("GDSCommand", GDSCommand())
+if FreeCAD.GuiUp:
+    FreeCADGui.addCommand("GDSCommand", GDSCommand())
 
 
 # ── Session replay (no dialog) ────────────────────────────────────────────────

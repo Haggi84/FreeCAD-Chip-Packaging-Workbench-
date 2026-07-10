@@ -139,4 +139,5 @@ class AboutCommand:
         return True
 
 
-FreeCADGui.addCommand("AboutCommand", AboutCommand())
+if FreeCAD.GuiUp:
+    FreeCADGui.addCommand("AboutCommand", AboutCommand())

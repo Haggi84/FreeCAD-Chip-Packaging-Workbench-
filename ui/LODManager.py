@@ -21,6 +21,32 @@ Fill layers remain permanently SOLID (BBox, never fully tessellate).
 Thread safety: load_gds() runs in a QThread. The OCCT objects
 are passed as BREP strings and written into the document in the main thread
 via Qt signal.
+
+Relationship to the other GDS performance mechanisms
+------------------------------------------------------
+This is one of four independent, cooperating mechanisms that control how a
+layer looks in the viewport. Each answers a different question:
+
+  1. LODManager (here)                    — does the layer's real geometry
+                                             exist in the document AT ALL?
+                                             (lazy/progressive import loading)
+  2. gds.TogglePerformanceModeCommand     — once loaded, is it rendered as
+                                             native B-rep or a pre-baked mesh?
+                                             (render-speed optimisation,
+                                             same visual detail either way)
+  3. gds.ToggleViaDetailCommand           — for VIA layers specifically, is
+                                             the real via array shown, or a
+                                             proximity-clustered simplified
+                                             block? (intentionally LESS detail)
+  4. ui.DetailLayerPanel._simplify_layer  — manual, per-row, destructive
+                                             swap of an already-loaded
+                                             layer's Shape for its bounding
+                                             box (independent of #2/#3)
+
+When a layer is promoted here (_insert_layer / _show_layer), it hands off to
+gds.TogglePerformanceModeCommand.sync_new_layer_display() rather than always
+forcing full B-rep Detail — that keeps a freshly-loaded layer consistent
+with whatever fast-mesh state the rest of the document is already in.
 """
 
 from __future__ import annotations
@@ -35,7 +61,7 @@ from compat import QtCore, QtWidgets
 
 from core import Core_Functionality
 from core.lod_import import get_lazy_load_params
-from gds.TogglePerformanceModeCommand import set_layer_detail
+from gds.TogglePerformanceModeCommand import sync_new_layer_display
 
 # Global registry: doc.Name → LODManager
 # Necessary because FreeCAD App.Document (C++) does not allow Python attributes
@@ -525,7 +551,14 @@ class LODManager(QtCore.QObject):
             existing.ViewObject.LineColor    = lr
             existing.ViewObject.Transparency = display_tr
             existing.ViewObject.Visibility   = True
-            set_layer_detail(existing, True)
+            if target == LODState.DETAIL:
+                # Respect the document's current fast-mesh state instead of
+                # always forcing full B-rep Detail — otherwise a layer
+                # loaded after the initial import would visually and
+                # performance-wise stick out from an already-meshed
+                # document.  PREVIEW's flat 2D polygons are already
+                # lightweight, so they skip mesh baking entirely.
+                sync_new_layer_display(doc, existing)
         except Exception:
             pass
 
@@ -557,12 +590,12 @@ class LODManager(QtCore.QObject):
         self._update_body_solid()
 
     def _show_layer(self, key: tuple):
-        """Makes an already-loaded object visible again."""
+        """Makes an already-loaded object visible again, respecting the
+        document's current fast-mesh state (see sync_new_layer_display)."""
         obj = self._obj_map.get(key)
         if obj:
             try:
-                obj.ViewObject.Visibility = True
-                set_layer_detail(obj, True)
+                sync_new_layer_display(self._doc, obj)
             except Exception:
                 pass
         FreeCADGui.updateGui()

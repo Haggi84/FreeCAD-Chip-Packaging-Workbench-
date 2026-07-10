@@ -55,7 +55,8 @@ class ShowDetailLayerPanelCommand:
         _panel_ref = panel
 
 
-FreeCADGui.addCommand(
-    "ShowDetailLayerPanelCommand",
-    ShowDetailLayerPanelCommand(),
-)
+if FreeCAD.GuiUp:
+    FreeCADGui.addCommand(
+        "ShowDetailLayerPanelCommand",
+        ShowDetailLayerPanelCommand(),
+    )

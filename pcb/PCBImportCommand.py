@@ -457,4 +457,5 @@ def _refresh_contact_panel():
         pass
 
 
-FreeCADGui.addCommand("PCBImportCommand", PCBImportCommand())
+if FreeCAD.GuiUp:
+    FreeCADGui.addCommand("PCBImportCommand", PCBImportCommand())

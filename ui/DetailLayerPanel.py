@@ -35,6 +35,21 @@ Modes
 -----
   Cursor mode  — Z-slider controls which layer shows the detail view.
   Free mode    — each row is independently toggleable.
+
+Relationship to the other GDS performance mechanisms
+------------------------------------------------------
+This panel's SOLID/LOADING/DETAIL state (above) is driven by
+ui.LODManager — see its module docstring for the full four-mechanism
+picture. The "Det." column here is a per-row front-end onto
+gds.TogglePerformanceModeCommand's fast-mesh toggle (same mechanism as the
+document-wide button, just scoped to one layer). The "BBox" column is a
+*separate*, fourth mechanism — _simplify_layer()/_restore_layer() below —
+that destructively swaps an already-loaded layer's Shape for its own
+bounding box. Because a fast-mesh/via-block companion is baked once and
+reused forever by name, swapping the source Shape without also invalidating
+those companions would leave them silently showing stale geometry baked
+from the Shape's *previous* contents — _simplify_layer/_restore_layer call
+_invalidate_perf_caches() for exactly this reason.
 """
 
 import os
@@ -111,6 +126,29 @@ def _is_via_layer(obj) -> bool:
 _simplified_shapes: dict = {}
 
 
+def _invalidate_perf_caches(obj):
+    """
+    Delete any fast-mesh / via-block companion cached for *obj*, since its
+    Shape is about to be replaced in place.  Both companions are baked once
+    and reused forever by name — without this, they'd silently keep showing
+    geometry baked from the Shape's contents *before* this swap, invisibly
+    out of sync with the layer they claim to represent.
+    """
+    doc = getattr(obj, "Document", None)
+    if doc is None:
+        return
+    try:
+        from gds.TogglePerformanceModeCommand import invalidate_layer_mesh
+        invalidate_layer_mesh(doc, obj.Name)
+    except Exception:
+        pass
+    try:
+        from gds.ToggleViaDetailCommand import invalidate_via_block
+        invalidate_via_block(doc, obj.Name)
+    except Exception:
+        pass
+
+
 def _simplify_layer(obj) -> bool:
     """Replace obj's shape with its axis-aligned bounding box.  Returns True on success."""
     if obj.Name in _simplified_shapes:
@@ -128,6 +166,7 @@ def _simplify_layer(obj) -> bool:
         )
         _simplified_shapes[obj.Name] = shape
         obj.Shape = box
+        _invalidate_perf_caches(obj)
         FreeCAD.Console.PrintMessage(f"[Simplify] {obj.Name}: full geometry → bounding box\n")
         return True
     except Exception as exc:
@@ -141,6 +180,7 @@ def _restore_layer(obj) -> bool:
         return False
     try:
         obj.Shape = _simplified_shapes.pop(obj.Name)
+        _invalidate_perf_caches(obj)
         FreeCAD.Console.PrintMessage(f"[Simplify] {obj.Name}: bounding box → full geometry\n")
         return True
     except Exception as exc:

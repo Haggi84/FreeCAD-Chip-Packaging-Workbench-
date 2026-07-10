@@ -47,7 +47,8 @@ class LeadframeCommand:
     def IsActive(self):
         return True
 
-FreeCADGui.addCommand('LeadframeCommand', LeadframeCommand())
+if FreeCAD.GuiUp:
+    FreeCADGui.addCommand('LeadframeCommand', LeadframeCommand())
 
 
 def center_leadframe_on_gds(doc=None):
@@ -162,4 +163,5 @@ class CenterLeadframeCommand:
         return has_gds and has_lf
 
 
-FreeCADGui.addCommand("CenterLeadframeCommand", CenterLeadframeCommand())
+if FreeCAD.GuiUp:
+    FreeCADGui.addCommand("CenterLeadframeCommand", CenterLeadframeCommand())

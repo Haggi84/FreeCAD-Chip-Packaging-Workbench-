@@ -86,4 +86,5 @@ def _action_label(action_type):
     }.get(action_type, action_type)
 
 
-FreeCADGui.addCommand("SaveSessionCommand", SaveSessionCommand())
+if FreeCAD.GuiUp:
+    FreeCADGui.addCommand("SaveSessionCommand", SaveSessionCommand())

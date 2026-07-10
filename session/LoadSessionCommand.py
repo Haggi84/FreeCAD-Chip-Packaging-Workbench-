@@ -540,4 +540,5 @@ class LoadSessionCommand:
         return True
 
 
-FreeCADGui.addCommand("LoadSessionCommand", LoadSessionCommand())
+if FreeCAD.GuiUp:
+    FreeCADGui.addCommand("LoadSessionCommand", LoadSessionCommand())

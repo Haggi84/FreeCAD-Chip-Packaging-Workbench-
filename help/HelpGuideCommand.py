@@ -211,4 +211,5 @@ class HelpGuideCommand:
         return True
 
 
-FreeCADGui.addCommand("HelpGuideCommand", HelpGuideCommand())
+if FreeCAD.GuiUp:
+    FreeCADGui.addCommand("HelpGuideCommand", HelpGuideCommand())

@@ -104,12 +104,18 @@ def build_housing(config):
     housing = doc.addObject("Part::Cut", "HousingBody")
     housing.Base = outer_body
     housing.Tool = inner_cut
-    housing.ViewObject.Transparency = int(transparency * 100)
+    if FreeCAD.GuiUp:
+        housing.ViewObject.Transparency = int(transparency * 100)
 
     # Corner alignment posts
     post_size = min(1.0, wall_thickness * 0.5)
     post_height = leadframe_thickness + clearance
-    post_sketch = doc.addObject("Sketcher::SketchObject", "AlignmentPosts")
+    # Named distinctly from the extrusion below (matches the LidSketch/Lid
+    # pattern used for the lid) — previously both sketch and extrusion were
+    # named "AlignmentPosts", so FreeCAD silently renamed the extrusion to
+    # "AlignmentPosts001" and any doc.getObject("AlignmentPosts") lookup
+    # would get the flat sketch (zero volume) instead of the actual solid.
+    post_sketch = doc.addObject("Sketcher::SketchObject", "AlignmentPostsSketch")
     post_sketch.Placement = Base.Placement(Base.Vector(0, 0, wall_thickness), Base.Rotation(0, 0, 0, 1))
     post_positions = [
         (inner_x + post_size / 2, inner_y + post_size / 2),
@@ -135,13 +141,15 @@ def build_housing(config):
     post_extrusion.Base = post_sketch
     post_extrusion.Dir = Base.Vector(0, 0, post_height)
     post_extrusion.Solid = True
-    post_extrusion.ViewObject.Transparency = int(transparency * 100)
+    if FreeCAD.GuiUp:
+        post_extrusion.ViewObject.Transparency = int(transparency * 100)
 
     # Fuse posts into housing
     final_housing = doc.addObject("Part::Fuse", "FinalHousing")
     final_housing.Base = housing
     final_housing.Tool = post_extrusion
-    final_housing.ViewObject.Transparency = int(transparency * 100)
+    if FreeCAD.GuiUp:
+        final_housing.ViewObject.Transparency = int(transparency * 100)
 
     # Optional lid
     if include_lid:
@@ -163,10 +171,12 @@ def build_housing(config):
         lid_extrusion.Base = lid_sketch
         lid_extrusion.Dir = Base.Vector(0, 0, lid_thickness)
         lid_extrusion.Solid = True
-        lid_extrusion.ViewObject.Transparency = int(transparency * 100)
+        if FreeCAD.GuiUp:
+            lid_extrusion.ViewObject.Transparency = int(transparency * 100)
 
     doc.recompute()
-    FreeCADGui.activeDocument().activeView().viewIsometric()
-    FreeCADGui.SendMsgToActiveView("ViewFit")
+    if FreeCAD.GuiUp:
+        FreeCADGui.activeDocument().activeView().viewIsometric()
+        FreeCADGui.SendMsgToActiveView("ViewFit")
 
     return doc

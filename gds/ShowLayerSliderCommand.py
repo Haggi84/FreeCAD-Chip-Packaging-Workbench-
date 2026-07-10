@@ -50,4 +50,5 @@ class ShowLayerSliderCommand:
         _panel_ref = panel   # keep alive
 
 
-FreeCADGui.addCommand("ShowLayerSliderCommand", ShowLayerSliderCommand())
+if FreeCAD.GuiUp:
+    FreeCADGui.addCommand("ShowLayerSliderCommand", ShowLayerSliderCommand())

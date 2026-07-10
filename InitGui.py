@@ -20,6 +20,7 @@ try:
     from gds import ShowDetailLayerPanelCommand
     from leadframe import LeadframeCommand
     from leadframe import LeadframeLibraryCommand
+    from leadframe import PinNumberingCommand
     from housing import HousingCommand
     from leadframe import LayeronLeadframe
     from wirebond import WirebondCommand
@@ -53,6 +54,7 @@ class AdvancedMenuCommand:
         ("Housing Configurator",     "HousingCommand",             "Housing_Configurator.png"),
         ("Layer on Leadframe",       "LayeronLeadframe",           "Layer on Leadframe.png"),
         ("Define Contact Points",    "DefineContactPointsCommand", "Define_Contact_Points.svg"),
+        ("Pin Numbering",            "PinNumberingCommand",        "Pin_Numbering.svg"),
     ]
 
     def GetResources(self):
@@ -88,7 +90,8 @@ class AdvancedMenuCommand:
         return True
 
 
-FreeCADGui.addCommand("AdvancedMenuCommand", AdvancedMenuCommand())
+if FreeCAD.GuiUp:
+    FreeCADGui.addCommand("AdvancedMenuCommand", AdvancedMenuCommand())
 
 
 # ── Workbench definition ───────────────────────────────────────────────────────

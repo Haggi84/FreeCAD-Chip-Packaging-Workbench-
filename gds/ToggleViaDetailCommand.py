@@ -19,7 +19,19 @@ State per VIA layer:
   Detail               — hide the block, show the detailed B-rep.
 
 VIA layers are detected by name/label containing "via".  They are managed
-here independently of the fast-mesh render toggle, which skips them.
+here independently of the fast-mesh render toggle, which skips them in its
+own bulk baking pass and instead dispatches any newly-loaded via layer to
+sync_new_via_layer() below.
+
+Relationship to the other GDS performance mechanisms
+------------------------------------------------------
+One of four independent, cooperating mechanisms — see ui/LODManager.py's
+module docstring for the full picture. In short: this module only decides
+how VIA layers specifically are simplified; gds.TogglePerformanceModeCommand
+owns non-via layers and calls into sync_new_via_layer() here for via layers
+it encounters; ui.DetailLayerPanel's bbox-simplify toggle is a separate,
+independent per-layer Shape swap that must call invalidate_via_block() to
+avoid leaving a stale block cached under the old geometry.
 """
 
 import FreeCAD
@@ -77,6 +89,26 @@ def _via_block_group(doc):
     return grp
 
 
+def invalidate_via_block(doc, obj_name: str):
+    """
+    Delete the cached via-simplification block for *obj_name*, if any,
+    forcing a fresh build next time via-simplified mode is (re)applied.
+    Companion to TogglePerformanceModeCommand.invalidate_layer_mesh — call
+    whenever a via layer's underlying Shape is replaced/mutated in place, or
+    the block keeps showing clusters computed from stale geometry.
+    """
+    if doc is None:
+        return
+    block = doc.getObject(obj_name + _VIA_BLOCK_SUFFIX)
+    if block is not None:
+        try:
+            doc.removeObject(block.Name)
+        except Exception as exc:
+            FreeCAD.Console.PrintWarning(
+                f"[ViaBlock] invalidate_via_block '{obj_name}': {exc}\n"
+            )
+
+
 def _build_via_block(doc, obj, grp):
     """
     Create (once) a simplified block for via layer *obj* — one bounding box
@@ -120,6 +152,57 @@ def _build_via_block(doc, obj, grp):
 
 
 # ── public API ─────────────────────────────────────────────────────────────────
+
+def is_via_detailed() -> bool:
+    """True when via layers are currently showing full detail (not blocks)."""
+    return _via_detailed
+
+
+def sync_new_via_layer(doc, obj):
+    """
+    Apply the document's CURRENT global via display mode to *obj* — a via
+    layer that just finished loading (e.g. the LOD manager promoting a
+    lazily-loaded via layer from a placeholder to real geometry).
+
+    Without this, a via layer loaded after the initial import never gets
+    simplified at all — it would just sit in full B-rep detail regardless of
+    whether every other via layer in the document is currently collapsed to
+    blocks. Companion to gds.TogglePerformanceModeCommand.sync_new_layer_display,
+    which calls into this for any newly-loaded layer that is a via layer.
+
+    Deliberately does not bail out early when obj.ViewObject is None (e.g. no
+    GUI session) — _build_via_block() still creates the block object itself
+    in that case, only its own trailing visibility touch is a no-op, caught
+    by its own try/except; bailing here first would skip block creation
+    entirely rather than just skipping the display update.
+    """
+    if _via_detailed:
+        try:
+            obj.ViewObject.Visibility = True
+        except Exception:
+            pass
+        return
+    try:
+        grp = _via_block_group(doc)
+        block = _build_via_block(doc, obj, grp)
+        if block is not None:
+            try:
+                obj.ViewObject.Visibility   = False
+                block.ViewObject.Visibility = True
+            except Exception:
+                pass
+        else:
+            # Block build failed — at least show the real geometry rather
+            # than leaving the layer invisible.
+            try:
+                obj.ViewObject.Visibility = True
+            except Exception:
+                pass
+    except Exception as exc:
+        FreeCAD.Console.PrintWarning(
+            f"[ViaBlock] sync_new_via_layer '{obj.Name}': {exc}\n"
+        )
+
 
 def apply_via_simplified(doc):
     """Show a simple block for every via layer; hide the detailed via geometry."""
@@ -208,4 +291,5 @@ class ToggleViaDetailCommand:
         FreeCADGui.updateGui()
 
 
-FreeCADGui.addCommand("ToggleViaDetailCommand", ToggleViaDetailCommand())
+if FreeCAD.GuiUp:
+    FreeCADGui.addCommand("ToggleViaDetailCommand", ToggleViaDetailCommand())

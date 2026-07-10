@@ -130,9 +130,10 @@ class ShowContactPointPanelCommand:
 
 
 # Register commands
-FreeCADGui.addCommand("WirebondCommand", WirebondCommand())
-FreeCADGui.addCommand("FinishWireBondingCommand", FinishWireBondingCommand())
-FreeCADGui.addCommand("CancelWireBondingCommand", CancelWireBondingCommand())
-FreeCADGui.addCommand("DefineContactPointsCommand", DefineContactPointsCommand())
-FreeCADGui.addCommand("ShowContactPointPanelCommand", ShowContactPointPanelCommand())
-FreeCADGui.addCommand("WireBumpConfiguratorCommand", WireBumpConfiguratorCommand())
+if FreeCAD.GuiUp:
+    FreeCADGui.addCommand("WirebondCommand", WirebondCommand())
+    FreeCADGui.addCommand("FinishWireBondingCommand", FinishWireBondingCommand())
+    FreeCADGui.addCommand("CancelWireBondingCommand", CancelWireBondingCommand())
+    FreeCADGui.addCommand("DefineContactPointsCommand", DefineContactPointsCommand())
+    FreeCADGui.addCommand("ShowContactPointPanelCommand", ShowContactPointPanelCommand())
+    FreeCADGui.addCommand("WireBumpConfiguratorCommand", WireBumpConfiguratorCommand())

@@ -48,4 +48,5 @@ class SessionMenuCommand:
         return True
 
 
-FreeCADGui.addCommand("SessionMenuCommand", SessionMenuCommand())
+if FreeCAD.GuiUp:
+    FreeCADGui.addCommand("SessionMenuCommand", SessionMenuCommand())

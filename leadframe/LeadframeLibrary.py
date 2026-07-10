@@ -11,7 +11,6 @@ from urllib.parse import urljoin
 
 import FreeCAD
 import FreeCADGui
-import ImportGui
 from compat import QtCore, QtGui, QtWidgets, qenum_int
 
 from Get_Path import get_icon
@@ -1012,6 +1011,11 @@ def _import_into_freecad(file_path: str):
     pkg_doc_name = pkg_doc.Name      # FreeCAD may append a number on collision
 
     docs_before  = set(FreeCAD.listDocuments().keys())
+    # Deferred: ImportGui cannot even be imported in console mode (raises
+    # ImportError unconditionally, unlike FreeCADGui which merely lacks
+    # addCommand) — a module-level import would break every headless
+    # script that touches this file, not just this one function.
+    import ImportGui
     ImportGui.insert(file_path, pkg_doc_name)
 
     # Some importers open a new document instead of inserting into the named one.
@@ -1577,4 +1581,5 @@ class LeadframeLibraryCommand:
         return True
 
 
-FreeCADGui.addCommand("LeadframeLibraryCommand", LeadframeLibraryCommand())
+if FreeCAD.GuiUp:
+    FreeCADGui.addCommand("LeadframeLibraryCommand", LeadframeLibraryCommand())

@@ -36,4 +36,5 @@ class HousingCommand:
     def IsActive(self):
         return True
 
-FreeCADGui.addCommand('HousingCommand', HousingCommand())
+if FreeCAD.GuiUp:
+    FreeCADGui.addCommand('HousingCommand', HousingCommand())

@@ -242,8 +242,30 @@ def create_layer_on_leadframe():
             pass
 
         doc.recompute()
-        FreeCADGui.activeDocument().activeView().viewIsometric()
-        FreeCADGui.SendMsgToActiveView("ViewFit")
+
+        # Default to fast-mesh view for large dies, matching the GDS import
+        # paths in GDSCommand.py (load_gds_layers / load_gds_with_params).
+        # This document previously stayed in full B-rep rendering mode no
+        # matter how many layers/polygons the GDS contained.
+        try:
+            from gds.TogglePerformanceModeCommand import apply_performance_mode
+            apply_performance_mode(doc)
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(f"[LayeronLeadframe] Performance mode: {e}\n")
+        try:
+            from gds.ToggleViaDetailCommand import apply_via_simplified
+            apply_via_simplified(doc)
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(f"[LayeronLeadframe] Via simplify: {e}\n")
+
+        # apply_performance_mode() only bakes/swaps geometry — it does not
+        # frame the view itself (unlike GDSCommand's local wrapper of the
+        # same call), so that is still done explicitly here.
+        FreeCADGui.updateGui()
+        v = FreeCADGui.activeDocument().activeView() if FreeCADGui.activeDocument() else None
+        if v:
+            v.viewIsometric()
+            v.fitAll()
 
         session_manager.record_action("layer_on_leadframe", {
             "gds_path":        gds_path,
@@ -283,4 +305,5 @@ class LayeronLeadframe:
         return True
     
 
-FreeCADGui.addCommand("LayeronLeadframe", LayeronLeadframe())
+if FreeCAD.GuiUp:
+    FreeCADGui.addCommand("LayeronLeadframe", LayeronLeadframe())

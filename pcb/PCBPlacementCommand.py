@@ -175,4 +175,5 @@ class PCBPlacementCommand:
         )
 
 
-FreeCADGui.addCommand("PCBPlacementCommand", PCBPlacementCommand())
+if FreeCAD.GuiUp:
+    FreeCADGui.addCommand("PCBPlacementCommand", PCBPlacementCommand())

@@ -38,8 +38,9 @@ def _box(x0, y0, z0, dx, dy, dz) -> Part.Shape:
 def _feature(doc, name: str, shape: Part.Shape, color, transparency: int = 0):
     obj = doc.addObject("Part::Feature", name)
     obj.Shape = shape
-    obj.ViewObject.ShapeColor = color
-    obj.ViewObject.Transparency = transparency
+    if FreeCAD.GuiUp:
+        obj.ViewObject.ShapeColor = color
+        obj.ViewObject.Transparency = transparency
     return obj
 
 
@@ -86,9 +87,10 @@ def _create_contact_markers(doc, pairs: list):
         marker.SourceObject  = lead_obj.Name
         marker.IsContactPoint = True
 
-        marker.ViewObject.PointSize  = 8
-        marker.ViewObject.PointColor = _CONTACT_COLOR
-        marker.ViewObject.DisplayMode = "Points"
+        if FreeCAD.GuiUp:
+            marker.ViewObject.PointSize  = 8
+            marker.ViewObject.PointColor = _CONTACT_COLOR
+            marker.ViewObject.DisplayMode = "Points"
 
 
 # ── public entry point ─────────────────────────────────────────────────────────
@@ -176,8 +178,9 @@ def build_leadframe(config: dict, doc=None, gds_objects=None):
             pkg_group.addObject(_o)
 
     doc.recompute()
-    FreeCADGui.activeDocument().activeView().viewIsometric()
-    FreeCADGui.SendMsgToActiveView("ViewFit")
+    if FreeCAD.GuiUp:
+        FreeCADGui.activeDocument().activeView().viewIsometric()
+        FreeCADGui.SendMsgToActiveView("ViewFit")
     return doc
 
 
@@ -297,7 +300,8 @@ def _build_bga(doc, config, color):
             ball.Placement = Base.Placement(
                 Base.Vector(bx, by, -radius), Base.Rotation(0, 0, 0, 1)
             )
-            ball.ViewObject.ShapeColor = color
+            if FreeCAD.GuiUp:
+                ball.ViewObject.ShapeColor = color
             _tag_lead(ball, "BGA", i * ny + j + 1)
             # Top of ball is at z = placement.z + radius = 0
             snap_pt = Base.Vector(bx, by, 0.0)

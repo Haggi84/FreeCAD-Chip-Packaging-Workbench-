@@ -38,7 +38,7 @@ Download the **FreeCAD 1.1.1** installer from the official website:
 
 Run the installer and accept the default installation path:
 
-- **Windows:** `C:\Program Files\FreeCAD 1.0\`
+- **Windows:** `C:\Program Files\FreeCAD 1.1\`
 - **Linux:** Follow the AppImage or package manager instructions on the download page.
 
 After installation, launch FreeCAD once to let it create the user configuration directory, then close it again.
@@ -54,14 +54,14 @@ The workbench requires **gdstk** for reading GDSII files. It must be installed i
 Open a **Command Prompt** or **PowerShell** and run:
 
 ```powershell
-"C:\Program Files\FreeCAD 1.0\bin\python.exe" -m pip install gdstk
+"C:\Program Files\FreeCAD 1.1\bin\python.exe" -m pip install gdstk
 ```
 
 > If pip is not available, bootstrap it first:
 > ```powershell
-> "C:\Program Files\FreeCAD 1.0\bin\python.exe" -m ensurepip --upgrade
-> "C:\Program Files\FreeCAD 1.0\bin\python.exe" -m pip install --upgrade pip
-> "C:\Program Files\FreeCAD 1.0\bin\python.exe" -m pip install gdstk
+> "C:\Program Files\FreeCAD 1.1\bin\python.exe" -m ensurepip --upgrade
+> "C:\Program Files\FreeCAD 1.1\bin\python.exe" -m pip install --upgrade pip
+> "C:\Program Files\FreeCAD 1.1\bin\python.exe" -m pip install gdstk
 > ```
 
 ### Linux
@@ -78,7 +78,7 @@ freecad-python3 -m pip install gdstk
 ### Verify the install
 
 ```powershell
-"C:\Program Files\FreeCAD 1.0\bin\python.exe" -c "import gdstk; print(gdstk.__version__)"
+"C:\Program Files\FreeCAD 1.1\bin\python.exe" -c "import gdstk; print(gdstk.__version__)"
 ```
 
 You should see a version number printed (e.g. `0.9.x`).
@@ -99,7 +99,7 @@ The workbench must be placed inside FreeCAD's **user `Mod` folder** — not the 
 
 If the `Mod` folder does not exist yet, create it.
 
-It's also possible for **Windows** to choose a path like e.g. `C:\Program Files\FreeCAD 1.0\Mod\DI-PASSIONATE\`
+It's also possible for **Windows** to choose a path like e.g. `C:\Program Files\FreeCAD 1.1\Mod\DI-PASSIONATE\`
 
 ### Clone the repository
 
@@ -170,11 +170,11 @@ Create `.vscode/settings.json` inside the project folder so that the VS Code Pyt
 ```json
 {
     "python.analysis.extraPaths": [
-        "C:/Program Files/FreeCAD 1.0/bin",
-        "C:/Program Files/FreeCAD 1.0/bin/Lib/site-packages",
+        "C:/Program Files/FreeCAD 1.1/bin",
+        "C:/Program Files/FreeCAD 1.1/bin/Lib/site-packages",
         "C:/Users/<YourName>/AppData/Roaming/Python/Python311/site-packages"
     ],
-    "python.defaultInterpreterPath": "C:/Program Files/FreeCAD 1.0/bin/python.exe"
+    "python.defaultInterpreterPath": "C:/Program Files/FreeCAD 1.1/bin/python.exe"
 }
 ```
 
@@ -212,14 +212,14 @@ You can attach the VS Code debugger to a running FreeCAD instance.
 
 ```powershell
 $env:FREECAD_DEBUGPY = "1"
-& "C:\Program Files\FreeCAD 1.0\bin\FreeCAD.exe"
+& "C:\Program Files\FreeCAD 1.1\bin\FreeCAD.exe"
 ```
 
 **Windows Command Prompt:**
 
 ```cmd
 set FREECAD_DEBUGPY=1
-"C:\Program Files\FreeCAD 1.0\bin\FreeCAD.exe"
+"C:\Program Files\FreeCAD 1.1\bin\FreeCAD.exe"
 ```
 
 **Linux / macOS:**
@@ -293,7 +293,7 @@ The library fetches data from the MirrorSemi website. Check your internet connec
 Install it into FreeCAD's Python:
 
 ```powershell
-"C:\Program Files\FreeCAD 1.0\bin\python.exe" -m pip install debugpy
+"C:\Program Files\FreeCAD 1.1\bin\python.exe" -m pip install debugpy
 ```
 
 ### FreeCAD crashes on startup after installing the workbench

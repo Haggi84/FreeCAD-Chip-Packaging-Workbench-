@@ -170,8 +170,11 @@ def _swept_tube(p0: Base.Vector, p1: Base.Vector, r: float,
         if (solid is not None and not solid.isNull()
                 and solid.isValid() and solid.Solids):
             return solid.Solids[0] if len(solid.Solids) == 1 else solid
-    except Exception:
-        pass
+    except Exception as e:
+        FreeCAD.Console.PrintWarning(
+            f"[wirebond] _swept_tube: makePipeShell(solid) failed, "
+            f"falling back to manual shell+caps: {e}\n"
+        )
 
     # ── Fallback: manual shell + end caps ─────────────────────────────────
     try:
@@ -183,8 +186,17 @@ def _swept_tube(p0: Base.Vector, p1: Base.Vector, r: float,
         solid = Part.makeSolid(shell)
         if solid.isValid() and not solid.isNull() and solid.Solids:
             return solid
+        FreeCAD.Console.PrintWarning(
+            "[wirebond] _swept_tube: manual shell+caps did not produce a "
+            "solid — returning an open pipe (no volume; downstream boolean "
+            "trims that rely on a solid will silently no-op).\n"
+        )
         return pipe
-    except Exception:
+    except Exception as e:
+        FreeCAD.Console.PrintWarning(
+            f"[wirebond] _swept_tube: manual shell+caps failed too, "
+            f"returning an open pipe: {e}\n"
+        )
         return spine_wire.makePipe(profile)
 
 
@@ -202,8 +214,17 @@ def _fuse_parts(*parts) -> Part.Shape:
             if candidate.isValid() and not candidate.isNull():
                 current = candidate
             else:
+                FreeCAD.Console.PrintWarning(
+                    "[wirebond] _fuse_parts: fuse() returned an invalid/null "
+                    "result — keeping this part unfused (result will be a "
+                    "compound, not one solid).\n"
+                )
                 accumulated.append(p)
-        except Exception:
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(
+                f"[wirebond] _fuse_parts: fuse() raised, keeping this part "
+                f"unfused (result will be a compound, not one solid): {e}\n"
+            )
             accumulated.append(p)
     # If every fuse succeeded current == fully fused solid
     if len(accumulated) == 1:
@@ -253,8 +274,18 @@ def _sweep_circle_along(points, r: float) -> Part.Shape:
         if (solid is not None and not solid.isNull()
                 and solid.isValid() and solid.Solids):
             return solid.Solids[0] if len(solid.Solids) == 1 else solid
-    except Exception:
-        pass
+        FreeCAD.Console.PrintWarning(
+            "[wirebond] _sweep_circle_along: makePipeShell(solid) returned "
+            "an invalid/non-solid result, returning an open pipe (no "
+            "volume; downstream boolean trims and fuse-with-feet will "
+            "silently no-op).\n"
+        )
+    except Exception as e:
+        FreeCAD.Console.PrintWarning(
+            f"[wirebond] _sweep_circle_along: makePipeShell(solid) failed, "
+            f"returning an open pipe (no volume; downstream boolean trims "
+            f"and fuse-with-feet will silently no-op): {e}\n"
+        )
     return spine_wire.makePipe(profile)
 
 
@@ -320,15 +351,23 @@ def _sweep_circle_along_polyline(points, r: float) -> Part.Shape:
         if (solid is not None and not solid.isNull()
                 and solid.isValid() and solid.Solids):
             return solid.Solids[0] if len(solid.Solids) == 1 else solid
-    except Exception:
-        pass
+    except Exception as e:
+        FreeCAD.Console.PrintWarning(
+            f"[wirebond] _sweep_circle_along_polyline: round-corner "
+            f"makePipeShell failed, trying default transition: {e}\n"
+        )
     try:
         solid = spine_wire.makePipeShell([profile], True, False)
         if (solid is not None and not solid.isNull()
                 and solid.isValid() and solid.Solids):
             return solid.Solids[0] if len(solid.Solids) == 1 else solid
-    except Exception:
-        pass
+    except Exception as e:
+        FreeCAD.Console.PrintWarning(
+            f"[wirebond] _sweep_circle_along_polyline: default-transition "
+            f"makePipeShell also failed, returning an open pipe (no volume; "
+            f"downstream boolean trims and fuse-with-feet will silently "
+            f"no-op): {e}\n"
+        )
     return spine_wire.makePipe(profile)
 
 
@@ -855,7 +894,17 @@ class ManualWireBonding:
                 return c.z - (n.x * (cp_pos.x - c.x)
                               + n.y * (cp_pos.y - c.y)) / n.z
             return face.BoundBox.ZMax
-        except Exception:
+        except Exception as e:
+            # BoundBox.ZMax is the *whole-body* highest corner — correct for
+            # a flat pad, but for a tilted body (e.g. an angled PCB) it can
+            # be far above the actual contact point, which is exactly the
+            # bug this function's face-plane projection exists to avoid.
+            # Surface a warning so a wrong z_cut here doesn't go unnoticed.
+            FreeCAD.Console.PrintWarning(
+                f"[wirebond] _surface_z_at: face-plane projection failed, "
+                f"falling back to whole-body BoundBox.ZMax (may be wrong "
+                f"for a tilted surface): {e}\n"
+            )
             return solid.BoundBox.ZMax
 
     def _trim_wire_at_pads(self, shape: Part.Shape, cp1, cp2) -> Part.Shape:

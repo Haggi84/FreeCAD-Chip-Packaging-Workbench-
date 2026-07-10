@@ -532,4 +532,5 @@ class SetContactPointsOnFaceCommand:
         return FreeCAD.activeDocument() is not None
 
 
-FreeCADGui.addCommand("SetContactPointsOnFaceCommand", SetContactPointsOnFaceCommand())
+if FreeCAD.GuiUp:
+    FreeCADGui.addCommand("SetContactPointsOnFaceCommand", SetContactPointsOnFaceCommand())
