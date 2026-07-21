@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Open housing body (no top edge = open package) -->
+  <path d="M 10,56 L 10,28 L 54,28 L 54,56 Z"
+        fill="#cfd8dc" stroke="#37474f" stroke-width="3" stroke-linejoin="round"/>
+  <!-- Die visible inside -->
+  <rect x="24" y="40" width="16" height="10" rx="1" fill="#1A99E6"/>
+
+  <!-- Lid, translucent, hovering above, about to be placed -->
+  <rect x="10" y="10" width="44" height="9" rx="2"
+        fill="#9ec6e0" fill-opacity="0.6" stroke="#1f5b80" stroke-width="2.5"/>
+
+  <!-- Downward placement arrow -->
+  <line x1="32" y1="21" x2="32" y2="26" stroke="#ff9800" stroke-width="3" stroke-linecap="round"/>
+  <polygon points="27,25 32,31 37,25" fill="#ff9800"/>
+</svg>

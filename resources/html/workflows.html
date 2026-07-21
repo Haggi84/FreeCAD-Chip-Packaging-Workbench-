@@ -14,7 +14,7 @@
 <tr><td>6</td><td>Bond wires</td><td>Wire Bond</td><td>Solid 3-D BondWire objects</td></tr>
 <tr><td>7</td><td>Add bumps</td><td>Wire Bump Configurator</td><td>WireBump objects at wire endpoints</td></tr>
 <tr><td>8</td><td>Add housing</td><td>Housing Configurator (Advanced)</td><td>Transparent package body</td></tr>
-<tr><td>9</td><td>Save</td><td>Session → Save</td><td>.dipas session file for replay</td></tr>
+<tr><td>9</td><td>Save</td><td>Session → Save</td><td>Native .FCStd document with the full design</td></tr>
 </table>
 
 <h2>Workflow B — GDS Visualization Only</h2>
@@ -39,16 +39,15 @@
 </ol>
 </div>
 
-<h2>Workflow D — Session Replay</h2>
+<h2>Workflow D — Reopen a Saved Design</h2>
 
 <div class="card">
 <ol>
 <li>Open FreeCAD with the DI-PASSIONATE workbench</li>
-<li>Click <b>Session ▾ → Load Design Session</b></li>
-<li>Select the <code>.dipas</code> file</li>
-<li>All recorded actions are replayed automatically — GDS import, leadframe, housing, wire bonding</li>
+<li>Click <b>Session ▾ → Load Design Session</b> (or native File → Open)</li>
+<li>Select the <code>.FCStd</code> file</li>
+<li>The exact design state is restored — including manual edits made in the previous session, not just a replay of recognized actions</li>
 </ol>
-<p>Session replay is useful for regenerating a design after modifying the source GDS file.</p>
 </div>
 
 <h2>Workflow E — STEP Package Import</h2>
@@ -83,5 +82,5 @@
 <li>The <b>Contact Point Browser</b> dock lets you quickly verify which pads have been marked</li>
 <li>Each wire bond is a separate FreeCAD transaction — Ctrl+Z undoes individual wires</li>
 <li>Move/Rotate Chip captures a placement snapshot on open; use <b>Restore Original</b> to undo all moves at once</li>
-<li>Save the session before closing — the <code>.dipas</code> file is much smaller than a <code>.FCStd</code> file and fully reproducible</li>
+<li>Save the design before closing — Save Design Session (or Ctrl+S) captures the exact current state, including manual edits</li>
 </ul>

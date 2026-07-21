@@ -13,18 +13,22 @@ if os.environ.get("FREECAD_DEBUGPY") == "1":
 # ── Command imports ────────────────────────────────────────────────────────────
 try:
     from gds import GDSCommand
+    from gds import ImportChipProxyCommand
     from gds import ChipTransformCommand
     from gds import ShowLayerSliderCommand
     from gds import TogglePerformanceModeCommand
     from gds import ToggleViaDetailCommand
+    from ui import LODManager as _LODManager  # noqa: F401  (side-effect: registers WorkbenchState provider)
     from gds import ShowDetailLayerPanelCommand
     from leadframe import LeadframeCommand
     from leadframe import LeadframeLibraryCommand
     from leadframe import PinNumberingCommand
     from housing import HousingCommand
+    from housing import AddLidCommand
     from leadframe import LayeronLeadframe
     from wirebond import WirebondCommand
     from wirebond import SetContactPointsOnFaceCommand
+    from wirebond import InteractiveContactPointCommand
     from help import HelpGuideCommand
     from help import AboutCommand
     from session import SaveSessionCommand
@@ -37,6 +41,23 @@ try:
     FreeCAD.Console.PrintMessage("Commands loaded successfully\n")
 except Exception as e:
     FreeCAD.Console.PrintError(f"Failed to load commands: {e}\n")
+
+
+# ── Workbench-state save/restore observers ────────────────────────────────────
+# Registered at module scope (not inside MyWorkbench.Initialize(), which only
+# runs the first time this specific workbench is activated — a document may
+# be opened before that ever happens). This makes native FreeCAD save/open
+# automatically capture and restore the handful of workbench state values
+# that live in Python module-level globals (fast-mesh mode, VIA detail mode,
+# LOD manager) rather than on a DocumentObject — see session/WorkbenchState.py.
+try:
+    from session import WorkbenchState
+    FreeCAD.addDocumentObserver(WorkbenchState.SaveObserver())
+    if FreeCAD.GuiUp:
+        FreeCADGui.addDocumentObserver(WorkbenchState.RestoreObserver())
+    FreeCAD.Console.PrintMessage("WorkbenchState observers registered\n")
+except Exception as e:
+    FreeCAD.Console.PrintError(f"Failed to register WorkbenchState observers: {e}\n")
 
 
 # ── Advanced tools dropdown command ───────────────────────────────────────────
@@ -52,6 +73,7 @@ class AdvancedMenuCommand:
         ("Leadframe Configurator",   "LeadframeCommand",           "Leadframe_Configurator.png"),
         ("Center Leadframe",         "CenterLeadframeCommand",     "Center_Leadframe.svg"),
         ("Housing Configurator",     "HousingCommand",             "Housing_Configurator.png"),
+        ("Add Lid",                  "AddLidCommand",              "Add_Lid.svg"),
         ("Layer on Leadframe",       "LayeronLeadframe",           "Layer on Leadframe.png"),
         ("Define Contact Points",    "DefineContactPointsCommand", "Define_Contact_Points.svg"),
         ("Pin Numbering",            "PinNumberingCommand",        "Pin_Numbering.svg"),
@@ -103,6 +125,22 @@ class MyWorkbench(FreeCADGui.Workbench):
     ToolTip  = "FreeCAD Chip-Packaging Workbench"
     Icon     = get_icon("my_icon.svg")
 
+    # Short category label shown at the start of each toolbar row — a
+    # QToolBar's windowTitle() (used for the "GDSII Tools" / etc. name in
+    # View → Toolbars) is only ever shown inline when the toolbar is
+    # floating/undocked, never when docked in the normal toolbar area, so
+    # splitting one toolbar into several gave no visual cue for which
+    # category you're looking at. See _inject_toolbar_labels().
+    _TOOLBAR_LABELS = {
+        "Technology Configuration": "Tech",
+        "Import":                   "Import",
+        "Rendering":                "Render",
+        "Package Assembly":         "Package",
+        "Wire Bonding":             "Bonding",
+        "Wire Bonding Session":     "Confirm / Abort",
+        "Session and Help":         "Workbench",
+    }
+
     def Initialize(self):
         try:
             from compat import QtCore as _QtCore
@@ -114,24 +152,73 @@ class MyWorkbench(FreeCADGui.Workbench):
                 ["TechConfigCommand"],
             )
 
-            # ── Main tools toolbar ─────────────────────────────────────────
+            # ── Import ───────────────────────────────────────────────────
             self.appendToolbar(
-                "GDSII Tools",
+                "Import",
                 [
                     "PCBImportCommand",
                     "PCBPlacementCommand",
                     "GDSCommand",
+                    "ImportChipProxyCommand",
+                ],
+            )
+
+            # ── Rendering (how already-imported geometry is displayed) ─────
+            self.appendToolbar(
+                "Rendering",
+                [
                     "TogglePerformanceModeCommand",
                     "ToggleViaDetailCommand",
                     "ShowDetailLayerPanelCommand",
                     "ShowLayerSliderCommand",
-                    "LeadframeLibraryCommand",
+                ],
+            )
+
+            # ── Package Assembly ─────────────────────────────────────────
+            self.appendToolbar(
+                "Package Assembly",
+                [
                     "ChipTransformCommand",
+                    "LeadframeLibraryCommand",
                     "SetContactPointsOnFaceCommand",
+                    "InteractiveContactPointCommand",
                     "ShowContactPointPanelCommand",
+                ],
+            )
+
+            # ── Wire Bonding ─────────────────────────────────────────────
+            self.appendToolbar(
+                "Wire Bonding",
+                [
                     "WirebondCommand",
                     "WireBumpConfiguratorCommand",
+                ],
+            )
+
+            # ── Wire Bonding Session (contextual) ───────────────────────
+            # Confirm / Abort only make sense while a bonding session is
+            # actually active. Hidden at startup by _hide_wirebond_session_toolbar
+            # below; shown/hidden dynamically by
+            # wirebond.ManualWireBonding._set_session_toolbar_visible() as the
+            # session starts/ends, so these two buttons are fast to reach
+            # exactly when — and only when — they're relevant.
+            self.appendToolbar(
+                "Wire Bonding Session",
+                [
+                    "FinishWireBondingCommand",
                     "CancelWireBondingCommand",
+                ],
+            )
+
+            # ── Session and Help ─────────────────────────────────────────
+            # NOTE: deliberately NOT named "Workbench" — FreeCAD's own
+            # built-in workbench-selector widget already uses that exact
+            # title, so a QToolBar of ours with the same windowTitle() was
+            # never matched by findChildren() in _inject_toolbar_labels(),
+            # sending it into an infinite once-a-second retry loop.
+            self.appendToolbar(
+                "Session and Help",
+                [
                     "SessionMenuCommand",
                     "AdvancedMenuCommand",
                     "HelpGuideCommand",
@@ -141,12 +228,154 @@ class MyWorkbench(FreeCADGui.Workbench):
 
             # Inject the status label into the tech config toolbar after Qt
             # has finished building it (singleShot defers until the event loop).
+            # _inject_toolbar_labels MUST run before _inject_tech_status_label:
+            # it rebuilds each toolbar's content (including "Technology
+            # Configuration"), which would silently wipe out the status label
+            # if it ran second — hence the shorter delay here.
+            _QtCore.QTimer.singleShot(350, self._inject_toolbar_labels)
             _QtCore.QTimer.singleShot(400, self._inject_tech_status_label)
+            _QtCore.QTimer.singleShot(400, self._hide_wirebond_session_toolbar)
 
             _FreeCAD.Console.PrintMessage("Toolbars initialized\n")
         except Exception as e:
             import FreeCAD as _FC
             _FC.Console.PrintError(f"Toolbar initialization failed: {e}\n")
+
+    def _hide_wirebond_session_toolbar(self):
+        """Hide the contextual Wire Bonding Session toolbar at startup — it
+        only becomes visible while a bonding session is actually active
+        (see wirebond.ManualWireBonding._set_session_toolbar_visible)."""
+        try:
+            from compat import QtWidgets as _QW
+            import FreeCAD as _FC
+            import FreeCADGui as _FCGui
+
+            mw = _FCGui.getMainWindow()
+            for tb in mw.findChildren(_QW.QToolBar):
+                if tb.windowTitle() == "Wire Bonding Session":
+                    tb.setVisible(False)
+                    break
+        except Exception as exc:
+            import FreeCAD as _FC
+            _FC.Console.PrintWarning(
+                f"Wire Bonding Session toolbar hide failed: {exc}\n"
+            )
+
+    _TOOLBAR_LABEL_MAX_RETRIES = 15   # ~15 s — see _inject_toolbar_labels
+
+    def _inject_toolbar_labels(self, _retry: int = 0):
+        """
+        Add a small category-name caption BELOW each toolbar's icons,
+        compactly — a first attempt at this forced every category onto its
+        own dedicated pair of full-width rows (via insertToolBarBreak),
+        which turned 7 categories into 14 rows and ate most of the window
+        (real user-reported regression). QToolBar can't stack its own
+        content into 2 rows internally, so instead each toolbar's row of
+        individual QAction buttons is replaced with ONE small composite
+        widget — a horizontal button row on top, a caption directly under
+        it — so the toolbar's overall FOOTPRINT shrinks to just that
+        widget's size and several categories can still pack side by side
+        on the same row exactly like before any of this was added, each
+        just two text-lines tall instead of one.
+
+        The QToolButtons are bound to the SAME QAction objects FreeCAD's
+        command system already created (via setDefaultAction), so
+        enable/disable state, tooltips, and click handling keep working
+        unchanged — nothing about the underlying commands is touched, only
+        how their existing buttons are visually arranged.
+
+        Retries with a bounded count (not forever): a toolbar name that
+        collides with something FreeCAD itself already uses (as
+        "Workbench" did with FreeCAD's own workbench-selector widget)
+        would otherwise never be found by findChildren(), sending this
+        into a silent once-a-second retry loop for the rest of the
+        session — cap it so a naming mistake like that fails loudly
+        instead of running forever.
+        """
+        try:
+            from compat import QtWidgets as _QW, QtCore as _QC
+            import FreeCAD as _FC
+            import FreeCADGui as _FCGui
+
+            mw = _FCGui.getMainWindow()
+            toolbars = {tb.windowTitle(): tb for tb in mw.findChildren(_QW.QToolBar)}
+
+            names   = list(self._TOOLBAR_LABELS.keys())
+            missing = [n for n in names if n not in toolbars]
+            if missing:
+                if _retry >= self._TOOLBAR_LABEL_MAX_RETRIES:
+                    _FC.Console.PrintError(
+                        f"Toolbar category labels: giving up after "
+                        f"{self._TOOLBAR_LABEL_MAX_RETRIES} retries — "
+                        f"toolbar(s) never found: {missing}. Likely a "
+                        f"windowTitle() collision with an existing toolbar "
+                        f"of the same name.\n"
+                    )
+                    return
+                _FC.Console.PrintWarning(
+                    f"Toolbar category labels: not found yet ({missing}) — "
+                    f"retrying in 1 s ({_retry + 1}/{self._TOOLBAR_LABEL_MAX_RETRIES})\n"
+                )
+                _QC.QTimer.singleShot(
+                    1000, lambda: self._inject_toolbar_labels(_retry + 1)
+                )
+                return
+
+            for name in names:
+                tb = toolbars[name]
+                if getattr(tb, "_diCategoryLabelled", False):
+                    continue   # already done (e.g. a retry pass)
+
+                # Only real command buttons (icon present) — defensively
+                # excludes any non-command widget action (e.g. the status
+                # label _inject_tech_status_label adds to "Technology
+                # Configuration") from being mis-bound to a QToolButton,
+                # in case scheduling order ever changes again.
+                actions = [
+                    a for a in tb.actions()
+                    if not a.isSeparator() and not a.icon().isNull()
+                ]
+                if not actions:
+                    continue
+
+                container = _QW.QWidget()
+                outer = _QW.QVBoxLayout(container)
+                outer.setContentsMargins(2, 0, 2, 1)
+                outer.setSpacing(0)
+
+                btn_row = _QW.QWidget()
+                btn_lay = _QW.QHBoxLayout(btn_row)
+                btn_lay.setContentsMargins(0, 0, 0, 0)
+                btn_lay.setSpacing(0)
+                for act in actions:
+                    btn = _QW.QToolButton()
+                    btn.setDefaultAction(act)
+                    btn.setIconSize(tb.iconSize())
+                    btn_lay.addWidget(btn)
+                outer.addWidget(btn_row)
+
+                lbl = _QW.QLabel(self._TOOLBAR_LABELS[name])
+                lbl.setAlignment(_QC.Qt.AlignCenter)
+                lbl.setStyleSheet(
+                    "QLabel {"
+                    "  color: #546e7a;"
+                    "  font-size: 9px;"
+                    "  font-weight: bold;"
+                    "}"
+                )
+                outer.addWidget(lbl)
+
+                tb.clear()   # detaches the actions from this toolbar's own
+                             # layout without destroying them — they're
+                             # owned by FreeCAD's command manager, and are
+                             # now shown via the QToolButtons above instead.
+                tb.addWidget(container)
+                tb._diCategoryLabelled = True
+
+            _FC.Console.PrintMessage("Toolbar category labels injected (compact)\n")
+        except Exception as exc:
+            import FreeCAD as _FC
+            _FC.Console.PrintWarning(f"Toolbar category label injection failed: {exc}\n")
 
     def _inject_tech_status_label(self):
         """Find the Technology Configuration toolbar and add a status QLabel."""

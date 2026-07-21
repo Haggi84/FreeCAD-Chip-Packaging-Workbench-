@@ -1,0 +1,86 @@
+name: Headless tests
+
+# Runs the headless smoke-test suite (tests/run_all.py) under a real
+# FreeCAD 1.1.1 freecadcmd — the same tool used to develop and validate the
+# suite locally (see tests/README.md for the full rationale and the list of
+# freecadcmd quirks this workflow works around).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  headless-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Caches the *extracted* AppImage (not the raw download) together with
+      # gdstk already pip-installed into its embedded Python, so a cache hit
+      # skips the ~800 MB download, the extraction, and the pip install —
+      # only a fresh cache needs to pay for all three.
+      - name: Cache extracted FreeCAD + gdstk
+        id: cache-freecad
+        uses: actions/cache@v4
+        with:
+          path: squashfs-root
+          key: freecad-1.1.1-linux-x86_64-py311-gdstk-v1
+
+      - name: Download FreeCAD 1.1.1, extract, install gdstk
+        if: steps.cache-freecad.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          curl -fL -o FreeCAD.AppImage \
+            "https://github.com/FreeCAD/FreeCAD/releases/download/1.1.1/FreeCAD_1.1.1-Linux-x86_64-py311.AppImage"
+          chmod +x FreeCAD.AppImage
+          # --appimage-extract unpacks the squashfs without needing FUSE,
+          # which GitHub-hosted runners don't provide.
+          ./FreeCAD.AppImage --appimage-extract
+          rm FreeCAD.AppImage
+
+          # No -type filter: conda-based builds commonly ship these as
+          # symlinks (e.g. bin/python3 -> python3.11), which `-type f` alone
+          # would miss.
+          PY=$(find squashfs-root -name "python3.11" | head -1)
+          if [ -z "$PY" ]; then
+            PY=$(find squashfs-root -name "python3" | head -1)
+          fi
+          if [ -z "$PY" ]; then
+            echo "::error::Could not locate a Python interpreter inside the extracted AppImage."
+            find squashfs-root -maxdepth 4 -type d
+            exit 1
+          fi
+          echo "Using embedded Python: $PY"
+          "$PY" -m pip install --upgrade pip
+          "$PY" -m pip install gdstk
+
+      - name: Locate freecadcmd
+        id: locate
+        run: |
+          set -e
+          FCC=$(find squashfs-root -iname "freecadcmd" | head -1)
+          if [ -z "$FCC" ]; then
+            echo "::error::Could not locate freecadcmd inside the extracted AppImage."
+            find squashfs-root -maxdepth 4 -type d
+            exit 1
+          fi
+          echo "Using freecadcmd: $FCC"
+          echo "freecadcmd=$FCC" >> "$GITHUB_OUTPUT"
+
+      - name: Run headless test suite
+        run: |
+          "${{ steps.locate.outputs.freecadcmd }}" tests/run_all.py
+
+      # Console output can appear jumbled (see tests/README.md — FreeCAD's
+      # native console buffer flushes separately from Python's stdout), so
+      # the authoritative, cleanly-ordered result lives in results.log.
+      - name: Upload results log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: tests/results.log
+          if-no-files-found: warn

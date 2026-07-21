@@ -29,7 +29,7 @@ class ShowDetailLayerPanelCommand:
                 "height automatically.\n"
                 "Free mode: toggle each layer independently."
             ),
-            "Pixmap": get_icon("Performance_Mode.svg"),
+            "Pixmap": get_icon("Detail_Layer_Control.svg"),
         }
 
     def IsActive(self):

@@ -36,6 +36,12 @@ import test_pin_numbering
 import test_via_clustering
 import test_housing_build
 import test_perf_mode_sync
+import test_workbench_state
+import test_lod_state
+import test_add_lid
+import test_chip_proxy
+import test_chip_transform_proxy
+import test_leadframe_library_chip_proxy
 
 MODULES = [
     test_wirebond_geometry,
@@ -46,6 +52,12 @@ MODULES = [
     test_via_clustering,
     test_perf_mode_sync,
     test_housing_build,
+    test_workbench_state,
+    test_lod_state,
+    test_add_lid,
+    test_chip_proxy,
+    test_chip_transform_proxy,
+    test_leadframe_library_chip_proxy,
 ]
 
 RESULTS_LOG = os.path.join(_THIS_DIR, "results.log")

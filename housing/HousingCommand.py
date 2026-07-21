@@ -9,7 +9,6 @@ sys.path.insert(0, root_path)
 from housing.HousingConfigurator import TransparentHousingConfigurator
 from core.housing import build_housing
 from Get_Path import get_icon
-from session.SessionManager import session_manager
 
 def create_housing(config):
     return build_housing(config)
@@ -28,7 +27,6 @@ class HousingCommand:
         if dialog.exec_():
             config = dialog.get_config()
             create_housing(config)
-            session_manager.record_action("housing_config", config)
             QtWidgets.QMessageBox.information(None, "Success", f"Housing created:\n{config}")
         else:
             QtWidgets.QMessageBox.information(None, "Cancelled", "Housing configuration cancelled.")

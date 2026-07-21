@@ -71,9 +71,9 @@ Check rows and click <b>Place Bumps</b> to place at both endpoints.<br>
 
 <h3>Session ▾</h3>
 <div class="card">
-<b>Save Design Session:</b> Writes all recorded actions to a <code>.dipas</code> JSON file.<br>
-<b>Load Design Session:</b> Reads a <code>.dipas</code> file and replays all actions to reconstruct the design.<br><br>
-<b>Recorded actions:</b> GDS import, Leadframe config, Layer-on-Leadframe, Housing, Wire bonding config, Center Leadframe
+<b>Save Design Session:</b> Saves the active document as a native FreeCAD <code>.FCStd</code> file — the exact current design state, including manual edits, not a replay of recognized actions.<br>
+<b>Load Design Session:</b> Opens a previously saved <code>.FCStd</code> file.<br><br>
+Both are thin wrappers around FreeCAD's native save/open — Ctrl+S and File → Open work identically. A few workbench-only display settings (fast-mesh render mode, VIA detail mode, lazy GDS layer-loading state) are captured and restored automatically alongside the document.
 </div>
 
 <h3>Advanced Tools ⇄</h3>

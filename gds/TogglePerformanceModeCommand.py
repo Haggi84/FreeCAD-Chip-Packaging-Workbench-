@@ -37,6 +37,7 @@ import FreeCAD
 import FreeCADGui
 from Get_Path import get_icon
 from compat import QtWidgets, QtCore
+from session.WorkbenchState import register_state_provider
 
 # ── tuneable constants ─────────────────────────────────────────────────────────
 
@@ -308,6 +309,23 @@ def apply_detail_mode(doc):
 def is_fast_mode() -> bool:
     """True when the document is currently showing fast-mesh proxies."""
     return _fast_mode
+
+
+def _save_perf_state(doc):
+    return {"fast_mode": _fast_mode}
+
+
+def _restore_perf_state(doc, data):
+    global _fast_mode
+    _fast_mode = bool(data.get("fast_mode", False))
+    # No re-baking/geometry work here on purpose: ViewObject.Visibility on
+    # the mesh/B-rep companions already round-trips natively through FCStd,
+    # so a document saved in fast-mesh mode already LOOKS correct on
+    # reopen. This only resyncs the Python-side flag so the next toolbar
+    # click takes the correct branch (_enter_detail_mode vs _enter_mesh_mode).
+
+
+register_state_provider("gds_fast_mode", _save_perf_state, _restore_perf_state)
 
 
 def sync_new_layer_display(doc, obj):

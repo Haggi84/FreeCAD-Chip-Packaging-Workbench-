@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Pad / face surface -->
+  <rect x="6" y="32" width="42" height="22" rx="3" fill="#f5c518" stroke="#b8860b" stroke-width="2"/>
+  <rect x="6" y="32" width="42" height="6" rx="3" fill="#ffe566" stroke="#b8860b" stroke-width="2"/>
+
+  <!-- Snap target ring, sitting directly on the surface — same cyan used
+       by the tool's live preview marker, tying icon and behavior together -->
+  <circle cx="26" cy="38" r="7" fill="none" stroke="#20c9d9" stroke-width="2" stroke-dasharray="3,2.2"/>
+  <circle cx="26" cy="38" r="2.6" fill="#20c9d9"/>
+
+  <!-- Cursor hovering, pointing at the snap target -->
+  <path d="M 42,8 L 42,26 L 46.5,22 L 49.5,28.5 L 53,27 L 50,20.5 L 55,20.5 Z"
+        fill="#263238" stroke="white" stroke-width="1.2" stroke-linejoin="round"/>
+</svg>

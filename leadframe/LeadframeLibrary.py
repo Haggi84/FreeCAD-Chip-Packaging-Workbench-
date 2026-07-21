@@ -257,15 +257,21 @@ def _place_imported_package(doc, objects_before):
 
 def _find_gds_document() -> Optional[str]:
     """
-    Return the name of the open GDS document, or None if none is found.
-    Prefers 'GDSII_Document'; falls back to any document whose objects
-    start with 'Layer_' (the GDS import naming convention).
+    Return the name of the open GDS (or chip-proxy) document, or None if
+    none is found. Prefers 'GDSII_Document'; falls back to any document
+    whose objects start with 'Layer_' (the full GDS import naming
+    convention) OR carry IsChipProxy=True (core.chip_proxy's lightweight
+    layout stand-in — a document containing only a chip proxy is never
+    named 'GDSII_Document' and has no 'Layer_'-prefixed objects at all, so
+    without this check "Merge into GDS document" would silently disable
+    itself the moment a package is imported into a chip-proxy document).
     """
     docs = FreeCAD.listDocuments()
     if "GDSII_Document" in docs:
         return "GDSII_Document"
     for name, doc in docs.items():
-        if any(o.Name.startswith("Layer_") for o in doc.Objects):
+        if any(o.Name.startswith("Layer_") or getattr(o, "IsChipProxy", False)
+               for o in doc.Objects):
             return name
     return None
 
@@ -342,12 +348,25 @@ _GDS_DIE_PREFIXES = (
 
 
 def _gds_die_objects(doc):
-    """Return GDS die objects from *doc*, falling back to all shapes if none found."""
+    """
+    Return GDS die objects from *doc*, falling back to all shapes if none
+    found. Matches by name prefix (the full GDS import convention) OR by
+    the IsChipProxy/IsContactPoint properties directly (core.chip_proxy's
+    lightweight stand-in and its pad markers use different names —
+    "<name>_Block"/"<name>_Pad_NNN" — that don't match any of
+    _GDS_DIE_PREFIXES at all) — property-based matching is also more
+    robust than the prefix list in general, regardless of naming.
+    """
     all_shapes = [
         o for o in doc.Objects
         if hasattr(o, "Shape") and o.Shape and not o.Shape.isNull()
     ]
-    die_objs = [o for o in all_shapes if any(o.Name.startswith(p) for p in _GDS_DIE_PREFIXES)]
+    die_objs = [
+        o for o in all_shapes
+        if any(o.Name.startswith(p) for p in _GDS_DIE_PREFIXES)
+        or getattr(o, "IsChipProxy", False)
+        or getattr(o, "IsContactPoint", False)
+    ]
     # Also include objects inside a "Substrate_Frames" group
     frames_grp = next(
         (o for o in doc.Objects if o.Name == "Substrate_Frames" or o.Label == "Substrate Frames"),

@@ -44,6 +44,16 @@ root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, root_path)
 from Get_Path import get_icon
 
+# Bump this whenever the "Current Selection" scope logic changes. Printed
+# once at import so a stale/cached module (e.g. FreeCAD process not
+# actually restarted after an on-disk edit) is immediately visible in the
+# Report View instead of silently reproducing an already-fixed bug.
+_MODULE_VERSION = "2026-07-15 gds-objects-recognizes-chip-proxy v5"
+FreeCAD.Console.PrintMessage(
+    f"[DI-PASSIONATE] ChipTransformCommand loaded — {_MODULE_VERSION}\n"
+    f"    file: {os.path.abspath(__file__)}\n"
+)
+
 
 # ── GDS object detection ───────────────────────────────────────────────────────
 
@@ -111,12 +121,20 @@ def _gds_objects(doc):
 
     Includes:
     - All objects whose Name starts with one of _GDS_PREFIXES
+    - Any core.chip_proxy lightweight chip (IsChipProxy block + its
+      IsContactPoint pad markers) — matched by property, not name prefix,
+      since a proxy's "<name>_Block"/"<name>_Pad_NNN" names don't match
+      any entry in _GDS_PREFIXES at all. Without this, "GDS Chip Objects"
+      scope would silently see zero objects to move for a chip-proxy-only
+      document.
     - All objects inside the Substrate_Frames group so that encapsulant frame
       extrusions move together with the chip layers.
     """
     objs = [
         o for o in _all_objects(doc)
         if any(o.Name.startswith(p) for p in _GDS_PREFIXES)
+        or getattr(o, "IsChipProxy", False)
+        or getattr(o, "IsContactPoint", False)
     ]
 
     # Pull in every frame object from the Substrate_Frames group.
@@ -137,9 +155,127 @@ def _gds_objects(doc):
     return objs
 
 
+# Name suffixes of "display proxy" companion objects that live in a
+# SEPARATE sibling group from their source shape — see
+# gds.TogglePerformanceModeCommand (fast-mesh render mode) and
+# gds.ToggleViaDetailCommand (simplified via blocks). Whichever one is
+# currently visible is what the user actually sees in the 3-D view, so
+# moving only the source and not its companion (or vice versa) silently
+# leaves the on-screen geometry behind even though the "wrong" (hidden)
+# copy did move.
+_COMPANION_SUFFIXES = ("_PerfMesh", "_ViaBlock")
+
+
+def _proxy_group_of(o):
+    """
+    If *o* is a lightweight chip-layout proxy block (core.chip_proxy,
+    tagged IsChipProxy) or one of its pad markers (a ContactPoint whose
+    SourceObject is such a block), return the "<name> (Proxy)" group that
+    contains both — so selecting EITHER the block alone or a single pad
+    alone still moves the whole chip atomically. Without this, moving just
+    the block would leave its pad markers behind (desyncing contact points
+    from the die surface they're supposed to sit on), and moving just one
+    pad would move nothing useful at all.
+
+    Returns None for anything unrelated to a chip proxy (ordinary GDS
+    layers, leadframe parts, bond wires, …) — a pure no-op for every other
+    object type this function is asked about.
+    """
+    is_proxy_block = bool(getattr(o, "IsChipProxy", False))
+    is_proxy_pad = False
+    if not is_proxy_block and getattr(o, "IsContactPoint", False):
+        doc = getattr(o, "Document", None)
+        src_name = getattr(o, "SourceObject", "") or ""
+        src_obj = doc.getObject(src_name) if (doc is not None and src_name) else None
+        is_proxy_pad = src_obj is not None and bool(getattr(src_obj, "IsChipProxy", False))
+
+    if not (is_proxy_block or is_proxy_pad):
+        return None
+
+    for parent in o.InList:
+        if parent.TypeId == "App::DocumentObjectGroup":
+            return parent
+    return None
+
+
+def _expand_selection(root_objects, doc=None):
+    """
+    Expand a list of directly-selected objects into the full set of
+    geometry-bearing objects that should move/rotate/align together.
+    Split out from _selected_objects() so this — the actual logic worth
+    testing — doesn't require a live FreeCADGui.Selection (unavailable
+    headlessly) to exercise.
+
+    Three independent expansions happen per selected item, matching what
+    "GDS Chip Objects" scope already gets "for free" via its flat
+    name-prefix scan of the whole document (_gds_objects):
+
+    1. A chip-layout proxy's block OR any single one of its pad markers is
+       redirected to its containing "<name> (Proxy)" group — see
+       _proxy_group_of(). Applied ONLY to the raw, top-level selected
+       objects (_add_root), never during the recursive member-expansion
+       below (_add_member): the group's own children include that same
+       block and those same pads, and if the redirect fired there too,
+       the block would just redirect straight back to the group every
+       time it's visited as a child — never actually reaching the
+       "append to result" branch, silently dropping it (and every pad)
+       from the result entirely.
+
+    2. Any container (an object with a .Group property — App::DocumentObjectGroup,
+       App::Part, …) is ALWAYS expanded to its children, recursively, in
+       preference over being treated as a movable object itself — even
+       though a plain App::DocumentObjectGroup in FreeCAD 1.1 exposes its
+       own synthetic Shape/Placement (for bounding-box/compound display),
+       that Placement is NOT propagated to its children at all, so writing
+       to it is a silent no-op. Checking hasattr(o, "Group") FIRST (before
+       _has_geometry) is what makes selecting a folder like "ContactPoints"
+       or "GDS_Die" actually move its contents instead of doing nothing.
+
+    3. Any object reached this way that has a currently-displayed
+       performance proxy (a "<Name>_PerfMesh" fast-mesh companion or a
+       "<Name>_ViaBlock" simplified block) pulls that proxy in too — those
+       live in a SEPARATE sibling group ("GDS Performance Meshes" /
+       "GDS Via Blocks"), so expanding only the source object's own group
+       would move the (often hidden) original shape while the actually
+       visible proxy stays put.
+    """
+    if doc is None:
+        doc = FreeCAD.activeDocument()
+    result = []
+    seen = set()
+
+    def _add_member(o):
+        if o.Name in seen:
+            return
+        seen.add(o.Name)
+
+        if hasattr(o, "Group"):
+            for child in o.Group:
+                _add_member(child)
+        elif _has_geometry(o):
+            result.append(o)
+            if doc is not None:
+                for suffix in _COMPANION_SUFFIXES:
+                    companion = doc.getObject(o.Name + suffix)
+                    if companion is not None:
+                        _add_member(companion)
+
+    def _add_root(o):
+        proxy_grp = _proxy_group_of(o)
+        _add_member(proxy_grp if proxy_grp is not None else o)
+
+    for o in root_objects:
+        _add_root(o)
+
+    return result
+
+
 def _selected_objects():
-    return [s.Object for s in FreeCADGui.Selection.getSelectionEx()
-            if _has_geometry(s.Object)]
+    """Every geometry-bearing object referenced by the current FreeCAD
+    selection — see _expand_selection() for the actual expansion rules."""
+    return _expand_selection(
+        [s.Object for s in FreeCADGui.Selection.getSelectionEx()]
+    )
 
 
 def _bounding_center(objects):

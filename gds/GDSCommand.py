@@ -5,11 +5,8 @@ GDSCommand.py
 =============
 FreeCAD commands for GDS import.
 
-Interactive path   : load_gds_layers()       — shows dialogs
-Session-Replay     : load_gds_with_params()  — no dialogs
-
-Both paths use core.lod_import.build_lod_import_params() for
-parameter derivation so that no logic exists twice.
+Interactive path: load_gds_layers() — shows dialogs, uses
+core.lod_import.build_lod_import_params() for parameter derivation.
 
 Default import mode is LOD (Level of Detail):
   • Immediately visible: PIN-/Bond-Layer (3D) + IC_Body_Solid (BBox cuboid)
@@ -28,7 +25,6 @@ from core import Core_Functionality
 from core.Color import hex_to_rgb
 from core.lod_import import build_lod_import_params
 from Get_Path import get_icon
-from session.SessionManager import session_manager
 
 
 # ── Colour resolution ─────────────────────────────────────────────────────────
@@ -458,6 +454,13 @@ def load_gds_layers():
                     "Tip: load an IHP .map file for best results.",
                 )
 
+        # Stash the raw source-file inputs on aux so the LOD manager's
+        # workbench-state save-provider can persist and reconstruct it
+        # after a document save/reopen (see ui/LODManager.py).
+        aux["lyp_path"] = lyp_path
+        aux["map_path"] = map_path
+        aux["options"]  = dict(options)
+
         # Start LOD manager — registers itself on the document and waits for
         # promote requests from the DetailLayerPanel.
         _start_lod_manager(doc, gds_path, aux)
@@ -500,15 +503,6 @@ class GDSCommand:
     def Activated(self):
         result = load_gds_layers()
         if result and result[0]:
-            doc, layer_objects, all_avail_layers, unique_colors, \
-                gds_path, lyp_path, options, map_path = result
-            session_manager.record_action("gds_import", {
-                "gds_path":        gds_path,
-                "lyp_path":        lyp_path,
-                "map_path":        map_path,
-                "selected_layers": all_avail_layers,
-                "options":         options,
-            })
             QtWidgets.QMessageBox.information(
                 None, "Done",
                 "GDS imported — routing layers can be loaded on demand\n"
@@ -523,81 +517,3 @@ class GDSCommand:
 import FreeCADGui
 if FreeCAD.GuiUp:
     FreeCADGui.addCommand("GDSCommand", GDSCommand())
-
-
-# ── Session replay (no dialog) ────────────────────────────────────────────────
-
-def load_gds_with_params(gds_path, lyp_path, map_path, selected_layers, options):
-    """
-    Imports GDS without dialogs (session replay).
-    Same 8-tuple return value as load_gds_layers().
-    """
-    ihp_map = Core_Functionality.parse_map(map_path) if map_path else {}
-
-    layers_with_colors = Core_Functionality.parse_lyp(lyp_path)
-    if not layers_with_colors:
-        FreeCAD.Console.PrintError("load_gds_with_params: LYP error.\n")
-        return (None,) * 8
-    layers, unique_colors = layers_with_colors
-
-    saved_keys = {(l["layer_id"], l["datatype"]) for l in selected_layers}
-    filtered   = [l for l in layers
-                  if (l.get("layer_id", 0), l.get("datatype", 0)) in saved_keys]
-    if not filtered:
-        filtered = list(selected_layers)
-
-    xml_path     = options.get("xml_path")
-    stackup_data = Core_Functionality.parse_stackup_xml(xml_path) if xml_path else {}
-
-    doc = FreeCAD.newDocument("GDSII_Document")
-    pp  = _setup_property_panel(doc, ihp_map, map_path, gds_path,
-                                 lyp_path, filtered, unique_colors)
-    pp.options = dict(options)
-
-    load_kwargs, aux = build_lod_import_params(
-        filtered, ihp_map, stackup_data, options
-    )
-    layers_to_load = aux["layers_to_load"]
-
-    try:
-        doc.openTransaction("Session Replay: GDS Import")
-    except Exception:
-        pass
-
-    n_workers = max(1, (os.cpu_count() or 2) - 1)
-    shapes = Core_Functionality.load_gds(
-        gds_path, layers_to_load,
-        parallel_workers=n_workers,
-        **load_kwargs,
-    )
-
-    if not shapes:
-        FreeCAD.Console.PrintWarning("load_gds_with_params: no shapes.\n")
-        return (None,) * 8
-
-    layer_objects, pending_colors = _populate_document(
-        doc, shapes, layers_to_load, ihp_map,
-        aux["match_klayout"], aux["highlight_bondable"], aux["mesh_3d"],
-    )
-
-    try:
-        doc.commitTransaction()
-    except Exception:
-        pass
-
-    doc.recompute()
-    _apply_colors(pending_colors)
-    pp.update_properties(layers_to_load, unique_colors, layer_objects)
-
-    before_objs = set()
-    _post_import(doc, gds_path, ihp_map, layers_to_load,
-                 aux["auto_pin_contacts"], before_objs)
-
-    _start_lod_manager(doc, gds_path, aux)
-
-    FreeCADGui.setActiveDocument(doc.Name)
-
-    # Default to triangulated (fast-mesh) view, same as the interactive import.
-    _apply_performance_mode(doc, pending_colors)
-
-    return doc, layer_objects, filtered, unique_colors, gds_path, lyp_path, options, map_path

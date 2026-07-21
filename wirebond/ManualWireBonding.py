@@ -39,7 +39,6 @@ import os, sys
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _root not in sys.path:
     sys.path.insert(0, _root)
-from session.SessionManager import session_manager
 
 
 # ── build marker ────────────────────────────────────────────────────────────────
@@ -626,6 +625,34 @@ def _drop_slivers(shape: Part.Shape, min_vol: float = 1e-6) -> Part.Shape:
     return Part.makeCompound(kept)
 
 
+# ── contextual toolbar visibility ─────────────────────────────────────────────
+#
+# The "Wire Bonding Session" toolbar (Confirm / Abort) only makes sense while
+# a session is active — kept hidden the rest of the time so it doesn't
+# permanently take up space among the always-visible toolbars. Same
+# find-the-QToolBar-by-title pattern already used by InitGui.py's tech-config
+# status label injection.
+
+def _set_session_toolbar_visible(visible: bool):
+    if not FreeCAD.GuiUp:
+        return
+    try:
+        from compat import QtWidgets
+        mw = FreeCADGui.getMainWindow()
+        for tb in mw.findChildren(QtWidgets.QToolBar):
+            if tb.windowTitle() == "Wire Bonding Session":
+                tb.setVisible(visible)
+                return
+        FreeCAD.Console.PrintWarning(
+            "[wirebond] 'Wire Bonding Session' toolbar not found — "
+            "Confirm/Abort buttons won't auto-show.\n"
+        )
+    except Exception as exc:
+        FreeCAD.Console.PrintWarning(
+            f"[wirebond] _set_session_toolbar_visible({visible}): {exc}\n"
+        )
+
+
 # ── contact-point filter ───────────────────────────────────────────────────────
 
 def _is_contact_point(obj) -> bool:
@@ -698,11 +725,12 @@ class ManualWireBonding:
         FreeCADGui.Selection.addObserver(self)
         FreeCADGui.Selection.addSelectionGate(_ContactPointGate())
         self._set_status("Wire bonding — click the first contact point (die pad)")
+        _set_session_toolbar_visible(True)
         FreeCAD.Console.PrintMessage(
             "Wire bonding started.\n"
             "  Step 1: click a ContactPoint on the die.\n"
             "  Step 2: click a ContactPoint on the leadframe.\n"
-            "  Repeat. Use 'Finish Wire Bonding' when done.\n"
+            "  Repeat. Use 'Confirm Wire Bonding' when done.\n"
         )
 
     def finish_session(self) -> int:
@@ -734,6 +762,7 @@ class ManualWireBonding:
         except Exception as e:
             FreeCAD.Console.PrintWarning(f"removeObserver: {e}\n")
         self._set_status("")
+        _set_session_toolbar_visible(False)
 
     # ── FreeCAD Selection observer callbacks ───────────────────────────────
 
@@ -1223,21 +1252,6 @@ class ManualWireBonding:
                 "cp1": cp1, "cp2": cp2,
                 "start": start, "end": end,
                 "wire": wire_obj,
-            })
-
-            # Update session record with the full cumulative bond list
-            session_manager.record_action("wirebond_placements", {
-                "config": self.config,
-                "bonds": [
-                    {
-                        "start":    [b["start"].x, b["start"].y, b["start"].z],
-                        "end":      [b["end"].x,   b["end"].y,   b["end"].z],
-                        "start_cp": b["cp1"].Name,
-                        "end_cp":   b["cp2"].Name,
-                        "net_name": getattr(b["wire"], "NetName", f"Net_{j+1:03d}"),
-                    }
-                    for j, b in enumerate(self.bonds)
-                ],
             })
 
             FreeCAD.Console.PrintMessage(

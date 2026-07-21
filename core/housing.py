@@ -180,3 +180,112 @@ def build_housing(config):
         FreeCADGui.SendMsgToActiveView("ViewFit")
 
     return doc
+
+
+# ── Standalone lid placement ──────────────────────────────────────────────────
+#
+# build_housing() above can only add a lid at housing-creation time (the
+# include_lid flag). In practice a package is often built OPEN on purpose —
+# so the die and bond wires stay physically accessible for wire bonding —
+# and only closed up afterward. add_lid_to_housing() adds (or replaces) a
+# lid on whatever housing already exists in the document, independent of
+# how or when that housing was built.
+
+def find_housing_body(doc):
+    """
+    Return the assembled housing object in *doc*: "FinalHousing" (body +
+    alignment posts, the normal result of build_housing()) if present,
+    else the plain "HousingBody" boolean-cut shell. Returns None if
+    neither exists or neither has valid geometry.
+    """
+    if doc is None:
+        return None
+    for name in ("FinalHousing", "HousingBody"):
+        obj = doc.getObject(name)
+        if obj is not None and hasattr(obj, "Shape") and not obj.Shape.isNull():
+            return obj
+    return None
+
+
+def add_lid_to_housing(doc, lid_thickness, transparency=None, housing_obj=None):
+    """
+    Add (or replace) a transparent lid on an existing housing.
+
+    The lid's footprint and height are read directly from the housing
+    object's own Shape.BoundBox rather than from a saved config dict — so
+    this works regardless of how the housing was originally parameterized,
+    and correctly reflects any manual edits made to the housing since.
+
+    Typical use: build the housing via Housing Configurator with "Include
+    Transparent Lid" unchecked (leaving it open so the die and bond wires
+    stay accessible), do wire bonding, then call this once bonding is
+    finished to close the package up.
+
+    Args:
+        doc: FreeCAD document.
+        lid_thickness (float): lid thickness in mm.
+        transparency (float, 0-1, optional): defaults to the housing's own
+            current ViewObject.Transparency when available, else 0.5.
+        housing_obj (optional): explicit housing object to lid; the housing
+            is auto-detected via find_housing_body(doc) when omitted.
+
+    Returns the new Lid object, or None if no housing could be found.
+    """
+    housing = housing_obj or find_housing_body(doc)
+    if housing is None:
+        FreeCAD.Console.PrintWarning(
+            "[Housing] add_lid_to_housing: no housing found in the "
+            "document — build one first via Housing Configurator.\n"
+        )
+        return None
+
+    bb = housing.Shape.BoundBox
+    outer_x, outer_y         = bb.XMin, bb.YMin
+    outer_x_end, outer_y_end = bb.XMax, bb.YMax
+    top_z                    = bb.ZMax
+
+    if transparency is None:
+        if FreeCAD.GuiUp and hasattr(housing, "ViewObject") and housing.ViewObject is not None:
+            transparency = getattr(housing.ViewObject, "Transparency", 50) / 100.0
+        else:
+            transparency = 0.5
+
+    # Replace an existing lid cleanly rather than stacking a duplicate on
+    # top of it — re-running this after adjusting lid_thickness should
+    # update the lid, not accumulate copies.
+    for name in ("Lid", "LidSketch"):
+        old = doc.getObject(name)
+        if old is not None:
+            try:
+                doc.removeObject(name)
+            except Exception:
+                pass
+
+    lid_sketch = doc.addObject("Sketcher::SketchObject", "LidSketch")
+    lid_sketch.Placement = Base.Placement(Base.Vector(0, 0, top_z), Base.Rotation(0, 0, 0, 1))
+    lid_lines = [
+        Part.LineSegment(Base.Vector(outer_x, outer_y, 0), Base.Vector(outer_x_end, outer_y, 0)),
+        Part.LineSegment(Base.Vector(outer_x_end, outer_y, 0), Base.Vector(outer_x_end, outer_y_end, 0)),
+        Part.LineSegment(Base.Vector(outer_x_end, outer_y_end, 0), Base.Vector(outer_x, outer_y_end, 0)),
+        Part.LineSegment(Base.Vector(outer_x, outer_y_end, 0), Base.Vector(outer_x, outer_y, 0)),
+    ]
+    for i, line in enumerate(lid_lines):
+        lid_sketch.addGeometry(line)
+        if i > 0:
+            lid_sketch.addConstraint(Sketcher.Constraint('Coincident', i - 1, 2, i, 1))
+    lid_sketch.addConstraint(Sketcher.Constraint('Coincident', len(lid_lines) - 1, 2, 0, 1))
+
+    lid_extrusion = doc.addObject("Part::Extrusion", "Lid")
+    lid_extrusion.Base = lid_sketch
+    lid_extrusion.Dir = Base.Vector(0, 0, lid_thickness)
+    lid_extrusion.Solid = True
+    if FreeCAD.GuiUp:
+        lid_extrusion.ViewObject.Transparency = int(transparency * 100)
+
+    doc.recompute()
+    FreeCAD.Console.PrintMessage(
+        f"[Housing] Lid added on '{housing.Name}': "
+        f"{bb.XLength:.3f} x {bb.YLength:.3f} mm, thickness {lid_thickness:.3f} mm, "
+        f"top at z={top_z:.3f} mm.\n"
+    )
+    return lid_extrusion

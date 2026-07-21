@@ -12,7 +12,6 @@ from leadframe.LeadframeCommand import create_leadframe, configure_leadframe
 from gds.GDSCommand import load_gds_layers
 from core.Color import hex_to_rgb
 from Get_Path import get_icon
-from session.SessionManager import session_manager
 
 def configuration(doc, gds_path, selected_layers, options, ihp_map, config, opts):
     # First pass — measure bbox at base scale
@@ -266,16 +265,6 @@ def create_layer_on_leadframe():
         if v:
             v.viewIsometric()
             v.fitAll()
-
-        session_manager.record_action("layer_on_leadframe", {
-            "gds_path":        gds_path,
-            "lyp_path":        lyp_path,
-            "map_path":        effective_map,
-            "selected_layers": selected_layers,
-            "options":         options,
-            "leadframe_config": config,
-            "transform_opts":  opts,
-        })
 
         return doc
 

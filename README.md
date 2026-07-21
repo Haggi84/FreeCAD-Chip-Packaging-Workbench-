@@ -42,7 +42,7 @@ This Python AddIn for [FreeCAD](https://www.freecad.org/downloads.php) provides 
 | **Wire Bond** | Interactive 3-D wire bonding session — click a die-pad contact point, then a housing contact point; a solid swept-pipe bond wire is created |
 | **Wire Bump Configurator** | Place parametric bump shapes (Ball, Wedge, Stitch, Nail Head) at both endpoints of selected bond wires via a netlist browser |
 | **Cancel Wire Bonding** | Exit an active wire-bonding session |
-| **Session ▾** | Dropdown: **Save Design Session** / **Load Design Session** — persist and replay the full design history as a `.dipas` JSON file |
+| **Session ▾** | Dropdown: **Save Design Session** / **Load Design Session** — thin wrappers around FreeCAD's native document save/open, so the exact current design state (including manual edits) is preserved |
 | **Advanced Tools ▾** | Dropdown giving access to the advanced tool set (see below) |
 | **Help Guide** | Modern in-app help dialog with sidebar navigation (Overview, Quick Start, Tool Reference, Workflows, Troubleshooting) |
 | **About** | Version and project information |
@@ -84,7 +84,7 @@ This Python AddIn for [FreeCAD](https://www.freecad.org/downloads.php) provides 
 | **7** | **Set Contact Points on Face** | Place contact point markers on leadframe/housing leads (die-side markers auto-placed if Auto PIN Detection was used in step 1) |
 | **8** | **Wire Bond** | Click die pad → click housing lead → 3-D solid bond wire created; repeat per bond |
 | **9** | **Wire Bump Configurator** | Select bump shape, adjust parameters, pick connections from netlist, place bumps |
-| **10** | **Session ▾ → Save** | Save all parameters to a `.dipas` file for replay |
+| **10** | **Session ▾ → Save** | Save the design as a native FreeCAD document (`.FCStd`) |
 
 ---
 
@@ -195,7 +195,7 @@ The **Contact Point Browser** dock panel lists all markers grouped by type. Hove
 | `.map` | IHP technology map — layer names, EDI types (PIN, NET, VIA, FILL, …) |
 | `.xml` | KLayout stackup XML — accurate Zmin/Zmax per layer from the PDK |
 | `.step` / `.stp` | Package STEP model from MirrorSemi online library |
-| `.dipas` | DI-PASSIONATE session file (JSON) — records all design actions for replay |
+| `.FCStd` | Native FreeCAD document — the full design, saved/reopened via Session ▾ or Ctrl+S |
 
 The IHP Open PDK (including sample `.map` files) is available at:
 <https://github.com/IHP-GmbH/IHP-Open-PDK>
@@ -204,11 +204,11 @@ A sample `.gds` file for testing is included at `resources/gds/ALL_LNA.gds`.
 
 ---
 
-## Session Files (`.dipas`)
+## Session Save/Load
 
-Each **Save Session** writes a `.dipas` JSON file containing all design actions in order (GDS import paths, leadframe config, housing config, wire-bond config, …) plus timestamps and the associated FreeCAD document path.
+**Save Design Session** saves the active document as a native FreeCAD `.FCStd` file — the exact current design state, including any manual adjustments made during the session, not just a replay of recognized high-level actions.
 
-Reopen a session with **Session ▾ → Load Design Session** to restore parameters and re-apply them from scratch — useful for regenerating a design after modifying the source GDS file.
+A handful of workbench-only display settings that don't live on a FreeCAD object (fast-mesh render mode, VIA detail mode, and the lazy GDS layer-loading state) are captured automatically alongside the document and restored when it's reopened — via **Session ▾ → Load Design Session** or FreeCAD's native File → Open, both work identically. See `session/WorkbenchState.py` for the extensible provider mechanism behind this.
 
 ---
 
@@ -265,9 +265,9 @@ DI-PASSIONATE-FreeCAD/
 │   ├── SetContactPointsOnFaceCommand.py  # Grid-based face contact point placement
 │   └── Wirebon_Confi_Support.py# Prerequisite checks for wire bond activation
 ├── session/
-│   ├── SessionManager.py       # Session record / persist / restore logic (.dipas)
-│   ├── SaveSessionCommand.py   # Save action
-│   ├── LoadSessionCommand.py   # Load & replay action
+│   ├── WorkbenchState.py       # Extensible document-state save/restore registry
+│   ├── SaveSessionCommand.py   # Save action (native .FCStd save)
+│   ├── LoadSessionCommand.py   # Load action (native .FCStd open)
 │   └── SessionMenuCommand.py   # Combined Save/Load dropdown toolbar button
 ├── ui/
 │   ├── LayerSelector.py        # Layer selection dialog (used during GDS import)

@@ -4,9 +4,11 @@
 
 from .HousingCommand import HousingCommand, create_housing
 from .HousingConfigurator import TransparentHousingConfigurator
+from .AddLidCommand import AddLidCommand
 
 __all__ = [
     'HousingCommand',
     'create_housing',
-    'TransparentHousingConfigurator'
+    'TransparentHousingConfigurator',
+    'AddLidCommand',
 ]

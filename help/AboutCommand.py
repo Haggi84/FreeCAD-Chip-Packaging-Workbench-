@@ -31,7 +31,7 @@ class AboutDialog(QtWidgets.QDialog):
         layout.setContentsMargins(24, 24, 24, 20)
 
         # ── Logo ──────────────────────────────────────────────────────────────
-        logo_path = get_icon("Workbench_logo.png")
+        logo_path = get_icon("Chip_Logo.svg")
         if logo_path:
             logo_label = QtWidgets.QLabel()
             pixmap = QtGui.QPixmap(logo_path).scaledToHeight(
@@ -128,7 +128,7 @@ class AboutCommand:
         return {
             "MenuText": "About",
             "ToolTip": f"DI-PASSIONATE Workbench v{VERSION_STRING}",
-            "Pixmap": get_icon("Workbench_logo.png"),
+            "Pixmap": get_icon("Chip_Logo.svg"),
         }
 
     def Activated(self):

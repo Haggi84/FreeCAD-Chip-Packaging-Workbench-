@@ -262,6 +262,16 @@ def parse_stackup_xml(xml_path):
         8         -> { same }   (gds_layer == 8 for Metal1 in SG13G2)
 
     'type' is one of 'conductor', 'via', 'dielectric'.
+
+    If a "<Substrate Offset=\"...\"/>" element is present (some PDK stackups
+    model the die's physical silicon substrate this way, beneath the
+    interconnect stack's own Zmin=0 reference plane), its value is also
+    exposed under the special key "_substrate_offset_um" — used by
+    core.chip_proxy.get_die_thickness_mm() to compute a TOTAL physical die
+    thickness (substrate + interconnect), not just the interconnect height
+    the per-Layer entries alone would give. Absent for stackups that don't
+    carry this element; callers must treat it as optional.
+
     Returns {} on any error so callers can safely fall back to hard-coded defaults.
     """
     try:
@@ -289,8 +299,17 @@ def parse_stackup_xml(xml_path):
                 result[name.upper()] = entry
             if gds_layer >= 0:
                 result[gds_layer] = entry
+
+        substrate = root.find(".//Substrate")
+        if substrate is not None:
+            try:
+                result["_substrate_offset_um"] = float(substrate.get("Offset", 0))
+            except (ValueError, TypeError):
+                pass
+
         FreeCAD.Console.PrintMessage(
-            f"Loaded stackup XML '{xml_path}': {sum(isinstance(k, str) for k in result)} layers.\n"
+            f"Loaded stackup XML '{xml_path}': "
+            f"{sum(isinstance(k, str) and k != '_substrate_offset_um' for k in result)} layers.\n"
         )
         return result
     except FileNotFoundError:

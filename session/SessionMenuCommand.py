@@ -12,14 +12,13 @@ import FreeCADGui
 from compat import QtWidgets, QtGui
 
 from Get_Path import get_icon
-from session.SessionManager import session_manager
 
 
 class SessionMenuCommand:
     def GetResources(self):
         return {
             "MenuText": "Session",
-            "ToolTip":  "Save or load a design session (.dipas file)",
+            "ToolTip":  "Save or load a design (native FreeCAD document)",
             "Pixmap":   get_icon("Session.svg"),
         }
 

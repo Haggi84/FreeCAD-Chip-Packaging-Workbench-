@@ -15,7 +15,6 @@ from wirebond.ManualWireBonding import manual_bonder  # Global instance
 from wirebond.ContactPointTool import DefineContactPointsCommand
 from wirebond.WireBumpConfigurator import WireBumpConfiguratorCommand
 from Get_Path import get_icon
-from session.SessionManager import session_manager
 
 # Singleton panel instance — persisted across command activations
 _cp_panel = None
@@ -39,7 +38,6 @@ class WirebondCommand:
                 FreeCAD.newDocument("WireBonding")
 
             manual_bonder.start_bonding_session(config)
-            session_manager.record_action("wirebond_config", config)
 
             QtWidgets.QMessageBox.information(
                 None,
@@ -50,7 +48,8 @@ class WirebondCommand:
                 "2. Click a ContactPoint on the leadframe lead.\n"
                 "3. A 3-D bond wire is created between them.\n"
                 "4. Repeat for each bond.\n"
-                "5. Click 'Finish Wire Bonding' when done.\n\n"
+                "5. Use the 'Wire Bonding Session' toolbar that just "
+                "appeared — Confirm to finish, or Abort to discard.\n\n"
                 "ContactPoints appear as coloured dots:\n"
                 "  Orange = die side\n"
                 "  Blue   = leadframe side",
@@ -63,37 +62,62 @@ class WirebondCommand:
 
 
 class FinishWireBondingCommand:
+    """
+    Confirms the active wire bonding session: the bonds already placed stay
+    in the document, the session ends, and a report is printed. Lives in
+    the contextual "Wire Bonding Session" toolbar (see InitGui.py /
+    ManualWireBonding._set_session_toolbar_visible), which is only visible
+    while a session is actually active — this command has no useful effect
+    otherwise, so IsActive() must track that, not just return True.
+    """
+
     def GetResources(self):
         return {
-            "MenuText": "Finish Wire Bonding",
-            "ToolTip": "Finish manual wire bonding session and generate report",
+            "MenuText": "Confirm Wire Bonding",
+            "ToolTip": (
+                "Confirm and finish the active wire bonding session.\n"
+                "Keeps every bond wire placed so far and prints a report."
+            ),
+            "Pixmap": get_icon("Confirm_Wirebonding.svg"),
         }
 
     def Activated(self):
         bond_count = manual_bonder.finish_session()
         QtWidgets.QMessageBox.information(
             None,
-            "Finished",
-            f"Manual wire bonding completed!\n\n"
+            "Confirmed",
+            f"Wire bonding confirmed!\n\n"
             f"Created {bond_count} bond wires.\n"
             f"Check report in Python Console.",
         )
 
     def IsActive(self):
-        return True
+        return manual_bonder.is_active
 
 
 class CancelWireBondingCommand:
+    """
+    Aborts the active wire bonding session. Bond wires already placed as
+    separate FreeCAD transactions are NOT automatically undone — this only
+    ends the session (stops the ContactPoint-only selection filter) without
+    the "confirmed" bookkeeping FinishWireBondingCommand does. See that
+    class's docstring for why IsActive() must track session state here too.
+    """
+
     def GetResources(self):
         return {
-            "MenuText": "Cancel Wire Bonding",
-            "ToolTip": "Exit the active wire bonding session without saving",
+            "MenuText": "Abort Wire Bonding",
+            "ToolTip": (
+                "Abort the active wire bonding session.\n"
+                "Any bonds already placed stay in the document — use Undo "
+                "(Ctrl+Z) to remove individual wires if needed."
+            ),
             "Pixmap": get_icon("Cancel_Wirebonding.svg"),
         }
 
     def Activated(self):
         manual_bonder.cancel_session()
-        QtWidgets.QMessageBox.information(None, "Cancelled", "Wire bonding session cancelled.")
+        QtWidgets.QMessageBox.information(None, "Aborted", "Wire bonding session aborted.")
 
     def IsActive(self):
         return manual_bonder.is_active

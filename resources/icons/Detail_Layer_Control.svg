@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Layer bars (stack) -->
+  <rect x="6" y="8"  width="32" height="9" rx="2" fill="#1A99E6" opacity="0.85"/>
+  <rect x="6" y="21" width="32" height="9" rx="2" fill="#666" opacity="0.35"/>
+  <rect x="6" y="34" width="32" height="9" rx="2" fill="#1A99E6" opacity="0.85"/>
+  <rect x="6" y="47" width="32" height="9" rx="2" fill="#666" opacity="0.35"/>
+
+  <!-- Per-layer toggle switches — independent Detail (blue, thumb right)
+       vs Simple (grey, thumb left) control per layer -->
+  <rect x="44" y="9"  width="14" height="7" rx="3.5" fill="#1A99E6"/>
+  <circle cx="54.5" cy="12.5" r="4" fill="#ffffff" stroke="#0d6fa0" stroke-width="1"/>
+
+  <rect x="44" y="22" width="14" height="7" rx="3.5" fill="#8a8a8a" opacity="0.6"/>
+  <circle cx="47.5" cy="25.5" r="4" fill="#ffffff" stroke="#555555" stroke-width="1"/>
+
+  <rect x="44" y="35" width="14" height="7" rx="3.5" fill="#1A99E6"/>
+  <circle cx="54.5" cy="38.5" r="4" fill="#ffffff" stroke="#0d6fa0" stroke-width="1"/>
+
+  <rect x="44" y="48" width="14" height="7" rx="3.5" fill="#8a8a8a" opacity="0.6"/>
+  <circle cx="47.5" cy="51.5" r="4" fill="#ffffff" stroke="#555555" stroke-width="1"/>
+</svg>

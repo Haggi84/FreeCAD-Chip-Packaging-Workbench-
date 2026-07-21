@@ -1,7 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <!-- DI-PASSIONATE mark: a QFN/QFP package (the literal subject of this
-       workbench) with a die and bond wires, using the same navy/blue/gold
-       palette already established across the toolbar icon set. -->
+  <!-- DI-PASSIONATE project mark — same design as my_icon.svg (the
+       workbench-selector icon), kept as its own file so the About dialog's
+       larger "hero" presentation can evolve independently (e.g. a
+       wordmark version) without touching the toolbar-facing icon. -->
 
   <!-- Leads (3 per side) -->
   <g fill="#37474f">

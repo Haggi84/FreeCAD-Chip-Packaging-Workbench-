@@ -449,7 +449,23 @@ class LODManager(QtCore.QObject):
                 pass
 
     def _scan_existing_objects(self):
-        """Registers FreeCAD objects that were already created during import."""
+        """
+        Registers FreeCAD objects that were already created during import,
+        and reconciles self._states against their actual restored
+        condition. Without this, a layer that was promoted to DETAIL in a
+        prior session (e.g. after reopening a saved document) would be
+        misreported as still-SOLID, since self._states was only ever seeded
+        from `categories` before this scan runs — and a later promote_all()
+        would needlessly re-tessellate it with today's code, which is
+        exactly the "replay produces different geometry than what was
+        saved" bug this workbench-state redesign exists to eliminate.
+
+        Safe for the normal (non-restore) construction path too: contact /
+        pin_flat / fill categories are already seeded as DETAIL in
+        __init__() before this scan ever runs, so the `== SOLID` guard
+        below is a no-op for them — it only fires for routing-category
+        keys that were promoted in a previous session.
+        """
         doc = self._doc
         if doc is None:
             return
@@ -457,7 +473,11 @@ class LODManager(QtCore.QObject):
             lid = getattr(obj, "GDSLayerID",  None)
             dt  = getattr(obj, "GDSDatatype", None)
             if lid is not None and dt is not None:
-                self._obj_map[(lid, dt)] = obj
+                key = (lid, dt)
+                self._obj_map[key] = obj
+                if (self._states.get(key) == LODState.SOLID
+                        and not getattr(obj, "IsLayerPlaceholder", False)):
+                    self._states[key] = LODState.DETAIL
 
     def _on_worker_done(self, key: tuple, shapes, target: LODState = None):
         if target is None:
@@ -610,3 +630,86 @@ class LODManager(QtCore.QObject):
             FreeCAD.Console.PrintMessage("[LOD] All layers loaded.\n")
             self.body_hidden.emit()
         FreeCADGui.updateGui()
+
+
+# ── Workbench-state save/restore provider ───────────────────────────────────
+#
+# A reopened document has no LODManager registered at all (_LOD_REGISTRY is a
+# process-local dict) — without reconstruction, "promote layer to detail"
+# clicks would break entirely after a save/reopen cycle. The computed aux
+# dict itself is NOT persisted directly: ihp_map/stack_mm use tuple dict
+# keys, which are not cleanly JSON-serialisable/parseable back. Instead only
+# the cheap raw inputs are persisted, and aux is rebuilt fresh at restore
+# time via the same build_lod_import_params() call used at import time.
+
+def _save_lod_state(doc):
+    mgr = get_lod_manager(doc)
+    if mgr is None:
+        return None
+    aux      = mgr._aux
+    gds_path = mgr._gds_path
+    lyp_path = aux.get("lyp_path")
+    map_path = aux.get("map_path")
+    options  = aux.get("options")
+    if not gds_path or not lyp_path or options is None:
+        FreeCAD.Console.PrintWarning(
+            "[LOD] save-state: lyp_path/map_path/options missing from aux "
+            "— cannot persist LOD manager state for this document.\n"
+        )
+        return None
+
+    # JSON-safety: options["layer_bbox"] is a set of (layer_id, datatype)
+    # tuples (see ui/LayerSelector.py) — not directly serialisable.
+    opts_safe = dict(options)
+    opts_safe["layer_bbox"] = sorted(
+        [lid, dt] for (lid, dt) in options.get("layer_bbox", set())
+    )
+
+    return {
+        "gds_path":        gds_path,
+        "lyp_path":        lyp_path,
+        "map_path":        map_path,
+        "options":         opts_safe,
+        "selected_layers": aux.get("all_layers", []),
+    }
+
+
+def _restore_lod_state(doc, data):
+    gds_path = data.get("gds_path")
+    lyp_path = data.get("lyp_path")
+    map_path = data.get("map_path")
+    options  = dict(data.get("options") or {})
+    options["layer_bbox"] = {tuple(p) for p in options.get("layer_bbox", [])}
+    selected_layers = data.get("selected_layers") or []
+
+    if not gds_path or not lyp_path:
+        return
+    if not (os.path.exists(gds_path) and os.path.exists(lyp_path)):
+        FreeCAD.Console.PrintWarning(
+            f"[LOD] restore: source files no longer exist "
+            f"(gds={gds_path!r}, lyp={lyp_path!r}) — layer promote/demote "
+            "will be unavailable until a fresh GDS import.\n"
+        )
+        return
+
+    from core.lod_import import build_lod_import_params
+
+    ihp_map      = Core_Functionality.parse_map(map_path) if map_path else {}
+    xml_path     = options.get("xml_path")
+    stackup_data = Core_Functionality.parse_stackup_xml(xml_path) if xml_path else {}
+
+    _, aux = build_lod_import_params(selected_layers, ihp_map, stackup_data, options)
+    # Carry the raw inputs forward so a second save/restore cycle still works.
+    aux["lyp_path"] = lyp_path
+    aux["map_path"] = map_path
+    aux["options"]  = options
+
+    mgr = LODManager(doc, gds_path, aux)
+    register_lod_manager(doc, mgr)
+    FreeCAD.Console.PrintMessage(
+        "[LOD] Manager reconstructed from saved document state.\n"
+    )
+
+
+from session.WorkbenchState import register_state_provider  # noqa: E402
+register_state_provider("lod_manager", _save_lod_state, _restore_lod_state)

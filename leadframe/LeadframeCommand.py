@@ -8,7 +8,6 @@ sys.path.insert(0, root_path)
 from Get_Path import get_icon
 
 from core.leadframe import build_leadframe
-from session.SessionManager import session_manager
 
 def create_leadframe(config, doc=None, gds_objects=None):
     return build_leadframe(config, doc=doc, gds_objects=gds_objects)
@@ -39,7 +38,6 @@ class LeadframeCommand:
         config = configure_leadframe()
         if config:
             create_leadframe(config)
-            session_manager.record_action("leadframe_config", config)
             QtWidgets.QMessageBox.information(None, "Success", f"Leadframe created:\n{config}")
         else:
             QtWidgets.QMessageBox.information(None, "Cancelled", "Leadframe configuration cancelled.")
@@ -149,7 +147,6 @@ class CenterLeadframeCommand:
     def Activated(self):
         ok, msg = center_leadframe_on_gds()
         if ok:
-            session_manager.record_action("center_leadframe", {})
             QtWidgets.QMessageBox.information(None, "Center Leadframe", msg)
         else:
             QtWidgets.QMessageBox.warning(None, "Center Leadframe", msg)

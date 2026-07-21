@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Simplified die block (proxy — footprint + thickness only, no
+       per-layer routing detail) -->
+  <rect x="8" y="12" width="36" height="36" rx="3" fill="#1a2332" stroke="#0d1420" stroke-width="2"/>
+
+  <!-- Bond pads on top -->
+  <circle cx="16" cy="20" r="2.6" fill="#e64d1a"/>
+  <circle cx="36" cy="20" r="2.6" fill="#e64d1a"/>
+  <circle cx="26" cy="40" r="2.6" fill="#e64d1a"/>
+
+  <!-- Speed/fast indicator -->
+  <polygon points="44,28 36,44 42,44 38,56 54,36 47,36 52,28"
+           fill="#ffb300" stroke="#c67c00" stroke-width="1" stroke-linejoin="round"/>
+</svg>

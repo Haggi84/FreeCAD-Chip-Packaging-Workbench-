@@ -39,6 +39,7 @@ import FreeCADGui
 import Part
 from Get_Path import get_icon
 from core.via_clustering import cluster_boxes, DEFAULT_CLUSTER_GAP_MM
+from session.WorkbenchState import register_state_provider
 
 _VIA_BLOCK_SUFFIX = "_ViaBlock"
 _VIA_BLOCK_GROUP  = "GDS_ViaBlocks"
@@ -156,6 +157,20 @@ def _build_via_block(doc, obj, grp):
 def is_via_detailed() -> bool:
     """True when via layers are currently showing full detail (not blocks)."""
     return _via_detailed
+
+
+def _save_via_state(doc):
+    return {"via_detailed": _via_detailed}
+
+
+def _restore_via_state(doc, data):
+    global _via_detailed
+    _via_detailed = bool(data.get("via_detailed", False))
+    # See TogglePerformanceModeCommand._restore_perf_state: no re-baking
+    # needed, ViewObject.Visibility already round-trips natively.
+
+
+register_state_provider("gds_via_detail", _save_via_state, _restore_via_state)
 
 
 def sync_new_via_layer(doc, obj):
