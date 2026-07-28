@@ -75,8 +75,13 @@ def run():
               abs(z0_mm - (-0.18375)) < 1e-6, f"got {z0_mm}")
     tc.check("total thickness > substrate alone (interconnect stack included)",
               thickness_mm > 0.18375, f"got {thickness_mm}")
-    tc.check("total thickness is a plausible die thickness (0.2 - 1.0 mm)",
-              0.2 < thickness_mm < 1.0, f"got {thickness_mm}")
+    tc.check("total thickness is a plausible die thickness (0.15 - 1.0 mm)",
+              0.15 < thickness_mm < 1.0, f"got {thickness_mm}")
+    # Regression guard: BACKSIDEGND/LBE (Zmin down to -190) must NOT be folded
+    # into interconnect_um alongside _substrate_offset_um, or the substrate
+    # gets counted twice (~0.388mm instead of the correct ~0.198mm on this XML).
+    tc.check("substrate is not double-counted (expect ~0.198mm, not ~0.388mm)",
+              abs(thickness_mm - 0.1979803) < 1e-4, f"got {thickness_mm}")
 
     # no stackup at all -> flat default, clearly labelled
     d_mm, d_z0, d_src = chip_proxy.get_die_thickness_mm({})

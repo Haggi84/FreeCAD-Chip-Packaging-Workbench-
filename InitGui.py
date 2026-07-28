@@ -37,6 +37,7 @@ try:
     from ui import TechConfigDialog  # noqa: F401  (side-effect: registers TechConfigCommand)
     from pcb import PCBImportCommand      # noqa: F401
     from pcb import PCBPlacementCommand   # noqa: F401
+    from routing import TraceRoutingCommand   # noqa: F401
 
     FreeCAD.Console.PrintMessage("Commands loaded successfully\n")
 except Exception as e:
@@ -138,6 +139,8 @@ class MyWorkbench(FreeCADGui.Workbench):
         "Package Assembly":         "Package",
         "Wire Bonding":             "Bonding",
         "Wire Bonding Session":     "Confirm / Abort",
+        "Trace Routing":            "Routing",
+        "Trace Routing Session":    "Confirm / Abort / End",
         "Session and Help":         "Workbench",
     }
 
@@ -210,6 +213,31 @@ class MyWorkbench(FreeCADGui.Workbench):
                 ],
             )
 
+            # ── Trace Routing ─────────────────────────────────────────────
+            self.appendToolbar(
+                "Trace Routing",
+                [
+                    "TraceRoutingCommand",
+                ],
+            )
+
+            # ── Trace Routing Session (contextual) ──────────────────────
+            # Confirm/Abort act on the single in-progress trace; End closes
+            # the whole session. Hidden at startup by
+            # _hide_trace_routing_session_toolbar below; shown/hidden
+            # dynamically by
+            # routing.TraceRoutingSession._set_session_toolbar_visible() as
+            # the session starts/ends — same contextual-toolbar pattern as
+            # "Wire Bonding Session" above.
+            self.appendToolbar(
+                "Trace Routing Session",
+                [
+                    "ConfirmTraceCommand",
+                    "AbortTraceCommand",
+                    "EndRoutingSessionCommand",
+                ],
+            )
+
             # ── Session and Help ─────────────────────────────────────────
             # NOTE: deliberately NOT named "Workbench" — FreeCAD's own
             # built-in workbench-selector widget already uses that exact
@@ -235,6 +263,7 @@ class MyWorkbench(FreeCADGui.Workbench):
             _QtCore.QTimer.singleShot(350, self._inject_toolbar_labels)
             _QtCore.QTimer.singleShot(400, self._inject_tech_status_label)
             _QtCore.QTimer.singleShot(400, self._hide_wirebond_session_toolbar)
+            _QtCore.QTimer.singleShot(400, self._hide_trace_routing_session_toolbar)
 
             _FreeCAD.Console.PrintMessage("Toolbars initialized\n")
         except Exception as e:
@@ -259,6 +288,26 @@ class MyWorkbench(FreeCADGui.Workbench):
             import FreeCAD as _FC
             _FC.Console.PrintWarning(
                 f"Wire Bonding Session toolbar hide failed: {exc}\n"
+            )
+
+    def _hide_trace_routing_session_toolbar(self):
+        """Hide the contextual Trace Routing Session toolbar at startup — it
+        only becomes visible while a routing session is actually active (see
+        routing.TraceRoutingSession._set_session_toolbar_visible)."""
+        try:
+            from compat import QtWidgets as _QW
+            import FreeCAD as _FC
+            import FreeCADGui as _FCGui
+
+            mw = _FCGui.getMainWindow()
+            for tb in mw.findChildren(_QW.QToolBar):
+                if tb.windowTitle() == "Trace Routing Session":
+                    tb.setVisible(False)
+                    break
+        except Exception as exc:
+            import FreeCAD as _FC
+            _FC.Console.PrintWarning(
+                f"Trace Routing Session toolbar hide failed: {exc}\n"
             )
 
     _TOOLBAR_LABEL_MAX_RETRIES = 15   # ~15 s — see _inject_toolbar_labels

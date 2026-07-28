@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Two pads joined by a bent copper trace, evoking point-to-point routing -->
+  <circle cx="12" cy="48" r="6" fill="#cc8833" stroke="#7a4d18" stroke-width="2"/>
+  <circle cx="52" cy="16" r="6" fill="#cc8833" stroke="#7a4d18" stroke-width="2"/>
+  <polyline points="12,48 12,32 32,32 32,16 52,16" fill="none"
+            stroke="#cc8833" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- faint grid dots, evoking the sampled routing grid -->
+  <g fill="#888888" fill-opacity="0.6">
+    <circle cx="22" cy="42" r="1.6"/>
+    <circle cx="42" cy="22" r="1.6"/>
+    <circle cx="22" cy="22" r="1.6"/>
+    <circle cx="42" cy="42" r="1.6"/>
+  </g>
+</svg>

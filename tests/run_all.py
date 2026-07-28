@@ -42,6 +42,7 @@ import test_add_lid
 import test_chip_proxy
 import test_chip_transform_proxy
 import test_leadframe_library_chip_proxy
+import test_trace_routing
 
 MODULES = [
     test_wirebond_geometry,
@@ -58,6 +59,7 @@ MODULES = [
     test_chip_proxy,
     test_chip_transform_proxy,
     test_leadframe_library_chip_proxy,
+    test_trace_routing,
 ]
 
 RESULTS_LOG = os.path.join(_THIS_DIR, "results.log")

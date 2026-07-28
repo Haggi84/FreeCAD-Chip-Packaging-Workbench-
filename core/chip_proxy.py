@@ -150,7 +150,14 @@ def get_die_thickness_mm(stackup_data: dict, substrate_thickness_um: float = Non
         if not isinstance(entry, dict) or id(entry) in seen:
             continue
         seen.add(id(entry))
-        if "zmin_um" in entry and "zmax_um" in entry:
+        # Only fold in layers at/above the wafer surface (Zmin >= 0) into the
+        # interconnect span. Some stackup XMLs also carry backside/substrate
+        # -simulation layers (e.g. IHP's BACKSIDEGND/LBE/SUBGND) whose Zmin
+        # reaches deep negative — down to the substrate underside itself.
+        # Those already represent the same physical depth _substrate_offset_um
+        # accounts for below; folding them into interconnect_um here would
+        # double-count the substrate on top of adding sub_um.
+        if "zmin_um" in entry and "zmax_um" in entry and entry["zmin_um"] >= 0:
             zmins.append(entry["zmin_um"])
             zmaxs.append(entry["zmax_um"])
 

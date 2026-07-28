@@ -12,6 +12,14 @@ Substrate / encapsulant frame objects (Substrate_Frames group, created by
 DetailLayerPanel._build_frames) are automatically included in the
 "GDS Chip Objects" scope so they move together with the chip layers.
 
+Chip Proxy (pick one):
+  When multiple chips have been imported as lightweight proxies
+  (core.chip_proxy), "GDS Chip Objects" moves ALL of them at once — not
+  useful when placing chips one at a time into a shared package. Use this
+  scope instead: pick a single "<name> (Proxy)" group from the dropdown,
+  optionally include the "Package" (leadframe) group and/or the PCB, and
+  only that chip (+ the checked companions) moves/rotates together.
+
 Align to Selection:
   Pick any object in the FreeCAD 3D view, then use the Align section:
   • "Snap Z (bottom → surface)"  — moves the chip group so its lowest Z
@@ -48,7 +56,7 @@ from Get_Path import get_icon
 # once at import so a stale/cached module (e.g. FreeCAD process not
 # actually restarted after an on-disk edit) is immediately visible in the
 # Report View instead of silently reproducing an already-fixed bug.
-_MODULE_VERSION = "2026-07-15 gds-objects-recognizes-chip-proxy v5"
+_MODULE_VERSION = "2026-07-21 per-proxy chip scope + package/pcb v6"
 FreeCAD.Console.PrintMessage(
     f"[DI-PASSIONATE] ChipTransformCommand loaded — {_MODULE_VERSION}\n"
     f"    file: {os.path.abspath(__file__)}\n"
@@ -153,6 +161,53 @@ def _gds_objects(doc):
                 objs.append(fo)
 
     return objs
+
+
+def _chip_proxy_groups(doc):
+    """
+    Every "<name> (Proxy)" group in *doc* — one per chip imported via
+    core.chip_proxy — identified by containing at least one member with
+    IsChipProxy=True (the die block). Used to populate the "Chip Proxy
+    (pick one)" scope's dropdown so multiple imported chips can be told
+    apart and moved independently instead of all at once.
+    """
+    if doc is None:
+        return []
+    return [
+        o for o in doc.Objects
+        if o.TypeId == "App::DocumentObjectGroup"
+        and any(getattr(m, "IsChipProxy", False) for m in getattr(o, "Group", []))
+    ]
+
+
+def _package_group(doc):
+    """The single "Package" (leadframe) group created by core.leadframe /
+    leadframe.LeadframeLibrary, or None if no leadframe has been built."""
+    if doc is None:
+        return None
+    return next(
+        (o for o in doc.Objects
+         if o.TypeId == "App::DocumentObjectGroup"
+         and (o.Name == "Package" or o.Label == "Package")),
+        None,
+    )
+
+
+def _pcb_root_objects(doc):
+    """
+    All root-level PCB body objects, via the IsPCBBoard-tagged anchor's
+    PCBBodyObjects property (see pcb.PCBImportCommand) — a PCB import can
+    produce several root-level bodies, only one of which carries the tag,
+    so reading just the tagged object itself would silently leave its
+    sibling bodies behind.
+    """
+    if doc is None:
+        return []
+    anchor = next((o for o in doc.Objects if getattr(o, "IsPCBBoard", False)), None)
+    if anchor is None:
+        return []
+    names = [n for n in (getattr(anchor, "PCBBodyObjects", "") or "").split(",") if n]
+    return [obj for obj in (doc.getObject(n) for n in names) if obj is not None]
 
 
 # Name suffixes of "display proxy" companion objects that live in a
@@ -525,14 +580,48 @@ class ChipTransformDialog(QtWidgets.QDialog):
 
         # Object scope
         scope_grp = QtWidgets.QGroupBox("Objects to Move")
-        scope_lay = QtWidgets.QHBoxLayout(scope_grp)
-        self._rb_gds = QtWidgets.QRadioButton("GDS Chip Objects")
-        self._rb_all = QtWidgets.QRadioButton("All Document Objects")
-        self._rb_sel = QtWidgets.QRadioButton("Current Selection")
+        scope_lay = QtWidgets.QVBoxLayout(scope_grp)
+
+        radio_row = QtWidgets.QHBoxLayout()
+        self._rb_gds   = QtWidgets.QRadioButton("GDS Chip Objects")
+        self._rb_all   = QtWidgets.QRadioButton("All Document Objects")
+        self._rb_sel   = QtWidgets.QRadioButton("Current Selection")
+        self._rb_proxy = QtWidgets.QRadioButton("Chip Proxy (pick one)")
         self._rb_gds.setChecked(True)
-        for rb in (self._rb_gds, self._rb_all, self._rb_sel):
-            scope_lay.addWidget(rb)
+        for rb in (self._rb_gds, self._rb_all, self._rb_sel, self._rb_proxy):
+            radio_row.addWidget(rb)
+            rb.toggled.connect(self._update_proxy_controls_enabled)
+        scope_lay.addLayout(radio_row)
+
+        proxy_row = QtWidgets.QHBoxLayout()
+        proxy_row.addWidget(QtWidgets.QLabel("Chip:"))
+        self._proxy_combo = QtWidgets.QComboBox()
+        self._proxy_combo.setToolTip(
+            "Which imported chip proxy to move — repopulated from the\n"
+            "'<name> (Proxy)' groups currently in the document."
+        )
+        proxy_row.addWidget(self._proxy_combo, 1)
+        proxy_refresh_btn = QtWidgets.QPushButton("↺")
+        proxy_refresh_btn.setFixedWidth(28)
+        proxy_refresh_btn.setToolTip("Refresh chip list (e.g. after importing another proxy)")
+        proxy_refresh_btn.clicked.connect(self._refresh_proxy_list)
+        proxy_row.addWidget(proxy_refresh_btn)
+        scope_lay.addLayout(proxy_row)
+
+        chk_row = QtWidgets.QHBoxLayout()
+        self._chk_package = QtWidgets.QCheckBox("+ Package / Leadframe")
+        self._chk_pcb      = QtWidgets.QCheckBox("+ PCB")
+        self._chk_package.setChecked(True)
+        self._chk_pcb.setChecked(True)
+        chk_row.addWidget(self._chk_package)
+        chk_row.addWidget(self._chk_pcb)
+        chk_row.addStretch()
+        scope_lay.addLayout(chk_row)
+
+        self._proxy_row_widgets = [self._proxy_combo, proxy_refresh_btn,
+                                    self._chk_package, self._chk_pcb]
         root.addWidget(scope_grp)
+        self._update_proxy_controls_enabled()
 
         # Translation
         t_grp = QtWidgets.QGroupBox("Translate")
@@ -684,6 +773,34 @@ class ChipTransformDialog(QtWidgets.QDialog):
         b.clicked.connect(callback)
         return b
 
+    # ── Chip Proxy scope ───────────────────────────────────────────────────────
+
+    def _update_proxy_controls_enabled(self):
+        enabled = self._rb_proxy.isChecked()
+        for w in self._proxy_row_widgets:
+            w.setEnabled(enabled)
+
+    def _refresh_proxy_list(self):
+        """Repopulate the chip dropdown from the document's current
+        '<name> (Proxy)' groups, preserving the current pick by object
+        Name (not list index) when it's still present."""
+        doc = FreeCAD.activeDocument()
+        groups = _chip_proxy_groups(doc)
+        prev_name = self._proxy_combo.currentData()
+        self._proxy_combo.blockSignals(True)
+        self._proxy_combo.clear()
+        for g in groups:
+            self._proxy_combo.addItem(g.Label or g.Name, g.Name)
+        if prev_name:
+            idx = self._proxy_combo.findData(prev_name)
+            if idx >= 0:
+                self._proxy_combo.setCurrentIndex(idx)
+        self._proxy_combo.blockSignals(False)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._refresh_proxy_list()
+
     # ── Snapshot & restore ─────────────────────────────────────────────────────
 
     def _snapshot_placements(self):
@@ -713,6 +830,8 @@ class ChipTransformDialog(QtWidgets.QDialog):
             objs = _selected_objects()
         elif self._rb_all.isChecked():
             objs = _all_objects(doc)
+        elif self._rb_proxy.isChecked():
+            objs = self._proxy_scope_objects(doc)
         else:
             objs = _gds_objects(doc)
         if not objs:
@@ -721,9 +840,31 @@ class ChipTransformDialog(QtWidgets.QDialog):
                 "No objects found for the selected scope.\n\n"
                 "• 'GDS Chip Objects' requires a GDS import (Layer_*, ContactPoint_*, …)\n"
                 "• 'Current Selection' requires objects selected in the 3D view\n"
+                "• 'Chip Proxy (pick one)' requires a chip picked in the dropdown\n"
                 "• 'All Document Objects' requires an open document",
             )
         return objs
+
+    def _proxy_scope_objects(self, doc):
+        """Objects for the 'Chip Proxy (pick one)' scope: the selected
+        proxy's block + pads, plus the Package/leadframe group and/or PCB
+        root objects when their checkboxes are ticked — reuses
+        _expand_selection so companion meshes/via-blocks and nested groups
+        are picked up exactly as they are for 'Current Selection'."""
+        if doc is None:
+            return []
+        grp_name = self._proxy_combo.currentData()
+        grp = doc.getObject(grp_name) if grp_name else None
+        if grp is None:
+            return []
+        roots = [grp]
+        if self._chk_package.isChecked():
+            pkg = _package_group(doc)
+            if pkg is not None:
+                roots.append(pkg)
+        if self._chk_pcb.isChecked():
+            roots.extend(_pcb_root_objects(doc))
+        return _expand_selection(roots, doc)
 
     # ── Transform actions ──────────────────────────────────────────────────────
 
