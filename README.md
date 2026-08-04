@@ -16,12 +16,6 @@ bonds and bumps, and saving the result as a native FreeCAD document.
 > **Project status:** actively developed and not yet API-stable. Interfaces and file
 > layouts may change between minor versions.
 
-<p align="center">
-  <img width="230" alt="Bonded die inside a package" src="https://github.com/user-attachments/assets/49d8373b-136f-4cf7-80d6-4976a90abba1" />
-  <img width="230" alt="Bonded die, alternate view" src="https://github.com/user-attachments/assets/59d32864-7f0b-452e-8055-ff854130013b" />
-</p>
-<p align="center"><em>A die bonded into a leadframe package, assembled entirely in the workbench.</em></p>
-
 ---
 
 ## Contents
