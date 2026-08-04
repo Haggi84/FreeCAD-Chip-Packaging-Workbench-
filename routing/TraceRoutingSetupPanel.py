@@ -142,6 +142,60 @@ class TraceRoutingSetupPanel:
         self._max_bend.setSuffix(" °")
         p_lay.addRow("Max bend angle:", self._max_bend)
 
+        # Preferred trace HEADINGS — segments are biased to run along
+        # multiples of the chosen step (the classic 45-degree PCB routing
+        # grid, Manhattan, ...). A SOFT bias, so a congested board still
+        # routes rather than failing when nothing on-grid fits.
+        self._angle_pref = QtWidgets.QComboBox()
+        self._angle_pref.addItems([
+            "Any angle (no preference)",
+            "45° grid (0/45/90/135)",
+            "90° grid (Manhattan)",
+            "30° grid (0/30/60/90/120/150)",
+        ])
+        self._angle_pref.setCurrentIndex(1)
+        self._angle_pref.setToolTip(
+            "Headings the copper should run along. Segments off this grid\n"
+            "are penalised, so the router prefers routes that stay on it."
+        )
+        p_lay.addRow("Preferred trace angles:", self._angle_pref)
+
+        self._angle_strength = QtWidgets.QDoubleSpinBox()
+        self._angle_strength.setRange(0.0, 20.0)
+        self._angle_strength.setDecimals(2)
+        self._angle_strength.setValue(1.00)
+        self._angle_strength.setSuffix(" mm/°")
+        self._angle_strength.setToolTip(
+            "How strongly to favour the preferred headings: extra routing cost\n"
+            "per degree off the nearest allowed heading.\n"
+            "Higher = straighter adherence but longer detours. 0 disables it."
+        )
+        p_lay.addRow("Angle preference strength:", self._angle_strength)
+
+        self._corner_radius = QtWidgets.QDoubleSpinBox()
+        self._corner_radius.setRange(0.0, 20.0)
+        self._corner_radius.setDecimals(3)
+        self._corner_radius.setValue(0.0)
+        self._corner_radius.setSuffix(" mm")
+        self._corner_radius.setToolTip(
+            "Radius of the arc that replaces each sharp corner.\n"
+            "0 keeps mitred (sharp) corners."
+        )
+        p_lay.addRow("Corner radius (rounding):", self._corner_radius)
+
+        self._escape = QtWidgets.QDoubleSpinBox()
+        self._escape.setRange(0.0, 50.0)
+        self._escape.setDecimals(2)
+        self._escape.setValue(0.0)
+        self._escape.setSuffix(" mm")
+        self._escape.setToolTip(
+            "How far a trace may run inside the pad/copper it starts or ends on,\n"
+            "so it can step off that pad without being allowed to travel along\n"
+            "a large copper pour.\n"
+            "0 = derive automatically from grid spacing, width and clearance."
+        )
+        p_lay.addRow("Max escape into start/end pad:", self._escape)
+
         root.addWidget(params_grp)
         self._params_grp = params_grp
 
@@ -219,6 +273,17 @@ class TraceRoutingSetupPanel:
         self._phase = _PHASE_FACES
         self._set_phase_ui()
 
+    # Heading grid step (degrees) per dropdown entry — segments are biased
+    # to run along multiples of this. 0 = no preference. See
+    # core.trace_routing.heading_deviation_deg.
+    _HEADING_STEPS = (0.0, 45.0, 90.0, 30.0)
+
+    def _heading_step(self) -> float:
+        idx = self._angle_pref.currentIndex()
+        if 0 <= idx < len(self._HEADING_STEPS):
+            return self._HEADING_STEPS[idx]
+        return 0.0
+
     # ── Ok / Cancel ───────────────────────────────────────────────────────
 
     def getStandardButtons(self):
@@ -239,8 +304,11 @@ class TraceRoutingSetupPanel:
         spacing = self._spacing.value()
         grid_points = []
         surface_names = set()
+        effective_spacing = spacing
         for obj_name, face in self._faces_data:
-            grid_points.extend(trace_routing.sample_face_grid(face, spacing))
+            face_pts, face_eff = trace_routing.sample_face_grid_ex(face, spacing)
+            grid_points.extend(face_pts)
+            effective_spacing = max(effective_spacing, face_eff)
             surface_names.add(obj_name)
 
         if not grid_points:
@@ -251,14 +319,35 @@ class TraceRoutingSetupPanel:
             )
             return
 
+        if effective_spacing > spacing * 1.01:
+            QtWidgets.QMessageBox.information(
+                None, "Grid spacing adjusted",
+                f"A spacing of {spacing:g} mm would need far more grid points "
+                f"than this surface can carry, so {effective_spacing:.3f} mm "
+                "was used instead.\n\n"
+                f"{len(grid_points)} grid point(s) were generated.\n\n"
+                "Pick a smaller face (or fewer faces) if you need a finer grid."
+            )
+
         params = {
-            "spacing_mm":   spacing,
+            # The spacing that ACTUALLY resulted — everything downstream
+            # (neighbour radius, spatial-hash cells, escape distance) must be
+            # sized to the grid that exists, not the one that was requested.
+            "spacing_mm":   effective_spacing,
+            "requested_spacing_mm": spacing,
             "width_mm":     self._width.value(),
             "thickness_mm": self._thickness.value(),
             "clearance_mm": self._clearance.value(),
             "max_bend_deg": self._max_bend.value(),
+            "heading_step_deg":           self._heading_step(),
+            "heading_penalty_mm_per_deg": self._angle_strength.value(),
+            "corner_radius_mm":         self._corner_radius.value(),
+            "escape_mm":                self._escape.value(),
         }
-        trace_router.start_routing_session(doc, grid_points, surface_names, params)
+        trace_router.start_routing_session(
+            doc, grid_points, surface_names, params,
+            surface_faces=[f for _n, f in self._faces_data],
+        )
 
         self._cleanup()
         QtCore.QTimer.singleShot(0, FreeCADGui.Control.closeDialog)

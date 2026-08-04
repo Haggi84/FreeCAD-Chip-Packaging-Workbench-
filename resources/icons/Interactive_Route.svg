@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- A 45-degree copper head leaving a pad and bending around an obstacle,
+       with a cursor arrow — the live interactive router. -->
+  <circle cx="12" cy="50" r="6" fill="#cc8833" stroke="#7a4d18" stroke-width="2"/>
+  <rect x="30" y="26" width="14" height="12" rx="1"
+        fill="#8a8a8a" fill-opacity="0.55" stroke="#555555" stroke-width="2"/>
+  <polyline points="12,50 24,50 34,40 44,40 52,32" fill="none"
+            stroke="#cc8833" stroke-width="5"
+            stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- cursor -->
+  <path d="M50,28 L50,44 L54,40 L57,46 L60,44 L57,38 L62,38 Z"
+        fill="#ffffff" stroke="#222222" stroke-width="2" stroke-linejoin="round"/>
+</svg>

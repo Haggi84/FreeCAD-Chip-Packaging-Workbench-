@@ -38,6 +38,7 @@ try:
     from pcb import PCBImportCommand      # noqa: F401
     from pcb import PCBPlacementCommand   # noqa: F401
     from routing import TraceRoutingCommand   # noqa: F401
+    from routing import InteractiveRouterCommand   # noqa: F401
 
     FreeCAD.Console.PrintMessage("Commands loaded successfully\n")
 except Exception as e:
@@ -217,6 +218,7 @@ class MyWorkbench(FreeCADGui.Workbench):
             self.appendToolbar(
                 "Trace Routing",
                 [
+                    "InteractiveRouteCommand",
                     "TraceRoutingCommand",
                 ],
             )

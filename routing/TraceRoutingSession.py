@@ -50,14 +50,25 @@ def _resolve_obj(doc, obj_name):
 
 
 class _RoutePointGate:
-    """FreeCAD SelectionGate that allows only this session's grid-point
-    markers (IsRoutingGridPoint=True) — mirrors
-    wirebond.ManualWireBonding._ContactPointGate."""
+    """
+    FreeCAD SelectionGate allowing this session's grid-point cloud
+    (IsRoutingGridPoint=True) AND the routing surface object(s) — mirrors
+    wirebond.ManualWireBonding._ContactPointGate, but deliberately wider:
+    hitting one dot out of a couple of thousand is fiddly, so clicking the
+    surface anywhere is accepted and snapped to the nearest grid point (see
+    TraceRoutingSession._resolve_clicked_point).
+    """
+
+    def __init__(self, surface_names=()):
+        self._surface_names = set(surface_names or ())
 
     def allow(self, doc, obj, sub) -> bool:
         try:
             fc_obj = obj if not isinstance(obj, str) else _resolve_obj(doc, obj)
-            return fc_obj is not None and getattr(fc_obj, "IsRoutingGridPoint", False)
+            if fc_obj is None:
+                return False
+            return (bool(getattr(fc_obj, "IsRoutingGridPoint", False))
+                    or fc_obj.Name in self._surface_names)
         except Exception:
             return False
 
@@ -121,15 +132,23 @@ class TraceRoutingSession:
         self._waypoints = []
         self._leg_preview_names = []
         self._grid_names = []
+        self._surface_names = set()
         self._status = ""
 
     # ── session lifecycle ────────────────────────────────────────────────
 
-    def start_routing_session(self, doc, grid_points, surface_names, params) -> bool:
+    def start_routing_session(self, doc, grid_points, surface_names, params,
+                              surface_faces=None) -> bool:
         """
         Sample-grid markers + obstacle collection + visibility graph are all
         built HERE (not by the setup panel) so this class owns the full
         lifecycle of everything it creates, including cleanup on abort/end.
+
+        *surface_faces* are the Part.Face objects the grid was sampled from;
+        their HOLES become keep-outs too (see trace_routing.face_hole_rects)
+        — grid points are never placed inside a cutout, but without this a
+        straight edge between two points on opposite sides of one would run
+        right across it.
         """
         if self.is_active:
             self.end_session()
@@ -144,6 +163,7 @@ class TraceRoutingSession:
         self._waypoints = []
         self._leg_preview_names = []
         self._grid_names = []
+        self._surface_names = set(surface_names or ())
 
         spacing_mm   = self.params["spacing_mm"]
         width_mm     = self.params["width_mm"]
@@ -159,6 +179,10 @@ class TraceRoutingSession:
             doc, exclude_names=set(surface_names),
             z_min=z_band_min, z_max=z_band_max, expand_mm=expand_mm,
         )
+        n_body = len(obstacles)
+        for face in (surface_faces or ()):
+            obstacles.extend(trace_routing.face_hole_rects(face, expand_mm))
+        n_holes = len(obstacles) - n_body
 
         neighbor_radius = trace_routing.DEFAULT_NEIGHBOR_RADIUS_MULTIPLIER * spacing_mm
         self._graph = trace_routing.build_visibility_graph(
@@ -175,16 +199,22 @@ class TraceRoutingSession:
 
         self.is_active = True
         FreeCADGui.Selection.addObserver(self)
-        FreeCADGui.Selection.addSelectionGate(_RoutePointGate())
+        FreeCADGui.Selection.addSelectionGate(_RoutePointGate(self._surface_names))
         _set_session_toolbar_visible(True)
         self._set_status("Trace routing — click a grid point to start a trace")
+        step = self.params.get("heading_step_deg", 0.0)
+        pref_txt = f"{step:g}° grid" if step else "any angle"
         FreeCAD.Console.PrintMessage(
             "Trace routing session started.\n"
             f"  {len(grid_points)} grid point(s) — spacing={spacing_mm}mm, "
             f"width={width_mm}mm, thickness={thickness_mm}mm, "
             f"clearance={clearance_mm}mm, max bend={self.params['max_bend_deg']} deg.\n"
-            "  Click a grid point to set the trace start, click again to route "
-            "the next leg.\n"
+            f"  {n_body} body keep-out(s) + {n_holes} surface-cutout keep-out(s).\n"
+            f"  preferred trace angles: {pref_txt}"
+            f" | corner radius: {self.params.get('corner_radius_mm', 0.0):g} mm\n"
+            "  Click a grid point (or anywhere on the routing surface — the "
+            "nearest grid point is used) to set the trace start, click again "
+            "to route the next leg.\n"
             "  Use 'Confirm Trace' / 'Abort Trace' / 'End Routing Session' from "
             "the contextual toolbar as needed.\n"
         )
@@ -198,10 +228,12 @@ class TraceRoutingSession:
             return
 
         doc = self.doc
+        waypoints = list(self._waypoints)
         doc.openTransaction("Trace Routing: Confirm Trace")
         try:
             solid = trace_routing.build_trace_solid(
-                self._waypoints, self.params["width_mm"], self.params["thickness_mm"]
+                waypoints, self.params["width_mm"], self.params["thickness_mm"],
+                corner_radius_mm=self.params.get("corner_radius_mm", 0.0),
             )
             trace_obj = self._bake_trace(doc, solid)
             self._remove_objects(self._leg_preview_names)
@@ -210,11 +242,17 @@ class TraceRoutingSession:
         doc.recompute()
 
         self._leg_preview_names = []
+        # One keep-out per SEGMENT, not one for the whole trace: a trace's
+        # overall bounding box covers the entire rectangle it spans, so an
+        # L-shaped or diagonal trace would wrongly block a large empty area
+        # (and, being so coarse, would also mis-describe where the copper
+        # actually is) for every later trace in this session.
         expand = self.params["clearance_mm"] + self.params["width_mm"] / 2.0
-        bb = trace_obj.Shape.BoundBox
-        self._graph.add_obstacle(trace_routing.Rect(
-            bb.XMin - expand, bb.YMin - expand, bb.XMax + expand, bb.YMax + expand,
-        ))
+        for a, b in zip(waypoints, waypoints[1:]):
+            self._graph.add_obstacle(trace_routing.Rect(
+                min(a.x, b.x) - expand, min(a.y, b.y) - expand,
+                max(a.x, b.x) + expand, max(a.y, b.y) + expand,
+            ))
         self._waypoints = []
         self._trace_state = _TraceState.AWAIT_START
         self._set_status("Trace confirmed. Click a grid point to start the next trace.")
@@ -284,12 +322,19 @@ class TraceRoutingSession:
         if not self.is_active:
             return
         obj = _resolve_obj(doc, obj_name)
-        if obj is None or not getattr(obj, "IsRoutingGridPoint", False):
+        if obj is None:
             FreeCADGui.Selection.clearSelection()
-            self._set_status("Trace routing — only grid points can be selected")
+            return
+        is_grid    = bool(getattr(obj, "IsRoutingGridPoint", False))
+        is_surface = obj.Name in self._surface_names
+        if not (is_grid or is_surface):
+            FreeCADGui.Selection.clearSelection()
+            self._set_status(
+                "Trace routing — click a grid point or the routing surface"
+            )
             return
 
-        pt = self._resolve_clicked_point(obj, sub, pos)
+        pt = self._resolve_clicked_point(obj, sub, pos, is_grid)
         if pt is None:
             FreeCADGui.Selection.clearSelection()
             return
@@ -306,31 +351,74 @@ class TraceRoutingSession:
 
         FreeCADGui.Selection.clearSelection()
 
-    def _resolve_clicked_point(self, obj, sub, pos):
+    def _resolve_clicked_point(self, obj, sub, pos, is_grid: bool):
         """
-        Resolve the exact clicked grid-point coordinate. The routing grid is
-        ONE compound-of-vertices object (see _make_grid_cloud), so *sub*
-        (e.g. "Vertex42") identifies which point was hit — resolved via
-        Shape.getElement(sub), the same convention
+        Resolve the grid point the user meant.
+
+        Clicking an individual dot in a 2000+ point cloud is fiddly, so a
+        click ANYWHERE on the routing surface is accepted too and snapped to
+        the nearest grid point (_nearest_grid_point). When a grid vertex was
+        hit directly, *sub* (e.g. "Vertex42") identifies which one —
+        resolved via Shape.getElement(sub), the same convention
         gds.ChipTransformCommand._target_xy_pick uses for vertex
         sub-elements, rather than assuming index 0 as a one-point-per-object
-        design would. Falls back to the raw picked position *pos* (as
-        FreeCAD.Vector) if sub-element resolution fails for any reason.
+        design would.
         """
-        try:
-            if sub:
-                elem = obj.Shape.getElement(sub)
-                if hasattr(elem, "Point"):
-                    p = elem.Point
-                    return FreeCAD.Vector(p.x, p.y, p.z)
-        except Exception:
-            pass
-        if pos:
+        if is_grid:
             try:
-                return FreeCAD.Vector(pos[0], pos[1], pos[2])
+                if sub:
+                    elem = obj.Shape.getElement(sub)
+                    if hasattr(elem, "Point"):
+                        p = elem.Point
+                        return FreeCAD.Vector(p.x, p.y, p.z)
             except Exception:
                 pass
+        if pos:
+            try:
+                raw = FreeCAD.Vector(pos[0], pos[1], pos[2])
+            except Exception:
+                return None
+            snapped = self._nearest_grid_point(raw)
+            return snapped if snapped is not None else (None if not is_grid else raw)
         return None
+
+    def _nearest_grid_point(self, pt):
+        """Closest sampled grid point to *pt* in XY, or None if the click
+        landed too far from the grid to be meaningful. Uses the graph's
+        existing spatial hash, widening the search ring until something is
+        found, so this stays cheap on a 2000+ point grid."""
+        g = self._graph
+        if g is None or not g.points:
+            return None
+        cell = g.cell_size
+        cx, cy = trace_routing._cell_of(pt.x, pt.y, cell)
+        best = None
+        best_d2 = None
+        for ring in range(0, 6):
+            for dx in range(-ring, ring + 1):
+                for dy in range(-ring, ring + 1):
+                    if ring > 0 and abs(dx) != ring and abs(dy) != ring:
+                        continue          # only the newly-added ring
+                    for i in g._point_index.get((cx + dx, cy + dy), ()):
+                        p = g.points[i]
+                        d2 = (p.x - pt.x) ** 2 + (p.y - pt.y) ** 2
+                        if best_d2 is None or d2 < best_d2:
+                            best_d2 = d2
+                            best = p
+            if best is not None:
+                break
+        return best
+
+    def _escape_mm(self) -> float:
+        """How far a trace may run inside the copper/pad it starts or ends on
+        (see trace_routing.VisibilityGraph.clear_with_escape). User-set when
+        provided; otherwise a board-scaled default big enough to step off a
+        pad but far too small to traverse a copper pour."""
+        v = self.params.get("escape_mm")
+        if v:
+            return float(v)
+        return max(2.0 * self.params.get("spacing_mm", 0.5),
+                   self.params.get("width_mm", 0.3) + 2.0 * self.params.get("clearance_mm", 0.2))
 
     def _route_next_leg(self, pt) -> None:
         last = self._waypoints[-1]
@@ -338,31 +426,47 @@ class TraceRoutingSession:
             self._set_status("Trace routing — click a different point to continue")
             return
 
-        leg = trace_routing.route_leg(self._graph, last, pt, self.params["max_bend_deg"])
+        leg = trace_routing.route_leg(
+            self._graph, last, pt, self.params["max_bend_deg"],
+            heading_step_deg=self.params.get("heading_step_deg", 0.0),
+            heading_penalty_mm_per_deg=self.params.get("heading_penalty_mm_per_deg", 0.0),
+            escape_mm=self._escape_mm(),
+        )
         if leg is None:
             self._set_status(
-                "No path found for that leg — try a larger grid spacing or a "
-                "looser max bend angle"
+                "No path found for that leg — try a smaller clearance, a looser "
+                "max bend angle, or a start/end point clear of existing copper"
             )
             FreeCAD.Console.PrintWarning("[TraceRouting] No path found for this leg.\n")
             return
 
         new_pts = leg[1:]   # leg[0] duplicates the already-accumulated `last`
+        candidate = self._waypoints + new_pts
+
+        # Rebuild the preview as ONE solid over the WHOLE trace so far, not
+        # one solid per leg. Per-leg solids meet at sharp butt joints, which
+        # leaves visible notches at every corner, and — because a single leg
+        # is usually just two points — no corner ever existed for the corner
+        # radius to round, so that option looked like it did nothing until
+        # the trace was confirmed. One solid means the preview is exactly
+        # what Confirm will bake.
         try:
             solid = trace_routing.build_trace_solid(
-                [last] + new_pts, self.params["width_mm"], self.params["thickness_mm"]
+                candidate, self.params["width_mm"], self.params["thickness_mm"],
+                corner_radius_mm=self.params.get("corner_radius_mm", 0.0),
             )
         except Exception as exc:
             FreeCAD.Console.PrintWarning(f"[TraceRouting] leg solid build failed: {exc}\n")
             return
 
         self.doc.openTransaction("Trace Routing: Add Leg")
+        self._remove_objects(self._leg_preview_names)
         preview = self._bake_preview(solid)
         self.doc.commitTransaction()
         FreeCADGui.updateGui()
 
-        self._leg_preview_names.append(preview.Name)
-        self._waypoints.extend(new_pts)
+        self._leg_preview_names = [preview.Name]
+        self._waypoints = candidate
         self._set_status(
             f"{len(self._waypoints)} waypoint(s) so far — click to continue, "
             "Confirm Trace to finish, or Abort Trace to discard"
@@ -409,14 +513,20 @@ class TraceRoutingSession:
                          "Trace-routing candidate grid (one compound object, many points)")
         obj.IsRoutingGridPoint = True
         if FreeCAD.GuiUp:
-            obj.ViewObject.PointSize   = 8
+            # Deliberately large: these are click targets on a dense grid,
+            # and clicking anywhere on the surface snaps to the nearest one
+            # anyway (see _resolve_clicked_point).
+            obj.ViewObject.PointSize   = 6
             obj.ViewObject.PointColor  = _GRID_COLOR
             obj.ViewObject.DisplayMode = "Points"
         return obj
 
     def _bake_preview(self, solid):
-        idx = len(self._leg_preview_names) + 1
-        obj = self.doc.addObject("Part::Feature", f"TracePreview_{idx:04d}")
+        # There is exactly one preview object at a time (rebuilt per leg over
+        # the whole trace), but the counter keeps successive names distinct so
+        # a stale object can never be silently reused.
+        self._preview_seq = getattr(self, "_preview_seq", 0) + 1
+        obj = self.doc.addObject("Part::Feature", f"TracePreview_{self._preview_seq:04d}")
         obj.Shape = solid
         if FreeCAD.GuiUp:
             obj.ViewObject.ShapeColor   = _PREVIEW_COLOR

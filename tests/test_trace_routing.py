@@ -44,6 +44,42 @@ def run():
     tc.check("sample_face_grid: all points lie on the top face (z=1)",
               all(abs(p.z - 1.0) < 1e-6 for p in grid_pts))
 
+    # ── effective spacing must reflect the grid that ACTUALLY got built ─────
+    # The point budget can force a coarser grid than requested. Sizing the
+    # visibility graph from the REQUESTED spacing then leaves the neighbour
+    # radius smaller than the real point pitch, so no point has any
+    # neighbour, the graph has zero edges, and routing degenerates to
+    # "straight line only" — every leg needing a real detour reports
+    # "no path found". This is the regression guard for that.
+    big_face = Part.Face(Part.makePolygon(
+        [V(0, 0, 0), V(100, 0, 0), V(100, 100, 0), V(0, 100, 0), V(0, 0, 0)]))
+    for requested in (0.5, 0.01):
+        bf_pts, bf_eff = trace_routing.sample_face_grid_ex(big_face, requested)
+        xs = sorted(set(round(p.x, 6) for p in bf_pts))
+        actual_step = min(xs[i + 1] - xs[i] for i in range(len(xs) - 1)) if len(xs) > 1 else 0.0
+        tc.check(f"sample_face_grid_ex({requested}mm on 100mm face): reported effective "
+                  "spacing matches the real point pitch",
+                  abs(bf_eff - actual_step) < 1e-6,
+                  f"reported {bf_eff}, actual {actual_step}")
+        radius = trace_routing.DEFAULT_NEIGHBOR_RADIUS_MULTIPLIER * bf_eff
+        tc.check(f"sample_face_grid_ex({requested}mm): a neighbour radius derived from the "
+                  "effective spacing actually reaches the next point",
+                  radius >= actual_step, f"radius {radius} < step {actual_step}")
+        bf_graph = trace_routing.build_visibility_graph(list(bf_pts), [], radius, bf_eff)
+        mid = len(bf_graph.points) // 2
+        tc.check(f"sample_face_grid_ex({requested}mm): the resulting visibility graph is "
+                  "connected (a mid-grid node has neighbours)",
+                  len(bf_graph.neighbors(mid)) > 0,
+                  "graph has no edges — routing would only ever return straight lines")
+
+    tc.check("sample_face_grid respects the total point budget",
+              len(trace_routing.sample_face_grid(big_face, 0.001))
+              <= trace_routing.MAX_GRID_POINTS,
+              f"got {len(trace_routing.sample_face_grid(big_face, 0.001))}")
+
+    tc.check("sample_face_grid still returns a plain list of points",
+              isinstance(trace_routing.sample_face_grid(big_face, 5.0), list))
+
     # ── sample_face_grid: curved-surface fallback path ───────────────────────
     cyl = Part.makeCylinder(5.0, 10.0)
     curved_face = next((f for f in cyl.Faces if not isinstance(f.Surface, Part.Plane)), None)
@@ -381,6 +417,133 @@ def run():
               "exempted (no free straight shot, only 2 collinear nodes -> None)",
               routed_ex2 is None, f"got {routed_ex2}")
 
+    # ── bounded endpoint escape (obstacles were being ignored) ──────────────
+    # The reported "obstacles are not considered": exempting the whole
+    # obstacle a leg starts on let the trace run the ENTIRE length of a
+    # copper pour that merely happened to contain the start point. The
+    # exemption must instead bound how far the trace travels INSIDE it.
+    pour = trace_routing.Rect(-1.0, -1.0, 20.0, 1.0)   # 21 x 2 mm pour
+    p_in   = V(0.0, 0.0, 0.0)      # inside the pour
+    p_far  = V(30.0, 0.0, 0.0)     # straight line would run 20mm down the pour
+    p_side = V(0.0, 8.0, 0.0)      # straight line exits after only 1mm
+
+    tc.check("segment_rect_overlap_length: lengthwise run measures the full span",
+              abs(trace_routing.segment_rect_overlap_length(p_in, p_far, pour) - 20.0) < 1e-6,
+              f"got {trace_routing.segment_rect_overlap_length(p_in, p_far, pour)}")
+    tc.check("segment_rect_overlap_length: sideways exit measures only the escape",
+              abs(trace_routing.segment_rect_overlap_length(p_in, p_side, pour) - 1.0) < 1e-6,
+              f"got {trace_routing.segment_rect_overlap_length(p_in, p_side, pour)}")
+    tc.check("segment_rect_overlap_length: no overlap when the segment misses",
+              trace_routing.segment_rect_overlap_length(V(0, 5, 0), V(10, 5, 0), pour) == 0.0)
+
+    ESC = 3.0
+    g_tunnel = trace_routing.VisibilityGraph([p_in, p_far], [pour],
+                                                neighbor_radius=100.0, cell_size=5.0)
+    tc.check("route_leg: will NOT tunnel the length of a pour it merely starts in "
+              "(regression guard for 'obstacles are not considered')",
+              trace_routing.route_leg(g_tunnel, p_in, p_far, 45.0, escape_mm=ESC) is None)
+
+    g_escape = trace_routing.VisibilityGraph([p_in, p_side], [pour],
+                                                neighbor_radius=100.0, cell_size=5.0)
+    tc.check("route_leg: CAN still step straight off the pad/copper it starts on",
+              trace_routing.route_leg(g_escape, p_in, p_side, 45.0, escape_mm=ESC) is not None)
+
+    detour = V(15.0, 6.0, 0.0)
+    g_detour = trace_routing.VisibilityGraph([p_in, p_far, detour], [pour],
+                                                neighbor_radius=100.0, cell_size=5.0)
+    routed_detour = trace_routing.route_leg(g_detour, p_in, p_far, 170.0, escape_mm=ESC)
+    tc.check("route_leg: routes AROUND the pour when a clear detour node exists",
+              routed_detour is not None and len(routed_detour) == 3,
+              f"got {routed_detour}")
+
+    # ── preferred trace headings (45-degree routing etc.) ────────────────────
+    # The setting constrains the direction each SEGMENT runs, not the angle
+    # it turns through: a single straight run at an arbitrary 26.6 degrees
+    # has no corner at all, so a turn-angle metric would score it perfect
+    # while being exactly what "prefer 45 degrees" is meant to avoid.
+    tc.check("heading_deviation_deg: an on-grid heading has zero deviation",
+              trace_routing.heading_deviation_deg(V(0, 0, 0), V(5, 5, 0), 45.0) < 1e-9)
+    tc.check("heading_deviation_deg: measures the offset from the nearest allowed heading",
+              abs(trace_routing.heading_deviation_deg(V(0, 0, 0), V(10, 5, 0), 45.0)
+                  - 18.4349) < 1e-3,
+              f"got {trace_routing.heading_deviation_deg(V(0, 0, 0), V(10, 5, 0), 45.0)}")
+    tc.check("heading_deviation_deg: a heading and its reverse are the same direction",
+              abs(trace_routing.heading_deviation_deg(V(0, 0, 0), V(10, 5, 0), 45.0)
+                  - trace_routing.heading_deviation_deg(V(10, 5, 0), V(0, 0, 0), 45.0)) < 1e-9)
+    tc.check("heading_deviation_deg: disabled when step is 0",
+              trace_routing.heading_deviation_deg(V(0, 0, 0), V(10, 3, 0), 0.0) == 0.0)
+
+    # End-to-end: an unobstructed leg whose straight line is off-grid. The
+    # straight shot must win with no preference, and a 45-degree preference
+    # must instead produce a route whose every segment is ON the grid. This
+    # is the regression guard for the setting silently doing nothing: the
+    # direct line-of-sight short-circuit used to return the straight
+    # arbitrary-angle line before the preference was ever consulted.
+    hp_pts = [V(x * 1.0, y * 1.0, 0) for x in range(13) for y in range(13)]
+    hp_s, hp_e = V(0, 0, 0), V(10, 6, 0)
+
+    def _hp_graph():
+        return trace_routing.VisibilityGraph(hp_pts, [], neighbor_radius=4.0, cell_size=1.0)
+
+    hp_none = trace_routing.route_leg(_hp_graph(), hp_s, hp_e, 179.0)
+    tc.check("heading preference: with none set, the direct straight line is used",
+              hp_none is not None and len(hp_none) == 2, f"got {hp_none}")
+
+    hp_45 = trace_routing.route_leg(_hp_graph(), hp_s, hp_e, 179.0,
+                                     heading_step_deg=45.0,
+                                     heading_penalty_mm_per_deg=1.0)
+    tc.check("heading preference: a 45-degree grid actually changes the route "
+              "(regression guard — the fast path used to bypass it entirely)",
+              hp_45 is not None and len(hp_45) > 2, f"got {hp_45}")
+    if hp_45:
+        devs = [trace_routing.heading_deviation_deg(a, b, 45.0)
+                for a, b in zip(hp_45, hp_45[1:])]
+        tc.check("heading preference: EVERY segment ends up on the 45-degree grid",
+                  all(d < 1e-6 for d in devs), f"deviations: {devs}")
+
+    hp_90 = trace_routing.route_leg(_hp_graph(), hp_s, hp_e, 179.0,
+                                     heading_step_deg=90.0,
+                                     heading_penalty_mm_per_deg=1.0)
+    if hp_90:
+        devs90 = [trace_routing.heading_deviation_deg(a, b, 90.0)
+                  for a, b in zip(hp_90, hp_90[1:])]
+        tc.check("heading preference: a 90-degree grid yields a Manhattan route",
+                  all(d < 1e-6 for d in devs90), f"deviations: {devs90}")
+
+    # simplify_path must not undo the preference: shortening a path is not
+    # worth it if the shortcut runs off-grid. (Previously A* produced a clean
+    # 90/90-degree path and this pass collapsed it to one 26.6-degree bend.)
+    staircase = [V(0, 0, 0), V(2, 0, 0), V(2, 2, 0), V(4, 2, 0)]
+    simp_free = trace_routing.simplify_path(staircase, [], 179.0)
+    tc.check("simplify_path: with no heading preference it still shortens freely",
+              len(simp_free) < len(staircase), f"got {simp_free}")
+    simp_kept = trace_routing.simplify_path(staircase, [], 179.0,
+                                             heading_step_deg=90.0,
+                                             heading_penalty_mm_per_deg=1.0)
+    kept_devs = [trace_routing.heading_deviation_deg(a, b, 90.0)
+                 for a, b in zip(simp_kept, simp_kept[1:])]
+    tc.check("simplify_path: a heading preference stops it collapsing an on-grid "
+              "path into an off-grid diagonal",
+              all(d < 1e-6 for d in kept_devs), f"got {simp_kept}, devs {kept_devs}")
+
+    tc.check("path_cost: charges length plus the heading penalty",
+              abs(trace_routing.path_cost([V(0, 0, 0), V(10, 0, 0)], 45.0, 1.0) - 10.0) < 1e-9)
+
+    # ── face holes become keep-outs ──────────────────────────────────────────
+    fh_outer = Part.Face(Part.makePolygon(
+        [V(0, 0, 0), V(20, 0, 0), V(20, 20, 0), V(0, 20, 0), V(0, 0, 0)]))
+    fh_holed = fh_outer.cut(Part.Face(Part.Wire(Part.makeCircle(2.0, V(10, 10, 0)))))
+    fh_rects = trace_routing.face_hole_rects(fh_holed.Faces[0], 0.0)
+    tc.check("face_hole_rects: a cutout in the routing surface becomes one keep-out",
+              len(fh_rects) == 1, f"got {len(fh_rects)}: {fh_rects}")
+    if fh_rects:
+        r = fh_rects[0]
+        tc.check("face_hole_rects: the keep-out covers the hole, not the whole face",
+                  r.xmin > 7.0 and r.xmax < 13.0, f"got {r}")
+    tc.check("face_hole_rects: a face with no holes yields no keep-outs "
+              "(the outer boundary bounds the region, it doesn't block it)",
+              trace_routing.face_hole_rects(fh_outer, 0.0) == [])
+
     # ── build_trace_solid ────────────────────────────────────────────────────
     two_pt = [V(0, 0, 0), V(10, 0, 0)]
     shape_2pt = trace_routing.build_trace_solid(two_pt, width_mm=0.3, thickness_mm=0.05)
@@ -401,6 +564,43 @@ def run():
     tc.check("build_trace_solid: box-fuse fallback path (exercised directly) is valid with volume",
               fallback_shape is not None and fallback_shape.isValid() and not fallback_shape.isNull()
               and fallback_shape.Volume > 0)
+
+    # ── rounded corners ──────────────────────────────────────────────────────
+    corner_pts = [V(0, 0, 0), V(10, 0, 0), V(10, 10, 0)]
+    sharp_shape = trace_routing.build_trace_solid(corner_pts, 0.3, 0.035,
+                                                    corner_radius_mm=0.0)
+    round_shape = trace_routing.build_trace_solid(corner_pts, 0.3, 0.035,
+                                                    corner_radius_mm=1.0)
+    tc.check("build_trace_solid: rounded-corner trace is a valid solid with volume",
+              round_shape is not None and round_shape.isValid()
+              and not round_shape.isNull() and round_shape.Volume > 0,
+              f"volume={getattr(round_shape, 'Volume', None)}")
+    # Compare at the SPINE level, not the solid: makePipeShell is called with
+    # round-corner transition mode, so even a sharp polyline spine yields
+    # some arc geometry in the swept solid — that's the sweep's corner
+    # treatment, not the path rounding under test here.
+    round_spine = trace_routing._rounded_spine_edges(corner_pts, 1.0)
+    tc.check("_rounded_spine_edges: rounding replaces the corner with an arc",
+              round_spine is not None
+              and any("Circle" in type(e.Curve).__name__ for e in round_spine),
+              f"got {round_spine}")
+    tc.check("_rounded_spine_edges: radius 0 means no rounding at all",
+              trace_routing._rounded_spine_edges(corner_pts, 0.0) is None)
+    tc.check("build_trace_solid: rounding a corner shortens the trace slightly "
+              "(the arc cuts it, so volume drops)",
+              round_shape.Volume < sharp_shape.Volume,
+              f"round={round_shape.Volume} sharp={sharp_shape.Volume}")
+
+    # An absurdly large radius must not produce broken geometry — the inset is
+    # clamped per corner, so this still yields a valid solid.
+    huge_r = trace_routing.build_trace_solid(corner_pts, 0.3, 0.035,
+                                               corner_radius_mm=500.0)
+    tc.check("build_trace_solid: an over-large corner radius is clamped, not fatal",
+              huge_r is not None and huge_r.isValid() and huge_r.Volume > 0,
+              f"got {huge_r}")
+
+    tc.check("_rounded_spine_edges: a 2-point (corner-free) path needs no rounding",
+              trace_routing._rounded_spine_edges([V(0, 0, 0), V(5, 0, 0)], 1.0) is None)
 
     def _too_few_points():
         trace_routing.build_trace_solid([V(0, 0, 0)], 0.3, 0.05)
