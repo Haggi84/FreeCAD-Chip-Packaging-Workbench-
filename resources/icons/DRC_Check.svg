@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Two copper pads with a caliper measuring the gap between them, and a
+       warning triangle marking a clearance violation. -->
+  <rect x="6" y="26" width="16" height="16" rx="1"
+        fill="#cc8833" stroke="#7a4d18" stroke-width="2"/>
+  <rect x="42" y="26" width="16" height="16" rx="1"
+        fill="#cc8833" stroke="#7a4d18" stroke-width="2"/>
+  <path d="M22,34 L42,34" stroke="#dddddd" stroke-width="2" stroke-linecap="round"/>
+  <path d="M22,30 L22,38 M42,30 L42,38" stroke="#dddddd" stroke-width="2"/>
+  <path d="M32,10 L44,30 L20,30 Z" fill="#e6c229" stroke="#7a5c10" stroke-width="2"
+        stroke-linejoin="round"/>
+  <path d="M32,17 L32,24" stroke="#3a2c00" stroke-width="2.5" stroke-linecap="round"/>
+  <circle cx="32" cy="27.5" r="1.4" fill="#3a2c00"/>
+</svg>

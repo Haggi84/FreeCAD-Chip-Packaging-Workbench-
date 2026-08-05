@@ -46,6 +46,8 @@ import test_trace_routing
 import test_trace_walkaround
 import test_trace_obstacles
 import test_routing_frame
+import test_drc
+import test_batch_route
 
 MODULES = [
     test_wirebond_geometry,
@@ -66,6 +68,8 @@ MODULES = [
     test_trace_walkaround,
     test_trace_obstacles,
     test_routing_frame,
+    test_drc,
+    test_batch_route,
 ]
 
 RESULTS_LOG = os.path.join(_THIS_DIR, "results.log")

@@ -189,6 +189,29 @@ def run():
                   len(hp) == 1, f"got {len(hp)}")
         tc.check("face_hole_polys: a face with no holes yields none",
                   tob.face_hole_polys(outer) == [])
+
+        # ── outline_polys_of_object_on_frame: single-object footprint ───────
+        import core.routing_frame as rf
+        top = board.Shape.Faces[max(
+            range(len(board.Shape.Faces)),
+            key=lambda i: board.Shape.Faces[i].Area)]
+        frame = rf.SurfaceFrame(top)
+        trace_obj = doc.addObject("Part::Feature", "SomeTrace")
+        trace_obj.Shape = Part.makeBox(5, 0.3, 0.1, V(0, 0, 1))
+
+        trace_polys = tob.outline_polys_of_object_on_frame(trace_obj, frame)
+        tc.check("outline_polys_of_object_on_frame: one polygon for a single-solid object",
+                  len(trace_polys) == 1, f"got {len(trace_polys)}")
+        if trace_polys:
+            bbox = trace_polys[0].bbox
+            tc.check("outline_polys_of_object_on_frame: the polygon matches the "
+                      "object's own footprint, not some other object's",
+                      abs((bbox[2] - bbox[0]) - 5.0) < 0.2 and abs((bbox[3] - bbox[1]) - 0.3) < 0.2,
+                      f"bbox {bbox}")
+
+        empty_obj = doc.addObject("Part::Feature", "EmptyShape")
+        tc.check("outline_polys_of_object_on_frame: an object with no Shape yields no polygons",
+                  tob.outline_polys_of_object_on_frame(empty_obj, frame) == [])
     finally:
         FreeCAD.closeDocument(doc.Name)
 

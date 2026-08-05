@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Three pad pairs queued for routing: two already connected by copper
+       traces, one still pending (dashed), suggesting "route several at once". -->
+  <circle cx="8"  cy="14" r="5" fill="#cc8833" stroke="#7a4d18" stroke-width="2"/>
+  <circle cx="56" cy="14" r="5" fill="#cc8833" stroke="#7a4d18" stroke-width="2"/>
+  <path d="M13,14 L51,14" fill="none" stroke="#cc8833" stroke-width="4" stroke-linecap="round"/>
+
+  <circle cx="8"  cy="32" r="5" fill="#cc8833" stroke="#7a4d18" stroke-width="2"/>
+  <circle cx="56" cy="32" r="5" fill="#cc8833" stroke="#7a4d18" stroke-width="2"/>
+  <path d="M13,32 L28,32 L36,24 L51,24" fill="none" stroke="#cc8833" stroke-width="4"
+        stroke-linecap="round" stroke-linejoin="round"/>
+
+  <circle cx="8"  cy="50" r="5" fill="#8a8a8a" stroke="#555555" stroke-width="2"/>
+  <circle cx="56" cy="50" r="5" fill="#8a8a8a" stroke="#555555" stroke-width="2"/>
+  <path d="M13,50 L51,50" fill="none" stroke="#aaaaaa" stroke-width="3"
+        stroke-linecap="round" stroke-dasharray="2,4"/>
+</svg>

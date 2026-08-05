@@ -39,6 +39,8 @@ try:
     from pcb import PCBPlacementCommand   # noqa: F401
     from routing import TraceRoutingCommand   # noqa: F401
     from routing import InteractiveRouterCommand   # noqa: F401
+    from routing import BatchRouteCommand   # noqa: F401
+    from drc import DRCCommand   # noqa: F401
 
     FreeCAD.Console.PrintMessage("Commands loaded successfully\n")
 except Exception as e:
@@ -142,6 +144,8 @@ class MyWorkbench(FreeCADGui.Workbench):
         "Wire Bonding Session":     "Confirm / Abort",
         "Trace Routing":            "Routing",
         "Trace Routing Session":    "Confirm / Abort / End",
+        "Batch Route Session":      "Route All / Cancel",
+        "Design Rule Check":        "DRC",
         "Session and Help":         "Workbench",
     }
 
@@ -220,6 +224,7 @@ class MyWorkbench(FreeCADGui.Workbench):
                 [
                     "InteractiveRouteCommand",
                     "TraceRoutingCommand",
+                    "StartBatchRouteCommand",
                 ],
             )
 
@@ -237,6 +242,29 @@ class MyWorkbench(FreeCADGui.Workbench):
                     "ConfirmTraceCommand",
                     "AbortTraceCommand",
                     "EndRoutingSessionCommand",
+                ],
+            )
+
+            # ── Batch Route Session (contextual) ────────────────────────
+            # Route All executes the whole queue and ends the session; Cancel
+            # ends it without routing anything still queued. Hidden at
+            # startup by _hide_batch_route_session_toolbar below; shown/
+            # hidden dynamically by
+            # routing.BatchRouteSession._set_session_toolbar_visible() —
+            # same contextual-toolbar pattern as "Trace Routing Session".
+            self.appendToolbar(
+                "Batch Route Session",
+                [
+                    "RouteAllCommand",
+                    "CancelBatchRouteCommand",
+                ],
+            )
+
+            # ── Design Rule Check ────────────────────────────────────────
+            self.appendToolbar(
+                "Design Rule Check",
+                [
+                    "ShowDRCPanelCommand",
                 ],
             )
 
@@ -266,6 +294,7 @@ class MyWorkbench(FreeCADGui.Workbench):
             _QtCore.QTimer.singleShot(400, self._inject_tech_status_label)
             _QtCore.QTimer.singleShot(400, self._hide_wirebond_session_toolbar)
             _QtCore.QTimer.singleShot(400, self._hide_trace_routing_session_toolbar)
+            _QtCore.QTimer.singleShot(400, self._hide_batch_route_session_toolbar)
 
             _FreeCAD.Console.PrintMessage("Toolbars initialized\n")
         except Exception as e:
@@ -310,6 +339,26 @@ class MyWorkbench(FreeCADGui.Workbench):
             import FreeCAD as _FC
             _FC.Console.PrintWarning(
                 f"Trace Routing Session toolbar hide failed: {exc}\n"
+            )
+
+    def _hide_batch_route_session_toolbar(self):
+        """Hide the contextual Batch Route Session toolbar at startup — it
+        only becomes visible while a batch route session is actually active
+        (see routing.BatchRouteSession._set_session_toolbar_visible)."""
+        try:
+            from compat import QtWidgets as _QW
+            import FreeCAD as _FC
+            import FreeCADGui as _FCGui
+
+            mw = _FCGui.getMainWindow()
+            for tb in mw.findChildren(_QW.QToolBar):
+                if tb.windowTitle() == "Batch Route Session":
+                    tb.setVisible(False)
+                    break
+        except Exception as exc:
+            import FreeCAD as _FC
+            _FC.Console.PrintWarning(
+                f"Batch Route Session toolbar hide failed: {exc}\n"
             )
 
     _TOOLBAR_LABEL_MAX_RETRIES = 15   # ~15 s — see _inject_toolbar_labels

@@ -620,6 +620,28 @@ def collect_obstacle_polys_on_frame(doc, exclude_names, frame, band_mm: float,
     return polys
 
 
+def outline_polys_of_object_on_frame(obj, frame, deflection: float = 0.05) -> list:
+    """
+    Public wrapper around _outline_in_frame for a single already-known
+    object: one Poly per solid (matching collect_obstacle_polys_on_frame's
+    own per-solid decomposition), with no "is this near the surface" or
+    document-scan filtering — the caller already knows *obj* belongs on
+    *frame* (e.g. a trace just baked onto it) and wants its footprint
+    folded into a live PolyField via .add(), the same obstacle-growth step
+    core.trace_routing.TraceRoutingSession.confirm_trace does for its own
+    Rect-based graph.
+    """
+    polys = []
+    shp = getattr(obj, "Shape", None)
+    if shp is None or shp.isNull():
+        return polys
+    for sub in (list(shp.Solids) or list(shp.Faces) or [shp]):
+        poly = _outline_in_frame(sub, frame, deflection)
+        if poly is not None:
+            polys.append(poly)
+    return polys
+
+
 def face_outer_poly_on_frame(face, frame, deflection: float = 0.05):
     """
     The face's OUTER boundary in the routing frame — the region a trace must
