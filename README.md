@@ -1,6 +1,6 @@
 # Chip-Packaging Workbench for FreeCAD
 
-![Version](https://img.shields.io/badge/version-0.9.0-green?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.10.0-green?style=flat-square)
 ![FreeCAD](https://img.shields.io/badge/FreeCAD-1.1-blue?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.11-yellow?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-lightgrey?style=flat-square)
