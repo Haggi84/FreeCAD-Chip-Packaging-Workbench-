@@ -1,11 +1,11 @@
 # Chip-Packaging Workbench for FreeCAD
 
-![Version](https://img.shields.io/badge/version-0.11.0-green?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.12.0-green?style=flat-square)
 ![FreeCAD](https://img.shields.io/badge/FreeCAD-1.1-blue?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.11-yellow?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-lightgrey?style=flat-square)
 ![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-informational?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-451%20checks-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-541%20checks-brightgreen?style=flat-square)
 
 **An open-source FreeCAD workbench for chip-packaging design, developed as part of the BMBF research project DI-PASSIONATE.**
 
@@ -26,6 +26,7 @@ bonds and bumps, and saving the result as a native FreeCAD document.
 - [Typical Workflow](#typical-workflow)
 - [GDSII Import](#gdsii-import)
 - [Trace Routing](#trace-routing)
+- [Symmetric Placement](#symmetric-placement)
 - [PCB Integration](#pcb-integration)
 - [Wire Bonding](#wire-bonding)
 - [Contact Point System](#contact-point-system)
@@ -101,6 +102,7 @@ caption (Tech, Import, Render, Package, Bonding, Routing, Workbench).
 | **Leadframe Library** | Browse and import STEP package models from the MirrorSemi online catalogue. |
 | **Set Contact Points on Face** | Grid-based placement: pick faces, generate a UV grid, select points, confirm. |
 | **Interactive Contact Point** | Place individual contact points by clicking directly in the 3-D view. |
+| **Contact Point Symmetry** | Mirror, symmetrize or generate contact points about a face's centre — see [Symmetric Placement](#symmetric-placement). |
 | **Contact Point Browser** | Dock panel listing all contact points by group, with hover highlighting. |
 
 ### Trace Routing
@@ -266,6 +268,49 @@ corner posture, `Esc` leaves the trace untouched.
 The trace keeps its identity — same object, name, net and width; only its shape changes.
 Its endpoints never move, so dragging re-shapes a connection but can never accidentally
 re-connect it somewhere else.
+
+---
+
+## Symmetric Placement
+
+Both tools below work about a face's **own centre**, taken as the mid-point of its outer
+boundary. That is deliberately neither the area centroid (which a cut-out or a notch drags
+off-axis) nor the middle of the face's parameter range (which is larger than a trimmed
+face). Everything happens in the face's metric 2-D space, so it works on any face of any
+body — horizontal, vertical, slanted or curved — not just a board's top face.
+
+### Centring a chip on a face
+
+In **Move / Rotate Chip**, select the target face in the 3-D view, press
+*↺ Read current FreeCAD selection*, then use:
+
+| Button | Effect |
+|---|---|
+| **Center on face** | Moves the chip so its centre sits exactly at the face's centre. |
+| **Center on face + Snap Z** | The same, and drops the chip flat onto that face. |
+
+Unlike the older *Center XY on click point*, these ignore where exactly you clicked, so the
+result is the same wherever on the face you press — and stays correct on a face whose
+centroid is off-centre. A face must be selected; an edge or vertex is refused rather than
+silently producing a different answer.
+
+### Symmetric contact points
+
+**Contact Point Symmetry** offers three operations on the contact points of a selected
+face. Only points actually lying on that face take part, so markers belonging to another
+face are never disturbed.
+
+| Operation | Effect |
+|---|---|
+| **Mirror U / V / both** | Reflects the existing points across the face's centre line(s), creating only the markers that are missing. For "I placed one side, now do the other". *Both* gives full four-fold symmetry. |
+| **Symmetrize** | Tidies a hand-placed set: nearly-symmetric pairs are **moved** onto exactly symmetric positions, a lone near-axis point is snapped onto the axis, and missing images are added. |
+| **Generate** | Lays down a fresh pattern — a bond-pad **ring** (N per side) or a **grid** (N × M) — inset from the edge, optionally at an exact pitch. |
+
+The **tolerance** setting controls how far a point may be from exact symmetry and still
+count as intended-symmetric; clicked points are never pixel-perfect, and without it each
+would merely gain a near-duplicate neighbour instead of being tidied up. Points whose
+mirror image would fall outside the face are skipped and reported rather than created
+off the part.
 
 ---
 

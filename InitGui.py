@@ -29,6 +29,7 @@ try:
     from wirebond import WirebondCommand
     from wirebond import SetContactPointsOnFaceCommand
     from wirebond import InteractiveContactPointCommand
+    from wirebond import ContactPointSymmetryCommand   # noqa: F401
     from help import HelpGuideCommand
     from help import AboutCommand
     from session import SaveSessionCommand
@@ -191,6 +192,7 @@ class MyWorkbench(FreeCADGui.Workbench):
                     "LeadframeLibraryCommand",
                     "SetContactPointsOnFaceCommand",
                     "InteractiveContactPointCommand",
+                    "ContactPointSymmetryCommand",
                     "ShowContactPointPanelCommand",
                 ],
             )

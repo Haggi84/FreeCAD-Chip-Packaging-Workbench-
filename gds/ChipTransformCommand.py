@@ -396,6 +396,74 @@ def _world_placement_of(obj):
     return pl
 
 
+def _parent_placement_of(obj):
+    """
+    The placement of everything ABOVE *obj* — its containers only, with the
+    object's own Placement deliberately left out.
+
+    This is the correct transform to apply to geometry read out of
+    obj.Shape: verified against FreeCAD 1.1, a Part::Feature's Shape
+    already carries its OWN Placement, while an App::Part container's
+    Placement is not baked in. (_world_placement_of above includes the
+    object's own placement as well, which is right for composing placements
+    but double-applies it when used on shape geometry — harmless while the
+    object sits at the origin, which is why it has not bitten the existing
+    click-point path.)
+    """
+    pl = FreeCAD.Placement()
+    current = obj
+    while current.InList:
+        parent = current.InList[0]
+        if hasattr(parent, "Placement"):
+            pl = parent.Placement.multiply(pl)
+        current = parent
+    return pl
+
+
+def _picked_face(sel_ex):
+    """The Part.Face the user actually clicked, in WORLD coordinates, or
+    None when the selection is not a face."""
+    obj = getattr(sel_ex, "Object", None)
+    if obj is None or not hasattr(obj, "Shape"):
+        return None
+    for sub_name in (getattr(sel_ex, "SubElementNames", None) or []):
+        if not sub_name.startswith("Face"):
+            continue
+        try:
+            face = obj.Shape.getElement(sub_name)
+        except Exception:
+            continue
+        parent = _parent_placement_of(obj)
+        if not parent.isIdentity():
+            face = face.copy()
+            face.transformShape(parent.toMatrix())
+        return face
+    return None
+
+
+def _face_center_xy(sel_ex):
+    """
+    World (x, y) of the CENTRE of the clicked face, or None if no face was
+    clicked.
+
+    Deliberately ignores PickedPoints (where exactly the click landed) and
+    the area centroid — see core.face_symmetry for why the outer-boundary
+    midpoint is the right notion of "the middle of this pad".
+    """
+    face = _picked_face(sel_ex)
+    if face is None:
+        return None
+    try:
+        import core.face_symmetry as face_symmetry
+        c = face_symmetry.face_center_world(face)
+    except Exception as exc:
+        FreeCAD.Console.PrintWarning(f"[ChipAlign] face centre failed: {exc}\n")
+        return None
+    if c is None:
+        return None
+    return c.x, c.y
+
+
 def _world_bbox_of_objects(objects):
     """
     Return a world-space FreeCAD.BoundBox by applying each object's full
@@ -728,6 +796,30 @@ class ChipTransformDialog(QtWidgets.QDialog):
         btn_row_a.addWidget(btn_both)
         a_lay.addLayout(btn_row_a)
 
+        # Symmetric placement — centre on the FACE itself rather than on the
+        # click point, so the die lands in the middle of the pad however
+        # roughly it was clicked.
+        btn_row_c = QtWidgets.QHBoxLayout()
+        btn_face   = QtWidgets.QPushButton("Center on face")
+        btn_face_z = QtWidgets.QPushButton("Center on face\n+ Snap Z")
+        for b in (btn_face, btn_face_z):
+            b.setFixedHeight(44)
+        _face_tip = (
+            "Select a FACE in the 3D view, then press this to move the chip\n"
+            "group so its centre sits exactly at the centre of that face.\n\n"
+            "Unlike 'Center XY on click point', it ignores where exactly you\n"
+            "clicked and uses the face's own outer boundary, so the result is\n"
+            "the same wherever on the face you click — and stays correct on a\n"
+            "face with cut-outs, whose area centroid is off-centre."
+        )
+        btn_face.setToolTip(_face_tip)
+        btn_face_z.setToolTip(_face_tip + "\n\nAlso drops the chip flat onto that face.")
+        btn_face.clicked.connect(lambda: self._do_center_on_face(snap_z=False))
+        btn_face_z.clicked.connect(lambda: self._do_center_on_face(snap_z=True))
+        btn_row_c.addWidget(btn_face)
+        btn_row_c.addWidget(btn_face_z)
+        a_lay.addLayout(btn_row_c)
+
         root.addWidget(a_grp)
 
 
@@ -987,6 +1079,56 @@ class ChipTransformDialog(QtWidgets.QDialog):
         self._dy += dy
         self._dz += dz
         self._update_status()
+
+    def _do_center_on_face(self, snap_z: bool):
+        """Centre the chip group on the CENTRE of the selected face."""
+        if self._sel_object is None:
+            QtWidgets.QMessageBox.warning(
+                self, "No target",
+                "Press '↺ Read current FreeCAD selection' first to pick a target."
+            )
+            return
+
+        target = _face_center_xy(self._sel_ex)
+        if target is None:
+            QtWidgets.QMessageBox.warning(
+                self, "No face selected",
+                "Centring on a face needs a FACE to be selected — click the "
+                "face itself in the 3D view (not an edge, a vertex or the "
+                "whole object), press '↺ Read current FreeCAD selection', "
+                "then try again."
+            )
+            return
+
+        objs = self._objects()
+        if not objs:
+            return
+
+        tx, ty = target
+        cx, cy = _chip_xy_center(objs)
+        dx, dy = tx - cx, ty - cy
+
+        dz = 0.0
+        if snap_z:
+            target_z = _target_z_snap(self._sel_ex)
+            dz = target_z - _chip_zmin(objs)
+
+        if dx == 0.0 and dy == 0.0 and dz == 0.0:
+            return
+
+        doc = FreeCAD.activeDocument()
+        doc.openTransaction("Chip Center on Face")
+        _translate_objects(objs, dx, dy, dz)
+        doc.commitTransaction()
+        FreeCADGui.updateGui()
+        self._dx += dx
+        self._dy += dy
+        self._dz += dz
+        self._update_status()
+        FreeCAD.Console.PrintMessage(
+            f"[ChipAlign] Centred on face at ({tx:.4f}, {ty:.4f})"
+            + (f", snapped Z by {dz:.4f}" if snap_z else "") + ".\n"
+        )
 
     # ── Status display ─────────────────────────────────────────────────────────
 

@@ -236,7 +236,7 @@ The runner prints a summary, writes the same report to `tests/results.log`, and 
 non-zero if any check fails — so it can be dropped straight into CI. Expect output ending in:
 
 ```
-RESULTS: 503 passed, 0 failed, 503 total
+RESULTS: 541 passed, 0 failed, 541 total
 All checks passed.
 ```
 
@@ -349,6 +349,20 @@ default) so the router may move one existing trace aside; reduce the clearance o
 trace spacing; queue the hardest pairs *first*, since earlier pairs get the free space;
 or route the remaining connection by hand with **Interactive Route**. The pairs are always
 listed by name — nothing is dropped silently.
+
+### "Center on face" or Contact Point Symmetry says no face is selected
+
+Both need an actual **face** — click the face itself in the 3-D view, not an edge, a vertex
+or the whole object in the tree. They refuse rather than falling back to a different
+reference, because a silently different answer is worse than a clear refusal. In the chip
+dialog, remember to press *↺ Read current FreeCAD selection* after picking.
+
+### Mirrored contact points were "skipped"
+
+Points whose mirror image falls outside the face are reported and skipped rather than
+created off the part. This happens when the pattern is not symmetric with respect to the
+face's own outline — for example points near one edge of a face that is not itself
+symmetric about the mirror axis.
 
 ### Trace routing finds no path on a dense board
 

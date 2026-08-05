@@ -97,9 +97,12 @@ def _create_housing_marker(doc, source_name: str, point, index: int):
     marker.SourceObject   = source_name
     marker.IsContactPoint = True
 
-    marker.ViewObject.PointSize   = 8
-    marker.ViewObject.PointColor  = (1.0, 1.0, 0.0)   # yellow
-    marker.ViewObject.DisplayMode = "Points"
+    # Guarded: there is no ViewObject at all under freecadcmd, so touching it
+    # unguarded makes every headless caller fail on a purely cosmetic step.
+    if FreeCAD.GuiUp and marker.ViewObject is not None:
+        marker.ViewObject.PointSize   = 8
+        marker.ViewObject.PointColor  = (1.0, 1.0, 0.0)   # yellow
+        marker.ViewObject.DisplayMode = "Points"
     return marker
 
 
@@ -116,9 +119,11 @@ def _create_gds_marker(doc, source_name: str, point, index: int):
     marker.SourceObject   = source_name
     marker.IsContactPoint = True
 
-    marker.ViewObject.PointSize   = 8
-    marker.ViewObject.PointColor  = (1.0, 0.50, 0.0)   # orange — die side
-    marker.ViewObject.DisplayMode = "Points"
+    # Guarded — see _create_housing_marker.
+    if FreeCAD.GuiUp and marker.ViewObject is not None:
+        marker.ViewObject.PointSize   = 8
+        marker.ViewObject.PointColor  = (1.0, 0.50, 0.0)   # orange — die side
+        marker.ViewObject.DisplayMode = "Points"
     return marker
 
 

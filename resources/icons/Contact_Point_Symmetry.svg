@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- A pad face with contact points on the left, mirrored across the
+       centre axis to the right — the symmetry operation itself. -->
+  <rect x="6" y="10" width="52" height="44" rx="2"
+        fill="#8a8a8a" fill-opacity="0.35" stroke="#555555" stroke-width="2"/>
+  <!-- mirror axis -->
+  <path d="M32,6 L32,58" stroke="#3fa9f5" stroke-width="2"
+        stroke-dasharray="4,3" stroke-linecap="round"/>
+  <!-- source points (solid) -->
+  <circle cx="16" cy="20" r="4" fill="#ffcc00" stroke="#7a5c00" stroke-width="2"/>
+  <circle cx="16" cy="32" r="4" fill="#ffcc00" stroke="#7a5c00" stroke-width="2"/>
+  <circle cx="16" cy="44" r="4" fill="#ffcc00" stroke="#7a5c00" stroke-width="2"/>
+  <!-- mirrored points (outlined, showing they are generated) -->
+  <circle cx="48" cy="20" r="4" fill="#ffcc00" fill-opacity="0.35"
+          stroke="#7a5c00" stroke-width="2" stroke-dasharray="2,2"/>
+  <circle cx="48" cy="32" r="4" fill="#ffcc00" fill-opacity="0.35"
+          stroke="#7a5c00" stroke-width="2" stroke-dasharray="2,2"/>
+  <circle cx="48" cy="44" r="4" fill="#ffcc00" fill-opacity="0.35"
+          stroke="#7a5c00" stroke-width="2" stroke-dasharray="2,2"/>
+  <!-- reflection arrow -->
+  <path d="M24,54 L40,54" stroke="#3fa9f5" stroke-width="2" stroke-linecap="round"/>
+  <path d="M37,51 L40,54 L37,57" fill="none" stroke="#3fa9f5" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
