@@ -127,6 +127,31 @@ class BatchRouteSetupPanel:
         self._clearance.setSuffix(" mm")
         p_lay.addRow("Clearance:", self._clearance)
 
+        self._trace_spacing = QtWidgets.QDoubleSpinBox()
+        self._trace_spacing.setRange(0.0, 10.0)
+        self._trace_spacing.setDecimals(3)
+        self._trace_spacing.setValue(0.0)
+        self._trace_spacing.setSuffix(" mm")
+        self._trace_spacing.setToolTip(
+            "Minimum edge-to-edge space between TRACES, when it should be\n"
+            "larger than the general clearance. Values up to the clearance\n"
+            "have no extra effect (the clearance already guarantees that\n"
+            "much space); 0 means traces just use the clearance."
+        )
+        p_lay.addRow("Trace spacing:", self._trace_spacing)
+
+        self._allow_reroute = QtWidgets.QCheckBox(
+            "Reroute existing traces when a pair is blocked")
+        self._allow_reroute.setChecked(True)
+        self._allow_reroute.setToolTip(
+            "When a queued pair cannot be routed, try moving ONE existing\n"
+            "trace out of the way: the pair is routed with that trace\n"
+            "removed, then the trace itself is rerouted around the new\n"
+            "copper. Only applied when both routes exist — a connection\n"
+            "that exists is never sacrificed."
+        )
+        p_lay.addRow("", self._allow_reroute)
+
         root.addWidget(params_grp)
         self._params_grp = params_grp
 
@@ -261,9 +286,11 @@ class BatchRouteSetupPanel:
 
         obj_name, face_index, face = self._face_data
         params = {
-            "width_mm":     self._width.value(),
-            "thickness_mm": self._thickness.value(),
-            "clearance_mm": self._clearance.value(),
+            "width_mm":         self._width.value(),
+            "thickness_mm":     self._thickness.value(),
+            "clearance_mm":     self._clearance.value(),
+            "trace_spacing_mm": self._trace_spacing.value(),
+            "allow_reroute":    self._allow_reroute.isChecked(),
         }
         ok = batch_router.start_session(doc, obj_name, face_index, face, params)
         if not ok:

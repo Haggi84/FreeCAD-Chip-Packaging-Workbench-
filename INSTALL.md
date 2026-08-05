@@ -149,9 +149,10 @@ If you downloaded a ZIP archive instead of using git, extract it so that the fol
 2. Open the **Workbench selector** (the drop-down at the top of the screen that shows the active workbench name).
 3. Select **Chip-Packaging Workbench** from the list.
 4. Several toolbars should appear, each with a short caption underneath:
-   **Tech**, **Import**, **Render**, **Package**, **Bonding**, **Routing** and **Workbench**.
-   Two further toolbars — *Wire Bonding Session* and *Trace Routing Session* — stay hidden
-   until the corresponding session is running; that is intentional.
+   **Tech**, **Import**, **Render**, **Package**, **Bonding**, **Routing**, **DRC** and
+   **Workbench**. Three further toolbars — *Wire Bonding Session*, *Trace Routing Session*
+   and *Batch Route Session* — stay hidden until the corresponding session is running;
+   that is intentional.
 5. Check the **Report View** (`View → Panels → Report View`). On a healthy start you should see
    `Commands loaded successfully` and `Toolbars initialized`.
 6. To confirm GDS import works, use **Load GDSII** and select the sample file at
@@ -235,7 +236,7 @@ The runner prints a summary, writes the same report to `tests/results.log`, and 
 non-zero if any check fails — so it can be dropped straight into CI. Expect output ending in:
 
 ```
-RESULTS: 451 passed, 0 failed, 451 total
+RESULTS: 503 passed, 0 failed, 503 total
 All checks passed.
 ```
 
@@ -339,6 +340,15 @@ falls back to its uppermost horizontal face.
 The head is blocked by copper at the current clearance. This is normal feedback, not an
 error: move the cursor, press `/` to flip the corner, or reduce the clearance. The router
 deliberately refuses to draw a trace that would violate clearance.
+
+### Batch Auto-Route reports "could not be routed and were skipped"
+
+Some pairs genuinely cannot be routed on a single layer at the requested clearance.
+Things to try, in order: enable **Reroute existing traces when a pair is blocked** (on by
+default) so the router may move one existing trace aside; reduce the clearance or the
+trace spacing; queue the hardest pairs *first*, since earlier pairs get the free space;
+or route the remaining connection by hand with **Interactive Route**. The pairs are always
+listed by name — nothing is dropped silently.
 
 ### Trace routing finds no path on a dense board
 

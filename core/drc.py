@@ -127,6 +127,19 @@ def _footprint_area(bb) -> float:
     return max(bb.XLength, 1e-9) * max(bb.YLength, 1e-9)
 
 
+def _inside_partdesign_body(o) -> bool:
+    """True for a feature INSIDE a PartDesign::Body — a history state of the
+    Body's one solid, not separate copper; the Body itself represents them
+    all. Same rule as core.trace_routing._partdesign_body_of, duplicated
+    locally because this module is deliberately loaded standalone by file
+    path (see drc/DRCPanel.py) and must not import sibling core modules."""
+    try:
+        grp = o.getParentGeoFeatureGroup()
+        return grp is not None and grp.isDerivedFrom("PartDesign::Body")
+    except Exception:
+        return False
+
+
 def _copper_candidates(doc, exclude_names, max_footprint_area_mm2=None):
     """
     Every physical-body sub-solid eligible as a DRC candidate: (name, solid)
@@ -147,6 +160,8 @@ def _copper_candidates(doc, exclude_names, max_footprint_area_mm2=None):
         substrate_cutoff = max_footprint_area_mm2 * _SUBSTRATE_AREA_RATIO
     for o in doc.Objects:
         if o.Name in exclude:
+            continue
+        if _inside_partdesign_body(o):
             continue
         try:
             is_body = o.isDerivedFrom("Part::Feature") or o.isDerivedFrom("Mesh::Feature")

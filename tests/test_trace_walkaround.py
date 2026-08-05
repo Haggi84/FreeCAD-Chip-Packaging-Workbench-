@@ -186,4 +186,26 @@ def run():
               "copper, so the caller can draw a visibly blocked head",
               walled is None, f"got {walled and _xy(walled)}")
 
+    # ── regression: a pad placed near the routable surface's own edge ──────
+    # Reported from real use (batch auto-route): a contact point sitting
+    # close to the edge of its board could never be routed from at all, even
+    # with no copper in the way — leaves_surface() charged the pad's own
+    # position against the boundary-clearance check on every single leg
+    # leaving it, with no escape allowance analogous to the same-net
+    # exemption copper already gets. Confirmed root cause via
+    # PolyField.point_hugs_boundary + the edge_exempt parameter threaded
+    # through path_blockers()/blockers()/leaves_surface().
+    edge_boundary = tob.Poly([(0, 0), (90, 0), (90, 46), (0, 46)], (0, 0, 90, 46))
+    edge_field = tob.PolyField([], clearance=0.35, cell_size=1.0, boundary=edge_boundary)
+    near_edge_start = V(75.966, 0.146, 0)     # 0.146 mm from the y=0 edge < 0.35 mm clearance
+    far_goal = V(10.14, 40.16, 0)
+    edge_path, _ = wa.route_head(near_edge_start, far_goal, edge_field, step_deg=wa.STEP_45)
+    tc.check("route_head: a pad within clearance of the routing surface's own "
+              "edge can still be routed from (edge_exempt regression guard)",
+              edge_path is not None, f"got {edge_path}")
+    if edge_path is not None:
+        tc.check("route_head: ...and the resulting route is genuinely collision-free "
+                  "(edge_exempt only excuses the pad's own position, nothing else)",
+                  wa.path_blockers(edge_path, edge_field) == [], f"got {_xy(edge_path)}")
+
     return tc.results

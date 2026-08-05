@@ -1,6 +1,6 @@
 # Chip-Packaging Workbench for FreeCAD
 
-![Version](https://img.shields.io/badge/version-0.10.0-green?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.11.0-green?style=flat-square)
 ![FreeCAD](https://img.shields.io/badge/FreeCAD-1.1-blue?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.11-yellow?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-lightgrey?style=flat-square)
@@ -115,7 +115,15 @@ caption (Tech, Import, Render, Package, Bonding, Routing, Workbench).
 |---|---|
 | **Interactive Route** | KiCad-style live router — see [Trace Routing](#trace-routing). |
 | **Trace Routing** | Grid and search based point-to-point router with angle presets. |
+| **Batch Auto-Route** | Queue several pad pairs, then route and bake them all in one pass. |
+| **Drag Trace** | Re-shape an existing trace by dragging it; it walks around other copper live. |
 | **Confirm / Abort / End** | Contextual toolbar shown only while a routing session is active. |
+
+### Design Rule Check
+
+| Tool | Description |
+|---|---|
+| **Design Rule Check** | Checks routed traces and bond wires for clearance and minimum-width violations; click a finding to select the offending objects. |
 
 ### Wire Bonding
 
@@ -195,8 +203,9 @@ otherwise take minutes.
 
 ## Trace Routing
 
-Two routers are provided; both produce identical `Trace_NNN` objects, so they can be
-mixed freely in one design.
+Three routers are provided; all produce identical `Trace_NNN` objects, so they can be
+mixed freely in one design, and any of them can be re-shaped afterwards with
+[Drag Trace](#drag-trace).
 
 ### Interactive Route (recommended)
 
@@ -231,6 +240,38 @@ visibility graph and searches it with an angle-constrained A*. Offers preferred 
 grids (45°, 90° Manhattan, 30°), corner rounding, and multi-leg traces with confirm/abort.
 Useful when you want a computed route between two fixed points rather than a hand-steered
 one.
+
+### Batch Auto-Route
+
+Routes many connections in one pass. Pick the routing surface and parameters, then click
+pairs of ContactPoint markers to build a queue, and press **Route All**. Each pair is
+routed in turn and its baked copper immediately becomes an obstacle for the pairs after
+it, so later traces walk around earlier ones.
+
+Two options worth knowing:
+
+- **Trace spacing** — a minimum edge-to-edge distance between *traces* specifically, when
+  that should be larger than the general clearance. Values at or below the clearance
+  change nothing (the clearance already guarantees that much space).
+- **Reroute existing traces when a pair is blocked** (on by default) — if a queued pair
+  cannot be routed, the router tries moving *one* existing trace out of the way: it routes
+  the pair with that trace removed, then reroutes the trace itself around the new copper.
+  The change is only kept when **both** routes succeed, so an existing connection is never
+  sacrificed to make room for a new one.
+
+A pair that still cannot be routed is reported by name at the end rather than silently
+skipped, so you know exactly what is left to do by hand.
+
+### Drag Trace
+
+Re-shape a finished trace without redrawing it. Select a `Trace_NNN`, start the tool, and
+move the mouse: the point under the cursor becomes an intermediate waypoint and **both**
+halves of the trace re-route live around all other copper. Click to drop it, `/` flips the
+corner posture, `Esc` leaves the trace untouched.
+
+The trace keeps its identity — same object, name, net and width; only its shape changes.
+Its endpoints never move, so dragging re-shapes a connection but can never accidentally
+re-connect it somewhere else.
 
 ---
 

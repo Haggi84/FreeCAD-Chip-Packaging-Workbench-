@@ -38,6 +38,7 @@ import sys
 
 import FreeCAD
 import FreeCADGui
+import Part
 
 root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if root_path not in sys.path:
@@ -461,6 +462,24 @@ def _build_commands(obj_name, face_index, nodes2d, width, thickness, clearance):
     ]
 
 
+def _clean_pts2d(pts2d):
+    """Drop numerically-degenerate points: the walk-around's posture math can
+    emit consecutive points separated only by floating-point noise (well
+    below a nanometre), and OCCT's solid builders reject those outright —
+    the loft with "insufficient separation", the per-segment box fallback
+    with "length of box too small" (both observed in a randomized stress
+    test). Shared by bake_trace and rebuild_trace so every caller
+    (interactive, batch, drag-edit) is covered."""
+    if not pts2d:
+        return []
+    cleaned = [tuple(pts2d[0])]
+    for p in pts2d[1:]:
+        q = tuple(p)
+        if abs(q[0] - cleaned[-1][0]) > 1e-6 or abs(q[1] - cleaned[-1][1]) > 1e-6:
+            cleaned.append(q)
+    return cleaned
+
+
 def bake_trace(obj_name, face_index, pts2d, width_mm, thickness_mm, clearance_mm):
     """
     Create the real Trace_NNN solid. Called from the deferred commit, so it
@@ -473,6 +492,9 @@ def bake_trace(obj_name, face_index, pts2d, width_mm, thickness_mm, clearance_mm
     """
     doc = FreeCAD.activeDocument()
     if doc is None or len(pts2d) < 2:
+        return None
+    pts2d = _clean_pts2d(pts2d)
+    if len(pts2d) < 2:
         return None
     src = doc.getObject(obj_name)
     if src is None:
@@ -505,13 +527,23 @@ def bake_trace(obj_name, face_index, pts2d, width_mm, thickness_mm, clearance_mm
     obj.addProperty("App::PropertyVectorList", "Waypoints", "Routing",
                      "Trace polyline waypoints")
     obj.addProperty("App::PropertyString", "NetName", "Routing", "Net identifier")
+    # Which surface this trace was routed on — needed to REBUILD the trace
+    # later (drag-edit, rip-up-and-reroute): the SurfaceFrame is transient,
+    # so without these two properties there is no way back from a baked
+    # trace to the face its 2-D geometry lives on.
+    obj.addProperty("App::PropertyString", "SourceObject", "Routing",
+                     "Object whose face this trace was routed on")
+    obj.addProperty("App::PropertyInteger", "SourceFaceIndex", "Routing",
+                     "Index of the face this trace was routed on")
 
-    obj.IsRoutingTrace = True
-    obj.TraceWidth     = width_mm
-    obj.TraceThickness = thickness_mm
-    obj.Clearance      = clearance_mm
-    obj.Waypoints      = waypoints
-    obj.NetName        = f"Net_{idx:03d}"
+    obj.IsRoutingTrace   = True
+    obj.TraceWidth       = width_mm
+    obj.TraceThickness   = thickness_mm
+    obj.Clearance        = clearance_mm
+    obj.Waypoints        = waypoints
+    obj.NetName          = f"Net_{idx:03d}"
+    obj.SourceObject     = obj_name
+    obj.SourceFaceIndex  = int(face_index)
 
     if FreeCAD.GuiUp:
         obj.ViewObject.ShapeColor = _TRACE_COLOR
@@ -522,6 +554,90 @@ def bake_trace(obj_name, face_index, pts2d, width_mm, thickness_mm, clearance_mm
     FreeCAD.Console.PrintMessage(
         f"[InteractiveRoute] Created {obj.Name} with {len(waypoints)} waypoint(s).\n"
     )
+    return obj
+
+
+def resolve_trace_frame(doc, trace_obj):
+    """
+    (frame, obj_name, face_index) for an existing Trace_NNN, or
+    (None, None, None).
+
+    Uses the SourceObject/SourceFaceIndex properties bake_trace persists;
+    traces baked before those properties existed are resolved by scanning
+    the document for the face whose surface actually contains the trace's
+    first waypoint (nearest planar-or-not face within half the trace
+    thickness plus a small tolerance).
+    """
+    src_name = getattr(trace_obj, "SourceObject", "") or ""
+    src_idx = getattr(trace_obj, "SourceFaceIndex", None)
+    if src_name and src_idx is not None:
+        src = doc.getObject(src_name)
+        if src is not None:
+            try:
+                face = src.Shape.Faces[int(src_idx)]
+                return routing_frame.SurfaceFrame(face), src_name, int(src_idx)
+            except Exception:
+                pass
+
+    wp = list(getattr(trace_obj, "Waypoints", []) or [])
+    if not wp:
+        return None, None, None
+    p0 = wp[0]
+    tol = float(getattr(trace_obj, "TraceThickness", 0.1)) + 0.1
+    best = (None, None, None)
+    best_d = tol
+    for o in doc.Objects:
+        if o is trace_obj or not hasattr(o, "Shape"):
+            continue
+        if getattr(o, "IsRoutingTrace", False) or getattr(o, "IsContactPoint", False):
+            continue
+        shp = o.Shape
+        if shp.isNull():
+            continue
+        try:
+            for i, f in enumerate(shp.Faces):
+                d = f.distToShape(Part.Vertex(p0))[0]
+                if d < best_d:
+                    best_d = d
+                    best = (routing_frame.SurfaceFrame(f), o.Name, i)
+        except Exception:
+            continue
+    return best
+
+
+def rebuild_trace(trace_name, pts2d):
+    """
+    Re-shape an existing Trace_NNN in place along a new 2-D path on ITS OWN
+    routing surface — the commit step of drag-editing and of
+    rip-up-and-reroute. Keeps the object's identity (name, net, width,
+    colours); only Shape and Waypoints change. Returns the object or None.
+    """
+    doc = FreeCAD.activeDocument()
+    if doc is None:
+        return None
+    obj = doc.getObject(trace_name)
+    if obj is None or not getattr(obj, "IsRoutingTrace", False):
+        return None
+    pts2d = _clean_pts2d(pts2d)
+    if len(pts2d) < 2:
+        return None
+    frame, _src, _idx = resolve_trace_frame(doc, obj)
+    if frame is None:
+        FreeCAD.Console.PrintError(
+            f"[InteractiveRoute] Cannot resolve the routing surface of "
+            f"{trace_name}; not rebuilding it.\n")
+        return None
+    width = float(getattr(obj, "TraceWidth", 0.3))
+    thickness = float(getattr(obj, "TraceThickness", 0.035))
+    try:
+        shape = routing_frame.build_surface_trace_solid(frame, pts2d, width, thickness)
+    except Exception as exc:
+        FreeCAD.Console.PrintError(
+            f"[InteractiveRoute] Rebuilding {trace_name} failed: {exc}\n")
+        return None
+    obj.Shape = shape
+    obj.Waypoints = frame.path_to_3d(pts2d)
+    doc.recompute()
     return obj
 
 

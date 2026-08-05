@@ -26,6 +26,8 @@ from collections import namedtuple, defaultdict
 
 import FreeCAD
 
+from core.trace_routing import _partdesign_body_of, expand_surface_exclusions
+
 # pts: list of (x, y) in world XY, implicitly closed.
 # bbox: (xmin, ymin, xmax, ymax) for cheap prefiltering.
 Poly = namedtuple("Poly", ["pts", "bbox"])
@@ -57,6 +59,27 @@ def point_in_poly(poly: Poly, x: float, y: float) -> bool:
             inside = not inside
         j = i
     return inside
+
+
+def _clip_into_bounds(x: float, y: float, bbox, pad: float):
+    """
+    Pull (x, y) back inside *bbox* = (xmin, ymin, xmax, ymax), inset by
+    *pad* on every side — an axis-aligned approximation of "stay inside the
+    boundary," used to keep a walk-around detour corner on the routable
+    surface. Exact for the common case (a rectangular board/package face);
+    for a non-rectangular boundary this can still return a point outside
+    the true outline, which is why every corner is re-validated by
+    path_blockers() before being accepted — this only widens what gets
+    TRIED, it is never the final word on what is actually clear.
+    """
+    xmin, ymin, xmax, ymax = bbox
+    lo_x, hi_x = xmin + pad, xmax - pad
+    lo_y, hi_y = ymin + pad, ymax - pad
+    if lo_x > hi_x:
+        lo_x = hi_x = (xmin + xmax) / 2.0
+    if lo_y > hi_y:
+        lo_y = hi_y = (ymin + ymax) / 2.0
+    return (min(max(x, lo_x), hi_x), min(max(y, lo_y), hi_y))
 
 
 def _seg_seg_distance(ax, ay, bx, by, cx, cy, dx_, dy_) -> float:
@@ -270,6 +293,28 @@ def _offset_hull(hull, push: float, max_miter: float = 4.0):
     return out
 
 
+def inflate_poly(poly: Poly, delta: float) -> Poly:
+    """
+    *poly* grown outward by *delta* (its convex hull, mitre-offset — exact
+    for the near-rectangular leg footprints this is used on).
+
+    This is how a per-CLASS clearance is expressed in a PolyField that only
+    knows one global clearance: to demand more space around TRACES than
+    around other copper (the user-facing "minimum trace spacing" option),
+    the trace polygons themselves are inflated by (spacing - clearance)
+    before being added, so the single field clearance stays authoritative
+    for everything else.
+    """
+    if delta <= 0:
+        return poly
+    hull = _offset_hull(convex_hull(poly.pts), delta)
+    if len(hull) < 3:
+        return poly
+    xs = [p[0] for p in hull]
+    ys = [p[1] for p in hull]
+    return Poly(hull, (min(xs), min(ys), max(xs), max(ys)))
+
+
 class PolyField:
     """
     The obstacle set a router walks around: exact copper outlines, with
@@ -298,15 +343,42 @@ class PolyField:
         # supposed to be routed on.
         self.boundary = boundary
 
-    def leaves_surface(self, p, q) -> bool:
-        """True if [p, q] leaves the routable face, or hugs its edge closer
-        than the clearance allows."""
+    def leaves_surface(self, p, q, edge_exempt: bool = False) -> bool:
+        """
+        True if [p, q] leaves the routable face, or hugs its edge closer
+        than the clearance allows.
+
+        *edge_exempt* mirrors blockers()' outright same-net exemption for
+        copper, applied to the boundary instead: a pad placed near the edge
+        of its own routable surface is an entirely ordinary situation — real
+        boards do this constantly — and a trace must be allowed to leave
+        such a pad. Without this, ANY leg starting or ending at a point
+        already within clearance of the edge was rejected outright, with no
+        obstacle involved at all: confirmed against a real board, where a
+        contact point sitting close to its own routing surface's edge could
+        never be routed from or to, at any clearance the boundary itself
+        didn't also happen to tolerate. Still requires staying strictly
+        inside the boundary (point_in_poly is never relaxed) — only the
+        clearance MARGIN from the edge is excused, not leaving the face.
+        """
         if self.boundary is None:
             return False
         if not (point_in_poly(self.boundary, p.x, p.y)
                 and point_in_poly(self.boundary, q.x, q.y)):
             return True
+        if edge_exempt:
+            return False
         return seg_poly_edge_distance(p, q, self.boundary) < self.clearance
+
+    def point_hugs_boundary(self, pt) -> bool:
+        """True if *pt* sits inside the boundary but within clearance of its
+        edge — the boundary-edge analogue of containing() used to decide
+        whether a leg touching *pt* gets leaves_surface()'s edge_exempt."""
+        if self.boundary is None:
+            return False
+        if not point_in_poly(self.boundary, pt.x, pt.y):
+            return False
+        return seg_poly_edge_distance(pt, pt, self.boundary) < self.clearance
 
     def __len__(self):
         return len(self.polys)
@@ -327,7 +399,8 @@ class PolyField:
         return polys_containing(pt, self.polys, self.index, self.cell_size,
                                 self.clearance)
 
-    def blockers(self, p, q, exempt=frozenset(), escape_mm: float = 0.0) -> list:
+    def blockers(self, p, q, exempt=frozenset(), escape_mm: float = 0.0,
+                 edge_exempt: bool = False) -> list:
         """
         Indices of polygons this segment violates.
 
@@ -338,13 +411,16 @@ class PolyField:
         overlap as a violation is what made routing between two adjacent
         pads impossible, since each pad blocked its own trace.
 
+        *edge_exempt* is the same idea applied to the routable-surface
+        BOUNDARY instead of a copper polygon — see leaves_surface().
+
         *escape_mm* is accepted for interface compatibility with the
         rectangle field and is not needed here: with exact outlines the
         exempt shape is the real pad, not a bounding box that might swallow
         half the board.
         """
         hits = []
-        if self.leaves_surface(p, q):
+        if self.leaves_surface(p, q, edge_exempt):
             hits.append(self.BOUNDARY)
         cands = candidate_polys(p, q, self.index, self.cell_size, self.clearance)
         for i in cands:
@@ -367,12 +443,30 @@ class PolyField:
         demands, so every detour through it fails its own collision check and
         the walk-around reports "blocked" for an obstacle it could plainly
         have gone around.
+
+        When a routable-surface boundary is set, each offset corner is also
+        pulled back inside it (see _clip_into_bounds): copper sitting close
+        to the edge of the surface offsets a corner PAST that edge, and
+        without this the walk-around's own BOUNDARY sentinel (see blockers())
+        rejects that corner outright with no fallback — "leaves the surface"
+        is treated as unconditionally unroutable there, by design, since the
+        interactive router's response is a human nudging the cursor
+        elsewhere. Batch routing has no cursor to nudge, so a copper run
+        merely running close to the board edge — an ordinary, common
+        situation, not a contrived one — silently failed every pair whose
+        detour needed that corner, confirmed against a real board. Pulling
+        the corner back inside the boundary here does not weaken collision
+        safety: every corner returned still goes through the same
+        path_blockers() check as any other candidate before being accepted.
         """
         key = (i, round(margin, 6))
         hull = self._hulls.get(key)
         if hull is None:
             hull = _offset_hull(convex_hull(self.polys[i].pts),
                                 self.clearance + max(margin, 1e-3))
+            if self.boundary is not None:
+                hull = [_clip_into_bounds(x, y, self.boundary.bbox, self.clearance)
+                        for x, y in hull]
             self._hulls[key] = hull
         return [FreeCAD.Vector(x, y, z) for x, y in hull]
 
@@ -561,6 +655,49 @@ def _outline_in_frame(sub, frame, deflection: float):
     return Poly(hull, (min(xs), min(ys), max(xs), max(ys)))
 
 
+def _all_horizontal_face_polys(sub, frame, deflection: float) -> list:
+    """
+    Every near-horizontal face of *sub* as its own Poly, instead of
+    _outline_in_frame's single "keep only the largest" rule.
+
+    A BENT trace solid (built by fusing straight per-leg boxes at the
+    corner) commonly ends up with one near-horizontal face PER LEG rather
+    than one continuous face for the whole path — the boolean fuse does not
+    merge faces across the bend. _outline_in_frame's "biggest face wins"
+    rule was written for ordinary copper (usually already a single face)
+    and silently drops every leg but the largest for a bent trace. That is
+    exactly wrong when the caller wants this trace's OWN footprint as a
+    routing obstacle for later pairs in the same batch: confirmed against a
+    real board, the dropped leg was invisible to the next pair's route,
+    which then crossed straight through it.
+    """
+    polys = []
+    try:
+        faces = sub.Faces
+    except Exception:
+        return polys
+    for f in faces:
+        try:
+            c = f.CenterOfMass
+            n = f.normalAt(0, 0)
+        except Exception:
+            continue
+        xy = frame.to_2d(c)
+        if xy is None:
+            continue
+        ref = frame.normal_at(*xy)
+        if abs(n.dot(ref)) < _HORIZONTAL_NZ:
+            continue
+        try:
+            wire = max(f.Wires, key=lambda w: w.BoundBox.XLength * w.BoundBox.YLength)
+            poly = _wire_to_frame_poly(wire, frame, deflection)
+            if poly is not None:
+                polys.append(poly)
+        except Exception:
+            continue
+    return polys
+
+
 def collect_obstacle_polys_on_frame(doc, exclude_names, frame, band_mm: float,
                                     deflection: float = 0.05) -> list:
     """
@@ -570,14 +707,25 @@ def collect_obstacle_polys_on_frame(doc, exclude_names, frame, band_mm: float,
     construction geometry, decomposed per solid — but "near the routing
     surface" is a distance measured off the SURFACE rather than a world-Z
     band, so it is meaningful on a side wall or a curved flank too.
+
+    PartDesign handling: features INSIDE a Body are skipped (they are
+    history states of the Body's one solid, not separate copper — an
+    intermediate Pad state can even be a SUPERSET of the final shape after
+    a Pocket); the Body itself represents them all. Exclusions are expanded
+    the same way (see expand_surface_exclusions), so picking either the
+    Body or one of its features as the routing surface excludes the whole
+    family.
     """
     polys = []
+    seen = set()
     if doc is None or frame is None:
         return polys
-    exclude = set(exclude_names or ())
+    exclude = expand_surface_exclusions(doc, exclude_names)
     for o in doc.Objects:
         if o.Name in exclude:
             continue
+        if _partdesign_body_of(o) is not None:
+            continue        # history state inside a Body — the Body stands for it
         try:
             is_body = o.isDerivedFrom("Part::Feature") or o.isDerivedFrom("Mesh::Feature")
         except Exception:
@@ -614,31 +762,60 @@ def collect_obstacle_polys_on_frame(doc, exclude_names, frame, band_mm: float,
                 continue
             if dmin > band_mm:
                 continue
-            poly = _outline_in_frame(sub, frame, deflection)
-            if poly is not None:
-                polys.append(poly)
+            _solid_footprint_polys(sub, frame, deflection, seen, polys)
     return polys
+
+
+def _solid_footprint_polys(sub, frame, deflection, seen_bboxes, out) -> None:
+    """
+    Append every near-horizontal-face footprint of one solid to *out*,
+    deduped by rounded bbox via *seen_bboxes* (top and bottom faces of the
+    same leg project identically — keep one).
+
+    One poly per FACE, not per solid: a bent trace solid carries one
+    near-horizontal face PER LEG (the boolean fuse never merges them), and
+    the old "largest face wins" rule silently dropped every leg but the
+    biggest. That exact omission produced real crossings twice — first
+    within one batch session (fixed in outline_polys_of_object_on_frame),
+    then AGAIN for traces from an EARLIER session picked up by
+    collect_obstacle_polys_on_frame's document scan, which still used the
+    single-face rule. This shared helper is both code paths now, so they
+    cannot drift apart a third time.
+    """
+    faces = _all_horizontal_face_polys(sub, frame, deflection)
+    if not faces:
+        # No near-horizontal face at all (e.g. a purely vertical/curved
+        # surface trace) — fall back to _outline_in_frame's own
+        # convex-hull-of-vertices path.
+        poly = _outline_in_frame(sub, frame, deflection)
+        faces = [poly] if poly is not None else []
+    for poly in faces:
+        key = tuple(round(v, 4) for v in poly.bbox)
+        if key in seen_bboxes:
+            continue
+        seen_bboxes.add(key)
+        out.append(poly)
 
 
 def outline_polys_of_object_on_frame(obj, frame, deflection: float = 0.05) -> list:
     """
-    Public wrapper around _outline_in_frame for a single already-known
-    object: one Poly per solid (matching collect_obstacle_polys_on_frame's
-    own per-solid decomposition), with no "is this near the surface" or
-    document-scan filtering — the caller already knows *obj* belongs on
-    *frame* (e.g. a trace just baked onto it) and wants its footprint
-    folded into a live PolyField via .add(), the same obstacle-growth step
-    core.trace_routing.TraceRoutingSession.confirm_trace does for its own
-    Rect-based graph.
+    Public wrapper for a single already-known object's footprint: one Poly
+    per near-horizontal face per solid (see _solid_footprint_polys — NOT
+    one poly per solid, which would silently drop every leg but the
+    largest for a bent multi-segment trace), with no "is this near the
+    surface" or document-scan filtering — the caller already knows *obj*
+    belongs on *frame* (e.g. a trace just baked onto it) and wants its
+    footprint folded into a live PolyField via .add(), the same
+    obstacle-growth step core.trace_routing.TraceRoutingSession.confirm_trace
+    does for its own Rect-based graph.
     """
     polys = []
+    seen_bboxes = set()
     shp = getattr(obj, "Shape", None)
     if shp is None or shp.isNull():
         return polys
     for sub in (list(shp.Solids) or list(shp.Faces) or [shp]):
-        poly = _outline_in_frame(sub, frame, deflection)
-        if poly is not None:
-            polys.append(poly)
+        _solid_footprint_polys(sub, frame, deflection, seen_bboxes, polys)
     return polys
 
 

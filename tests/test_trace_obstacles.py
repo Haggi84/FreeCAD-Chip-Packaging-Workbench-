@@ -141,6 +141,27 @@ def run():
               tob.PolyField([], clearance=0.5, cell_size=2.0)
               .blockers(V(5, 5, 0), V(25, 5, 0)) == [])
 
+    # A pad placed near the edge of its OWN routable surface is ordinary,
+    # not a violation — a trace must be allowed to leave it. Without
+    # edge_exempt, this is indistinguishable from a mid-route leg carelessly
+    # hugging the edge (rightly blocked above); confirmed against a real
+    # board where a contact point close to its surface's edge could never
+    # be routed from at all, with no copper obstacle involved whatsoever.
+    tc.check("point_hugs_boundary: a point within clearance of the edge is flagged",
+              bounded.point_hugs_boundary(V(0.2, 5, 0)) is True)
+    tc.check("point_hugs_boundary: a point well inside is not flagged",
+              bounded.point_hugs_boundary(V(5, 5, 0)) is False)
+    tc.check("point_hugs_boundary: a point outside the boundary is not flagged "
+              "(that is leaves_surface's job, not this one)",
+              bounded.point_hugs_boundary(V(20, 20, 0)) is False)
+    tc.check("boundary: edge_exempt lets a leg start right where the pad already "
+              "legitimately sits, near the edge",
+              tob.PolyField.BOUNDARY not in
+              bounded.blockers(V(0.2, 2, 0), V(0.2, 8, 0), edge_exempt=True))
+    tc.check("boundary: edge_exempt never permits leaving the face outright",
+              tob.PolyField.BOUNDARY in
+              bounded.blockers(V(0.2, 2, 0), V(25, 2, 0), edge_exempt=True))
+
     tc.check("seg_poly_edge_distance: measures to the edges even from inside "
               "(unlike seg_poly_distance, which treats inside as a collision)",
               abs(tob.seg_poly_edge_distance(V(5, 5, 0), V(5, 6, 0), bnd) - 4.0) < 1e-9,
@@ -212,7 +233,82 @@ def run():
         empty_obj = doc.addObject("Part::Feature", "EmptyShape")
         tc.check("outline_polys_of_object_on_frame: an object with no Shape yields no polygons",
                   tob.outline_polys_of_object_on_frame(empty_obj, frame) == [])
+
+        # Regression: a BENT trace (two legs fused into one solid at a
+        # corner, exactly how build_trace_solid/build_surface_trace_solid
+        # build a multi-waypoint trace) does not end up with one continuous
+        # top face — the fuse leaves one near-horizontal face PER LEG.
+        # outline_polys_of_object_on_frame must return a polygon for EACH
+        # leg, not just the largest one — otherwise a just-baked bent
+        # trace's shorter leg is invisible as a routing obstacle to the
+        # next pair in the same batch, and it crosses straight through it
+        # (confirmed against a real board).
+        leg1 = Part.makeBox(5.0, 0.3, 0.1, V(0, 0, 1))         # long leg: x [0,5]
+        leg2 = Part.makeBox(0.3, 5.0, 0.1, V(4.7, 0.3, 1))      # short leg: y [0.3,5.3]
+        bent_obj = doc.addObject("Part::Feature", "BentTrace")
+        bent_obj.Shape = leg1.fuse(leg2)
+
+        bent_polys = tob.outline_polys_of_object_on_frame(bent_obj, frame)
+        tc.check("outline_polys_of_object_on_frame: a bent trace yields one "
+                  "polygon per leg, not just the largest",
+                  len(bent_polys) == 2, f"got {len(bent_polys)}")
+        if len(bent_polys) == 2:
+            widths = sorted((p.bbox[2] - p.bbox[0]) for p in bent_polys)
+            tc.check("outline_polys_of_object_on_frame: both the long leg's and the "
+                      "short leg's footprint are present (widths ~0.3 and ~5.0)",
+                      abs(widths[0] - 0.3) < 0.3 and abs(widths[1] - 5.0) < 0.3,
+                      f"widths {widths}")
     finally:
         FreeCAD.closeDocument(doc.Name)
+
+    # ── PartDesign Body / feature identity ──────────────────────────────────
+    # Reported from real use: on a Body-based board (Body + Pad feature —
+    # SEVERAL document objects sharing one solid), excluding only the object
+    # whose face the user picked left its Body twin in the obstacle scan,
+    # which contributed the WHOLE BOARD as a keep-out. Any route needing a
+    # real detour (3+ segments) was then reported blocked, while trivial
+    # 2-segment routes still worked — making it look like a router weakness
+    # instead of an obstacle-collection bug.
+    doc_pd = new_document("TestTraceObstaclesPD")
+    try:
+        import core.routing_frame as rf
+        body = doc_pd.addObject("PartDesign::Body", "Body")
+        box = doc_pd.addObject("PartDesign::AdditiveBox", "Pad")
+        body.addObject(box)
+        box.Length, box.Width, box.Height = 30, 20, 2
+        doc_pd.recompute()
+
+        # Real separate copper next to the Body — must STILL be collected.
+        cu = doc_pd.addObject("Part::Feature", "Copper")
+        cu.Shape = Part.makeBox(2, 2, 0.1, V(5, 5, 2))
+        doc_pd.recompute()
+
+        pd_top = box.Shape.Faces[max(range(len(box.Shape.Faces)),
+                                       key=lambda i: (box.Shape.Faces[i].Area,
+                                                       box.Shape.Faces[i].BoundBox.ZMax))]
+        pd_frame = rf.SurfaceFrame(pd_top)
+
+        ex = tob.expand_surface_exclusions(doc_pd, {"Pad"})
+        tc.check("expand_surface_exclusions: excluding a feature also excludes "
+                  "its PartDesign Body (they share one solid)",
+                  "Body" in ex and "Pad" in ex, f"got {ex}")
+        ex2 = tob.expand_surface_exclusions(doc_pd, {"Body"})
+        tc.check("expand_surface_exclusions: excluding a Body also excludes "
+                  "its member features",
+                  "Pad" in ex2, f"got {ex2}")
+
+        pd_polys = tob.collect_obstacle_polys_on_frame(
+            doc_pd, {"Pad"}, pd_frame, 0.3)
+        tc.check("collect_obstacle_polys_on_frame: the routing surface's own "
+                  "Body twin is NOT an obstacle (regression guard — it used to "
+                  "block every 3+-segment detour on a Body-based board)",
+                  len(pd_polys) == 1, f"got {len(pd_polys)} poly(s)")
+        if len(pd_polys) == 1:
+            bbox = pd_polys[0].bbox
+            tc.check("collect_obstacle_polys_on_frame: ...while real separate "
+                      "copper on the Body is still collected",
+                      abs((bbox[2] - bbox[0]) - 2.0) < 0.3, f"bbox {bbox}")
+    finally:
+        FreeCAD.closeDocument(doc_pd.Name)
 
     return tc.results

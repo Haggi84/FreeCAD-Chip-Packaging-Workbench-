@@ -134,7 +134,11 @@ def path_blockers(path, obstacles, obstacle_index=None, cell_size=None,
     *exempt_end*) are permitted up to *escape_mm* of travel inside them —
     the same bounded-escape rule core.trace_routing uses, so a trace can
     step off the pad it starts on without being allowed to run along a
-    copper pour.
+    copper pour. The routable-surface BOUNDARY gets the analogous
+    exemption automatically whenever the path's own start/end point already
+    sits within clearance of it (see PolyField.point_hugs_boundary) — a pad
+    near the edge of its own surface is ordinary, not a violation to charge
+    every leg leaving it for.
     """
     field = as_field(obstacles, obstacle_index, cell_size)
     if len(path) < 2:
@@ -145,6 +149,9 @@ def path_blockers(path, obstacles, obstacle_index=None, cell_size=None,
     # face it is supposed to stay on.
     ex_s = frozenset(exempt_start or ())
     ex_e = frozenset(exempt_end or ())
+    hugs = getattr(field, "point_hugs_boundary", None)
+    edge_ex_s = bool(hugs(path[0])) if hugs else False
+    edge_ex_e = bool(hugs(path[-1])) if hugs else False
     hits = []
     seen = set()
     for si in range(len(path) - 1):
@@ -157,9 +164,10 @@ def path_blockers(path, obstacles, obstacle_index=None, cell_size=None,
         # segment that is both first and last (a direct two-point leg) gets
         # both tests, and an obstacle only really blocks when NEITHER
         # exemption excuses it — hence the intersection.
-        from_start = field.blockers(p, q, ex_s if is_first else frozenset(), escape_mm)
+        from_start = field.blockers(p, q, ex_s if is_first else frozenset(), escape_mm,
+                                    edge_ex_s if is_first else False)
         if is_last:
-            from_end = field.blockers(q, p, ex_e, escape_mm)
+            from_end = field.blockers(q, p, ex_e, escape_mm, edge_ex_e)
             blocking = [i for i in from_start if i in set(from_end)]
         else:
             blocking = from_start
@@ -259,7 +267,10 @@ class _RectField:
     def containing(self, pt):
         return obstacles_containing(pt, self.rects, self.index, self.cell_size)
 
-    def blockers(self, p, q, exempt=frozenset(), escape_mm: float = 0.0):
+    def blockers(self, p, q, exempt=frozenset(), escape_mm: float = 0.0,
+                 edge_exempt: bool = False):
+        # edge_exempt is accepted for interface compatibility with PolyField
+        # only — this adapter has no boundary concept to exempt from.
         if self.index is not None and self.cell_size:
             cands = _candidate_obstacle_indices(p, q, self.index, self.cell_size)
         else:
@@ -412,3 +423,71 @@ def route_head(a, c, obstacles, obstacle_index=None, cell_size=None,
         if path is not None and len(path) >= 2:
             return path, use_flip
     return None, flip
+
+
+def route_head_with_via(a, c, field, step_deg: float = STEP_45,
+                        escape_mm: float = 0.0,
+                        max_detours: int = DEFAULT_MAX_DETOURS,
+                        grid_n: int = 9):
+    """
+    route_head, then — only when it reports blocked — a second, slower
+    attempt routed THROUGH one intermediate point: for candidate points M on
+    a coarse grid over the routable area, try walk-around a->M and M->c and
+    accept the first combination whose joined path is genuinely clear.
+
+    Exists because the hull walk is structurally greedy: entering a pocket
+    BEHIND a long obstacle from the far side needs three of that obstacle's
+    hull corners in one wrap, but _side_routes offers at most the two
+    extreme corners per side and the visited-set forbids wrapping the same
+    obstacle twice. A single free intermediate point breaks such a route
+    into two halves the plain walk-around CAN each solve (confirmed against
+    a real rip-up-and-reroute case: reroute into a parallel channel — plain
+    route_head blocked at every search budget, one mid-channel via point
+    solves it). Deliberately NOT used by the live interactive router — up
+    to grid_n^2 extra walk-arounds is offline-tool money, not
+    per-mouse-move money.
+
+    Returns (points, used_flip) like route_head.
+    """
+    path, used_flip = route_head(a, c, field, step_deg=step_deg,
+                                  escape_mm=escape_mm, max_detours=max_detours)
+    if path is not None:
+        return path, used_flip
+
+    boundary = getattr(field, "boundary", None)
+    if boundary is not None:
+        xmin, ymin, xmax, ymax = boundary.bbox
+    else:
+        xmin = min(a.x, c.x) - 20.0
+        xmax = max(a.x, c.x) + 20.0
+        ymin = min(a.y, c.y) - 20.0
+        ymax = max(a.y, c.y) + 20.0
+
+    mx, my = (a.x + c.x) / 2.0, (a.y + c.y) / 2.0
+    candidates = []
+    for i in range(1, grid_n + 1):
+        for j in range(1, grid_n + 1):
+            x = xmin + (xmax - xmin) * i / (grid_n + 1)
+            y = ymin + (ymax - ymin) * j / (grid_n + 1)
+            candidates.append(((x - mx) ** 2 + (y - my) ** 2, x, y))
+    candidates.sort()
+
+    ex_s = field.containing(a)
+    ex_e = field.containing(c)
+    for _d2, x, y in candidates:
+        m = FreeCAD.Vector(x, y, a.z)
+        if field.containing(m):
+            continue        # inside/near copper — not a usable via point
+        first, f1 = route_head(a, m, field, step_deg=step_deg,
+                                escape_mm=escape_mm, max_detours=max_detours)
+        if first is None:
+            continue
+        second, _f2 = route_head(m, c, field, step_deg=step_deg,
+                                  escape_mm=escape_mm, max_detours=max_detours)
+        if second is None:
+            continue
+        joined = _join(first, second)
+        if path_blockers(joined, field, None, None, ex_s, ex_e, escape_mm):
+            continue
+        return joined, f1
+    return None, False

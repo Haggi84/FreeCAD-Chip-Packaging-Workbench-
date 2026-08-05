@@ -616,6 +616,57 @@ def _obstacle_subshapes(shp):
     return [shp]
 
 
+def _partdesign_body_of(o):
+    """The PartDesign::Body containing *o*, or None. Restricted to
+    PartDesign::Body deliberately — getParentGeoFeatureGroup() also returns
+    App::Part containers, whose members are real independent solids that
+    must keep being collected individually."""
+    try:
+        grp = o.getParentGeoFeatureGroup()
+        if grp is not None and grp.isDerivedFrom("PartDesign::Body"):
+            return grp
+    except Exception:
+        pass
+    return None
+
+
+def expand_surface_exclusions(doc, names) -> set:
+    """
+    Close *names* over PartDesign Body/feature identity.
+
+    A PartDesign Body and the features inside it are SEVERAL document
+    objects sharing (states of) ONE solid — the Body's own Shape is its tip
+    feature's shape. Excluding only the object whose face the user actually
+    picked (e.g. the 'Pad' feature) leaves its Body twin in the document
+    scan, which then contributes the WHOLE BOARD as a routing obstacle.
+    Confirmed from real use: on a Body-based board, any route needing a
+    real detour (3+ segments) was reported blocked, because the detour's
+    middle segments collided with the board's own duplicate outline — while
+    trivial 2-segment routes still worked, making the failure look like a
+    router weakness instead of an obstacle-collection bug.
+    """
+    out = set(names or ())
+    if doc is None:
+        return out
+    for n in list(out):
+        o = doc.getObject(n)
+        if o is None:
+            continue
+        body = _partdesign_body_of(o)
+        if body is None:
+            try:
+                if o.isDerivedFrom("PartDesign::Body"):
+                    body = o
+            except Exception:
+                body = None
+        if body is None:
+            continue
+        out.add(body.Name)
+        for member in (getattr(body, "Group", None) or []):
+            out.add(member.Name)
+    return out
+
+
 def collect_obstacles(doc, exclude_names, z_min: float, z_max: float, expand_mm: float) -> list:
     """
     Keep-out Rects for every PHYSICAL body sub-solid whose world AABB
@@ -643,14 +694,22 @@ def collect_obstacles(doc, exclude_names, z_min: float, z_max: float, expand_mm:
     by the caller) and IsContactPoint / grid-marker helper objects. A
     _MAX_OBSTACLE_EXTENT_MM sanity clamp drops any absurdly-sized sub-shape
     bbox as defence in depth.
+
+    PartDesign handling: features INSIDE a Body are skipped (they are
+    history states of the Body's one solid, not separate copper); the Body
+    itself represents them all, and exclusions are closed over the
+    Body/feature family (see expand_surface_exclusions) so picking either
+    one as the routing surface excludes both.
     """
     rects = []
     if doc is None:
         return rects
-    exclude = set(exclude_names or ())
+    exclude = expand_surface_exclusions(doc, exclude_names)
     for o in doc.Objects:
         if o.Name in exclude:
             continue
+        if _partdesign_body_of(o) is not None:
+            continue        # history state inside a Body — the Body stands for it
         try:
             is_body = o.isDerivedFrom("Part::Feature") or o.isDerivedFrom("Mesh::Feature")
         except Exception:

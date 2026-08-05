@@ -40,6 +40,7 @@ try:
     from routing import TraceRoutingCommand   # noqa: F401
     from routing import InteractiveRouterCommand   # noqa: F401
     from routing import BatchRouteCommand   # noqa: F401
+    from routing import TraceDragCommand   # noqa: F401
     from drc import DRCCommand   # noqa: F401
 
     FreeCAD.Console.PrintMessage("Commands loaded successfully\n")
@@ -225,6 +226,7 @@ class MyWorkbench(FreeCADGui.Workbench):
                     "InteractiveRouteCommand",
                     "TraceRoutingCommand",
                     "StartBatchRouteCommand",
+                    "DragTraceCommand",
                 ],
             )
 

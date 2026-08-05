@@ -39,7 +39,7 @@ import FreeCADGui
 import core.trace_walkaround as wa
 import core.trace_obstacles as tob
 import core.routing_frame as rf
-from routing.InteractiveRouterCommand import bake_trace
+from routing.InteractiveRouterCommand import bake_trace, rebuild_trace
 
 
 # ── selection gate ──────────────────────────────────────────────────────────
@@ -100,6 +100,9 @@ class BatchRouteSession:
         self.last_results    = []   # [(first, second, "baked"/"blocked", trace_name_or_None), ...]
         self._state           = _State.AWAIT_FIRST
         self._first_cp        = None
+        self._base_polys      = []   # non-trace copper + surface holes
+        self._trace_polys     = {}   # trace name -> [Poly, ...] (spacing-inflated)
+        self._boundary        = None
         # Optional callable(), invoked whenever the queue or status changes —
         # the setup panel hooks this to keep its queue list live while a
         # session is running, mirroring TraceRoutingSetupPanel's use of a
@@ -127,12 +130,26 @@ class BatchRouteSession:
         band = thickness_mm + clearance_mm
 
         self.frame = rf.SurfaceFrame(face)
-        polys = tob.collect_obstacle_polys_on_frame(doc, {obj_name}, self.frame, band)
-        polys += tob.face_hole_polys_on_frame(face, self.frame)
-        self.field = tob.PolyField(
-            polys, clearance=clearance_mm + width_mm / 2.0, cell_size=1.0,
-            boundary=tob.face_outer_poly_on_frame(face, self.frame),
-        )
+        self._boundary = tob.face_outer_poly_on_frame(face, self.frame)
+
+        # Existing traces are tracked SEPARATELY from other copper, each
+        # under its own name — that is what makes rip-up-and-reroute
+        # possible (rebuild the field without exactly one trace) and what
+        # the trace-spacing option inflates (see _trace_obstacle_polys).
+        trace_names = {o.Name for o in doc.Objects if getattr(o, "IsRoutingTrace", False)}
+        self._base_polys = tob.collect_obstacle_polys_on_frame(
+            doc, {obj_name} | trace_names, self.frame, band)
+        self._base_polys += tob.face_hole_polys_on_frame(face, self.frame)
+
+        self._trace_polys = {}
+        for o in doc.Objects:
+            if not getattr(o, "IsRoutingTrace", False):
+                continue
+            polys = self._trace_obstacle_polys(o)
+            if polys:
+                self._trace_polys[o.Name] = polys
+
+        self._rebuild_field()
 
         self.is_active = True
         FreeCADGui.Selection.addObserver(self)
@@ -165,6 +182,9 @@ class BatchRouteSession:
         self.frame = None
         self.field = None
         self.queue = []
+        self._base_polys = []
+        self._trace_polys = {}
+        self._boundary = None
         _set_session_toolbar_visible(False)
         FreeCAD.Console.PrintMessage("[BatchRoute] Session ended.\n")
 
@@ -175,7 +195,124 @@ class BatchRouteSession:
             del self.queue[index]
             self._notify()
 
+    # ── obstacle-field bookkeeping ────────────────────────────────────────
+
+    def _extra_trace_margin(self) -> float:
+        """How much wider than the plain clearance the space around TRACES
+        must be — the user-facing "minimum trace spacing" option. 0 when the
+        requested spacing does not exceed the clearance (which already
+        guarantees clearance mm edge-to-edge)."""
+        spacing = float(self.params.get("trace_spacing_mm", 0.0) or 0.0)
+        return max(0.0, spacing - float(self.params["clearance_mm"]))
+
+    def _trace_obstacle_polys(self, trace_obj) -> list:
+        """The obstacle polygons one existing trace contributes: its per-leg
+        footprint, inflated by the extra trace-spacing margin, and only when
+        the trace actually lies near THIS routing surface (a trace on the
+        board's other side projects onto the frame at the same 2-D spot, and
+        must not count)."""
+        band = float(self.params["thickness_mm"]) + float(self.params["clearance_mm"])
+        try:
+            dmin = min(self.frame.distance_to_surface(v.Point)
+                       for v in trace_obj.Shape.Vertexes)
+        except Exception:
+            return []
+        if dmin > band:
+            return []
+        extra = self._extra_trace_margin()
+        polys = tob.outline_polys_of_object_on_frame(trace_obj, self.frame)
+        if extra > 0:
+            polys = [tob.inflate_poly(p, extra) for p in polys]
+        return polys
+
+    def _rebuild_field(self, exclude_trace: str = None) -> None:
+        polys = list(self._base_polys)
+        for name, tpolys in self._trace_polys.items():
+            if name == exclude_trace:
+                continue
+            polys.extend(tpolys)
+        self.field = tob.PolyField(
+            polys,
+            clearance=float(self.params["clearance_mm"]) + float(self.params["width_mm"]) / 2.0,
+            cell_size=1.0, boundary=self._boundary)
+
     # ── routing ───────────────────────────────────────────────────────────
+
+    def _route_pts(self, a2, c2, field):
+        # route_head_with_via: the plain walk-around first, then the slower
+        # via-point fallback — batch routing is offline, so it can afford
+        # searches the live interactive router cannot.
+        path, _flip = wa.route_head_with_via(
+            FreeCAD.Vector(a2[0], a2[1], 0), FreeCAD.Vector(c2[0], c2[1], 0),
+            field, step_deg=self.params.get("step_deg", wa.STEP_45))
+        return path
+
+    def _bake(self, path):
+        try:
+            return bake_trace(
+                self.obj_name, self.face_index, [(p.x, p.y) for p in path],
+                self.params["width_mm"], self.params["thickness_mm"],
+                self.params["clearance_mm"])
+        except Exception as exc:
+            # An OCCT failure on ONE pair's solid must not abort the whole
+            # batch — the caller records it blocked and keeps going.
+            FreeCAD.Console.PrintError(f"[BatchRoute] baking failed: {exc}\n")
+            return None
+
+    def _endpoints_2d(self, trace_obj):
+        wp = list(getattr(trace_obj, "Waypoints", []) or [])
+        if len(wp) < 2:
+            return None, None
+        return self.frame.to_2d(wp[0]), self.frame.to_2d(wp[-1])
+
+    def _try_ripup(self, a2, c2):
+        """
+        Single-trace rip-up-and-reroute: when a pair cannot be routed, try —
+        for each existing trace in turn — whether removing THAT trace from
+        the field lets the pair route, and whether the removed trace can
+        then itself be rerouted around the pair's new copper. Only commits
+        when BOTH routes exist; a half-successful attempt is rolled back
+        (the freshly baked pair trace deleted again), so the document never
+        ends up with a connection lost that existed before.
+
+        Returns (new_trace_obj, rerouted_trace_name) or (None, None).
+        """
+        doc = self.doc
+        for tname in list(self._trace_polys.keys()):
+            tobj = doc.getObject(tname)
+            if tobj is None:
+                continue
+            e0, e1 = self._endpoints_2d(tobj)
+            if e0 is None or e1 is None:
+                continue        # not reroutable — don't rip what we can't restore
+
+            self._rebuild_field(exclude_trace=tname)
+            path_new = self._route_pts(a2, c2, self.field)
+            if path_new is None:
+                continue
+            new_obj = self._bake(path_new)
+            if new_obj is None:
+                continue
+
+            # The ripped trace must now route around the new pair's copper.
+            self._trace_polys[new_obj.Name] = self._trace_obstacle_polys(new_obj)
+            self._rebuild_field(exclude_trace=tname)
+            path_r = self._route_pts(e0, e1, self.field)
+            if path_r is not None and rebuild_trace(tname, [(p.x, p.y) for p in path_r]) is not None:
+                self._trace_polys[tname] = self._trace_obstacle_polys(tobj)
+                self._rebuild_field()
+                FreeCAD.Console.PrintMessage(
+                    f"[BatchRoute] Rerouted existing {tname} to make room.\n")
+                return new_obj, tname
+
+            # Roll back: remove the new trace, restore the old field.
+            del self._trace_polys[new_obj.Name]
+            try:
+                doc.removeObject(new_obj.Name)
+            except Exception:
+                pass
+        self._rebuild_field()
+        return None, None
 
     def route_all(self) -> list:
         """
@@ -184,8 +321,10 @@ class BatchRouteSession:
         next pair (see module docstring). Returns a list of
         (first_name, second_name, "baked"/"blocked", trace_name_or_None).
 
-        A blocked pair does not stop the batch — the rest of the queue
-        still runs.
+        A pair that cannot be routed directly triggers single-trace
+        rip-up-and-reroute (see _try_ripup) unless the session was started
+        with allow_reroute=False. A blocked pair does not stop the batch —
+        the rest of the queue still runs.
         """
         results = []
         if not self.is_active or self.doc is None:
@@ -207,26 +346,19 @@ class BatchRouteSession:
                 results.append((first_name, second_name, "blocked", None))
                 continue
 
-            path, _flip = wa.route_head(
-                FreeCAD.Vector(a2[0], a2[1], 0), FreeCAD.Vector(c2[0], c2[1], 0),
-                self.field, step_deg=self.params.get("step_deg", wa.STEP_45),
-            )
-            if path is None:
-                results.append((first_name, second_name, "blocked", None))
-                continue
+            path = self._route_pts(a2, c2, self.field)
+            obj = self._bake(path) if path is not None else None
 
-            pts2d = [(p.x, p.y) for p in path]
-            obj = bake_trace(
-                self.obj_name, self.face_index, pts2d,
-                self.params["width_mm"], self.params["thickness_mm"],
-                self.params["clearance_mm"],
-            )
+            if obj is None and self.params.get("allow_reroute", True):
+                obj, rerouted = self._try_ripup(a2, c2)
+
             if obj is None:
                 results.append((first_name, second_name, "blocked", None))
                 continue
 
-            for poly in tob.outline_polys_of_object_on_frame(obj, self.frame):
-                self.field.add(poly)
+            if obj.Name not in self._trace_polys:
+                self._trace_polys[obj.Name] = self._trace_obstacle_polys(obj)
+                self._rebuild_field()
             results.append((first_name, second_name, "baked", obj.Name))
 
         self.last_results = results

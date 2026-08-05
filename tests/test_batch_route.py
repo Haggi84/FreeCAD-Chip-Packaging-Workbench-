@@ -25,9 +25,39 @@ from _harness import TestCase, new_document
 import core.trace_walkaround as wa
 import core.trace_obstacles as tob
 import core.routing_frame as rf
-from routing.InteractiveRouterCommand import bake_trace
+from routing.InteractiveRouterCommand import (bake_trace, rebuild_trace,
+                                               resolve_trace_frame)
+from routing.BatchRouteSession import BatchRouteSession
 
 V = FreeCAD.Vector
+
+
+def _make_session(doc, board, face_index, top, frame, params):
+    """A BatchRouteSession wired up WITHOUT start_session — that method
+    touches FreeCADGui.Selection, which freecadcmd doesn't have. Everything
+    else (field bookkeeping, route_all, rip-up) is GUI-free and is exactly
+    what this wires."""
+    s = BatchRouteSession()
+    s.doc = doc
+    s.obj_name = board.Name
+    s.face_index = face_index
+    s.frame = frame
+    s.params = dict(params)
+    s._boundary = tob.face_outer_poly_on_frame(top, frame)
+    band = params["thickness_mm"] + params["clearance_mm"]
+    trace_names = {o.Name for o in doc.Objects if getattr(o, "IsRoutingTrace", False)}
+    s._base_polys = tob.collect_obstacle_polys_on_frame(
+        doc, {board.Name} | trace_names, frame, band)
+    s._base_polys += tob.face_hole_polys_on_frame(top, frame)
+    s._trace_polys = {}
+    for o in doc.Objects:
+        if getattr(o, "IsRoutingTrace", False):
+            polys = s._trace_obstacle_polys(o)
+            if polys:
+                s._trace_polys[o.Name] = polys
+    s._rebuild_field()
+    s.is_active = True
+    return s
 
 
 def _xy(path):
@@ -135,5 +165,279 @@ def run():
                   f"got {[o.Name for o in doc.Objects if o.Name.startswith('Trace_')]}")
     finally:
         FreeCAD.closeDocument(doc.Name)
+
+    # ── regression: two crossing pairs must never physically overlap ────────
+    # Reported from real use: routing two pairs whose straight-line
+    # connections cross (the classic "X" of two diagonals on a rectangular
+    # board) baked two traces that visibly crossed each other in the 3-D
+    # view. Root cause: the first (BENT) trace's obstacle footprint only
+    # covered its longest leg — outline_polys_of_object_on_frame picked the
+    # single largest near-horizontal face instead of one per leg — so the
+    # second pair's route never saw the missing leg and cut straight
+    # through it. This checks actual baked SOLID geometry (Shape.distToShape),
+    # not just the 2-D field the router itself consulted, so it would catch
+    # this even if some other part of the pipeline made the same mistake.
+    doc2 = new_document("TestBatchRouteNoCross")
+    try:
+        board = doc2.addObject("Part::Feature", "Board")
+        board.Shape = Part.makeBox(80, 50, 10, V(-40, -25, 0))
+        face_index = max(range(len(board.Shape.Faces)),
+                          key=lambda i: board.Shape.Faces[i].Area)
+        top = board.Shape.Faces[face_index]
+        FreeCAD.setActiveDocument(doc2.Name)
+
+        frame = rf.SurfaceFrame(top)
+        w, th, cl = 0.3, 0.035, 0.2
+        field = tob.PolyField([], clearance=cl + w / 2, cell_size=1.0,
+                               boundary=tob.face_outer_poly_on_frame(top, frame))
+
+        # Two diagonals of the board that cross near its centre.
+        p1 = V(-36.273, -22.182, 10.0)
+        p2 = V(34.443, 19.609, 10.0)
+        p3 = V(-34.862, 17.162, 10.0)
+        p4 = V(30.966, -22.854, 10.0)
+
+        def _route_and_bake2(a, c):
+            a2, c2 = frame.to_2d(a), frame.to_2d(c)
+            path, _flip = wa.route_head(V(*a2, 0), V(*c2, 0), field, step_deg=wa.STEP_45)
+            if path is None:
+                return None
+            pts2d = [(p.x, p.y) for p in path]
+            obj = bake_trace(board.Name, face_index, pts2d, w, th, cl)
+            for poly in tob.outline_polys_of_object_on_frame(obj, frame):
+                field.add(poly)
+            return obj
+
+        trace_a = _route_and_bake2(p1, p2)
+        trace_b = _route_and_bake2(p4, p3)
+        tc.check("batch route: both legs of a crossing pair of diagonals route "
+                  "and bake", trace_a is not None and trace_b is not None)
+        if trace_a is not None and trace_b is not None:
+            dist = trace_a.Shape.distToShape(trace_b.Shape)[0]
+            tc.check("batch route: the two baked traces never touch or overlap "
+                      "(regression guard for the missing-leg obstacle bug)",
+                      dist >= cl - 1e-6, f"distance={dist:.4f} mm, required >= {cl} mm")
+
+        # Regression: the SAME missing-leg crossing, but across SESSIONS —
+        # a NEW session's obstacle collection scans the document afresh via
+        # collect_obstacle_polys_on_frame, which used its own single-face
+        # outline rule and dropped the earlier bent traces' short legs all
+        # over again (reported from real use as a crossing on the 4th
+        # connection, routed in a separate batch session).
+        if trace_a is not None and trace_b is not None:
+            field2 = tob.PolyField(
+                tob.collect_obstacle_polys_on_frame(doc2, {board.Name}, frame, th + cl),
+                clearance=cl + w / 2, cell_size=1.0,
+                boundary=tob.face_outer_poly_on_frame(top, frame))
+            p5, p6 = V(-30, -10, 10.0), V(25, 8, 10.0)
+            a2, c2 = frame.to_2d(p5), frame.to_2d(p6)
+            path3, _flip = wa.route_head(V(*a2, 0), V(*c2, 0), field2, step_deg=wa.STEP_45)
+            if path3 is not None:
+                trace_c = bake_trace(board.Name, face_index,
+                                      [(p.x, p.y) for p in path3], w, th, cl)
+                d_a = trace_c.Shape.distToShape(trace_a.Shape)[0]
+                d_b = trace_c.Shape.distToShape(trace_b.Shape)[0]
+                tc.check("batch route: a trace routed in a FRESH session keeps "
+                          "clearance from BOTH legs of earlier sessions' bent "
+                          "traces (cross-session missing-leg regression guard)",
+                          min(d_a, d_b) >= cl - 1e-6,
+                          f"distances {d_a:.4f} / {d_b:.4f} mm, required >= {cl} mm")
+
+        # Regression: the walk-around's posture math can emit consecutive
+        # path points separated only by floating-point noise. OCCT's solid
+        # builders reject such segments ("length of box too small"), which
+        # used to crash bake_trace — and with it the whole Route All batch —
+        # instead of just baking the real geometry (found by a randomized
+        # stress run, 4 crashes out of 25 crossing trials).
+        degenerate_path = [(-10.0, -10.0), (-10.0 + 1e-9, -10.0 + 1e-9),
+                            (5.0, 5.0), (5.0, 5.0 + 1e-10), (5.0, 12.0)]
+        try:
+            deg_obj = bake_trace(board.Name, face_index, degenerate_path, w, th, cl)
+        except Exception as exc:
+            deg_obj = None
+            tc.check("bake_trace: a path containing numerically-degenerate "
+                      "points bakes instead of raising",
+                      False, f"raised {exc}")
+        else:
+            tc.check("bake_trace: a path containing numerically-degenerate "
+                      "points bakes instead of raising",
+                      deg_obj is not None and not deg_obj.Shape.isNull())
+        if deg_obj is not None:
+            tc.check("bake_trace: the degenerate points were dropped, the real "
+                      "waypoints kept",
+                      len(deg_obj.Waypoints) == 3,
+                      f"got {len(deg_obj.Waypoints)} waypoint(s)")
+    finally:
+        FreeCAD.closeDocument(doc2.Name)
+
+    # ── trace spacing: minimum edge-to-edge space between traces ────────────
+    doc3 = new_document("TestBatchRouteSpacing")
+    try:
+        board = doc3.addObject("Part::Feature", "Board")
+        board.Shape = Part.makeBox(60, 30, 5, V(0, 0, 0))
+        face_index = max(range(len(board.Shape.Faces)),
+                          key=lambda i: (board.Shape.Faces[i].Area,
+                                          board.Shape.Faces[i].BoundBox.ZMax))
+        top = board.Shape.Faces[face_index]
+        FreeCAD.setActiveDocument(doc3.Name)
+        frame = rf.SurfaceFrame(top)
+        w, th, cl = 0.3, 0.035, 0.2
+
+        pad_a = _add_pad(doc3, "SpA", V(10, 10, 5))
+        pad_b = _add_pad(doc3, "SpB", V(50, 10, 5))
+        pad_c = _add_pad(doc3, "SpC", V(30, 3, 5))
+        pad_d = _add_pad(doc3, "SpD", V(30, 25, 5))
+
+        params = {"width_mm": w, "thickness_mm": th, "clearance_mm": cl,
+                   "trace_spacing_mm": 1.0, "allow_reroute": False}
+        session = _make_session(doc3, board, face_index, top, frame, params)
+        session.queue = [("SpA", "SpB"), ("SpC", "SpD")]
+        results = session.route_all()
+
+        tc.check("trace spacing: both pairs still route with a 1.0 mm spacing",
+                  all(r[2] == "baked" for r in results), f"got {results}")
+        traces = [o for o in doc3.Objects if o.Name.startswith("Trace_")]
+        if len(traces) == 2:
+            d = traces[0].Shape.distToShape(traces[1].Shape)[0]
+            tc.check("trace spacing: the second trace keeps the REQUESTED "
+                      "spacing from the first, not just the clearance "
+                      "(walks around its end at >= ~1.0 mm, not 0.2 mm)",
+                      d >= 0.9, f"distance={d:.4f} mm, requested spacing 1.0 mm")
+    finally:
+        FreeCAD.closeDocument(doc3.Name)
+
+    # ── rip-up & reroute: an existing trace moves to make room ──────────────
+    # Wall W splits the board left/right with two gaps: A (y 10-11, fits ONE
+    # trace) and B (y 15-16). A splitter wall P divides the LEFT side so the
+    # lower-left region reaches ONLY gap A, while the upper-left region
+    # reaches ONLY gap B. Trace 1 is baked occupying gap A, but its own
+    # endpoints (upper-left -> right) could equally go via gap B. Pair 2
+    # (lower-left -> right) can ONLY use gap A — so it is blocked unless the
+    # session reroutes trace 1 through gap B first.
+    doc4 = new_document("TestBatchRouteRipup")
+    try:
+        board = doc4.addObject("Part::Feature", "Board")
+        board.Shape = Part.makeBox(70, 25, 5, V(0, 0, 0))
+        face_index = max(range(len(board.Shape.Faces)),
+                          key=lambda i: (board.Shape.Faces[i].Area,
+                                          board.Shape.Faces[i].BoundBox.ZMax))
+        top = board.Shape.Faces[face_index]
+        FreeCAD.setActiveDocument(doc4.Name)
+        frame = rf.SurfaceFrame(top)
+        w, th, cl = 0.3, 0.035, 0.2
+
+        def _wall(name, x0, y0, x1, y1):
+            o = doc4.addObject("Part::Feature", name)
+            o.Shape = Part.makeBox(x1 - x0, y1 - y0, 0.2, V(x0, y0, 5))
+            return o
+
+        _wall("W1", 28, 0, 30, 10)      # wall below gap A
+        _wall("W2", 28, 11, 30, 15)     # wall between gaps A and B
+        _wall("W3", 28, 16, 30, 25)     # wall above gap B
+        _wall("P",  0, 12.5, 28, 13)    # left-side splitter: LL vs UL region
+
+        # Trace 1 baked deliberately through gap A (its left end sits in the
+        # upper-left region, so its REROUTE alternative via gap B exists).
+        t1_wp = [frame.to_2d(V(x, y, 5)) for x, y in
+                 [(5, 20), (20, 20), (20, 10.5), (60, 10.5)]]
+        t1 = bake_trace(board.Name, face_index, t1_wp, w, th, cl)
+        wp_before = list(t1.Waypoints)
+
+        pad_2a = _add_pad(doc4, "R2a", V(5, 8.0, 5))
+        pad_2b = _add_pad(doc4, "R2b", V(60, 8.0, 5))
+
+        params = {"width_mm": w, "thickness_mm": th, "clearance_mm": cl,
+                   "trace_spacing_mm": 0.0, "allow_reroute": False}
+        session = _make_session(doc4, board, face_index, top, frame, params)
+
+        # Pair 2 needs gap A; without rip-up it is simply blocked.
+        session.queue = [("R2a", "R2b")]
+        r2_blocked = session.route_all()
+        tc.check("rip-up: with rerouting disabled, the conflicting pair is "
+                  "reported blocked (fixture sanity)",
+                  r2_blocked and r2_blocked[0][2] == "blocked", f"got {r2_blocked}")
+
+        # Same pair with rerouting allowed: trace 1 must move to gap B.
+        session.queue = [("R2a", "R2b")]
+        session.params["allow_reroute"] = True
+        r2 = session.route_all()
+        tc.check("rip-up: with rerouting enabled, the pair routes by moving "
+                  "the existing trace out of the way",
+                  r2 and r2[0][2] == "baked", f"got {r2}")
+        if r2 and r2[0][2] == "baked":
+            wp_after = list(t1.Waypoints)
+            tc.check("rip-up: the existing trace really was rerouted "
+                      "(waypoints changed)",
+                      len(wp_after) != len(wp_before)
+                      or any((a - b).Length > 1e-6 for a, b in zip(wp_after, wp_before)),
+                      f"before {len(wp_before)} wp, after {len(wp_after)} wp")
+            t2 = doc4.getObject(r2[0][3])
+            d = t1.Shape.distToShape(t2.Shape)[0]
+            tc.check("rip-up: the rerouted trace and the new trace keep "
+                      "clearance from each other",
+                      d >= cl - 1e-6, f"distance={d:.4f} mm")
+            tc.check("rip-up: the rerouted trace still connects its ORIGINAL "
+                      "endpoints (the connection is moved, never lost)",
+                      (wp_after[0] - wp_before[0]).Length < 1e-6
+                      and (wp_after[-1] - wp_before[-1]).Length < 1e-6,
+                      f"ends {wp_after[0]} / {wp_after[-1]}")
+    finally:
+        FreeCAD.closeDocument(doc4.Name)
+
+    # ── trace rebuild machinery (what drag-editing commits through) ─────────
+    doc5 = new_document("TestTraceRebuild")
+    try:
+        board = doc5.addObject("Part::Feature", "Board")
+        board.Shape = Part.makeBox(40, 30, 5, V(0, 0, 0))
+        face_index = max(range(len(board.Shape.Faces)),
+                          key=lambda i: (board.Shape.Faces[i].Area,
+                                          board.Shape.Faces[i].BoundBox.ZMax))
+        top = board.Shape.Faces[face_index]
+        FreeCAD.setActiveDocument(doc5.Name)
+        frame = rf.SurfaceFrame(top)
+        w, th, cl = 0.3, 0.035, 0.2
+
+        pts = [frame.to_2d(V(x, y, 5)) for x, y in [(5, 15), (35, 15)]]
+        t = bake_trace(board.Name, face_index, pts, w, th, cl)
+        tc.check("rebuild: bake_trace persists the routing surface "
+                  "(SourceObject / SourceFaceIndex)",
+                  getattr(t, "SourceObject", "") == board.Name
+                  and getattr(t, "SourceFaceIndex", -1) == face_index,
+                  f"got {getattr(t, 'SourceObject', None)!r} / "
+                  f"{getattr(t, 'SourceFaceIndex', None)!r}")
+
+        rframe, rsrc, ridx = resolve_trace_frame(doc5, t)
+        tc.check("rebuild: resolve_trace_frame finds the trace's own surface",
+                  rframe is not None and rsrc == board.Name and ridx == face_index,
+                  f"got {rsrc!r} / {ridx!r}")
+
+        old_name, old_net = t.Name, t.NetName
+        new_pts = [frame.to_2d(V(x, y, 5)) for x, y in
+                   [(5, 15), (15, 15), (20, 22), (30, 22), (35, 15)]]
+        r = rebuild_trace(t.Name, new_pts)
+        tc.check("rebuild: rebuild_trace re-shapes the trace in place",
+                  r is not None and not r.Shape.isNull(), f"got {r}")
+        if r is not None:
+            tc.check("rebuild: identity preserved (same object, name, net)",
+                      r.Name == old_name and r.NetName == old_net,
+                      f"got {r.Name} / {r.NetName}")
+            tc.check("rebuild: waypoints follow the new path",
+                      len(r.Waypoints) == 5, f"got {len(r.Waypoints)}")
+            tc.check("rebuild: endpoints unchanged (drag re-shapes, never "
+                      "re-connects)",
+                      (r.Waypoints[0] - V(5, 15, 5)).Length < 1e-6
+                      and (r.Waypoints[-1] - V(35, 15, 5)).Length < 1e-6,
+                      f"got {r.Waypoints[0]} / {r.Waypoints[-1]}")
+
+        # A trace WITHOUT the source properties (baked before they existed)
+        # must still resolve via the geometric fallback scan.
+        t.removeProperty("SourceObject")
+        t.removeProperty("SourceFaceIndex")
+        f2, s2, i2 = resolve_trace_frame(doc5, t)
+        tc.check("rebuild: a legacy trace without SourceObject still resolves "
+                  "its surface geometrically",
+                  f2 is not None and s2 == board.Name, f"got {s2!r} / {i2!r}")
+    finally:
+        FreeCAD.closeDocument(doc5.Name)
 
     return tc.results
