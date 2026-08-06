@@ -557,6 +557,168 @@ def bake_trace(obj_name, face_index, pts2d, width_mm, thickness_mm, clearance_mm
     return obj
 
 
+def bake_body_trace(obj_name, segments, width_mm, thickness_mm, clearance_mm):
+    """
+    Create ONE Trace_NNN solid from a route that crosses several faces of a
+    body — see core.body_routing.
+
+    *segments* is [(face_index, [(u, v), ...]), ...] as that planner returns
+    it: one 2-D path per face, each in its own face's frame. Each is built
+    into a solid on its own surface and the pieces are fused, so the result
+    is a single trace object that follows the body around its edges rather
+    than a pile of disconnected per-face fragments.
+
+    Falls back to a compound if the fuse fails — a trace that is visibly
+    correct but not a single solid is far more useful than no trace at all,
+    and the geometry is identical either way.
+    """
+    doc = FreeCAD.activeDocument()
+    if doc is None or not segments:
+        return None
+    src = doc.getObject(obj_name)
+    if src is None:
+        FreeCAD.Console.PrintError(
+            f"[BodyRoute] '{obj_name}' is gone; cannot build the trace.\n")
+        return None
+
+    solids = []
+    waypoints = []
+    legs = []
+    skipped = 0
+    for face_index, pts2d in segments:
+        pts = _clean_pts2d(pts2d)
+        if len(pts) < 2:
+            # Never silent: a dropped segment is a VISIBLE GAP in the trace,
+            # and "no extrusion appeared at that edge" is impossible to
+            # diagnose from the model alone.
+            FreeCAD.Console.PrintWarning(
+                f"[BodyRoute] the hop across face {face_index} collapsed to a "
+                "single point and produced no geometry — the trace will have "
+                "a gap there.\n")
+            skipped += 1
+            continue
+        try:
+            face = src.Shape.Faces[face_index]
+        except Exception:
+            FreeCAD.Console.PrintError(
+                f"[BodyRoute] Face {face_index} of '{obj_name}' is gone.\n")
+            return None
+        frame = routing_frame.SurfaceFrame(face)
+        seg_pts = frame.path_to_3d(pts)
+        seg_len = sum((b - a).Length for a, b in zip(seg_pts, seg_pts[1:]))
+        # Short hops across sliver faces are KEPT: the whole route is lofted
+        # as one solid (see below), where a short step is merely a short step
+        # rather than a degenerate piece the fuse would choke on.
+        legs.append((frame, pts))
+        try:
+            solids.append(routing_frame.build_surface_trace_solid(
+                frame, pts, width_mm, thickness_mm))
+        except Exception as exc:
+            # Only the FALLBACK path needs this; a failure here is not fatal.
+            FreeCAD.Console.PrintWarning(
+                f"[BodyRoute] per-face fallback geometry for face "
+                f"{face_index} could not be built: {exc}\n")
+        # The hand-over point is shared by two consecutive segments; keeping
+        # it once leaves a clean polyline in Waypoints.
+        if waypoints and seg_pts and (seg_pts[0] - waypoints[-1]).Length < 1e-6:
+            seg_pts = seg_pts[1:]
+        waypoints.extend(seg_pts)
+
+    if not legs:
+        return None
+
+    # One loft for the whole route — a single connected solid by
+    # construction, which fusing per-face pieces demonstrably is not.
+    shape = None
+    try:
+        candidate = routing_frame.build_multiface_trace_solid(
+            legs, width_mm, thickness_mm)
+        if candidate is not None and not candidate.isNull() and candidate.isValid():
+            shape = candidate
+    except Exception as exc:
+        FreeCAD.Console.PrintWarning(
+            f"[BodyRoute] single-piece loft failed ({exc}); falling back to "
+            "fusing the per-face segments.\n")
+
+    if shape is None:
+        if not solids:
+            return None
+        shape = solids[0]
+        if len(solids) > 1:
+            try:
+                shape = shape.multiFuse(solids[1:])
+                # removeSplitter RETURNS the cleaned shape rather than
+                # modifying in place; take the result, and only when it is
+                # still valid.
+                try:
+                    cleaned = shape.removeSplitter()
+                    if cleaned is not None and cleaned.isValid() and cleaned.Solids:
+                        shape = cleaned
+                except Exception:
+                    pass
+            except Exception as exc:
+                FreeCAD.Console.PrintWarning(
+                    f"[BodyRoute] could not fuse the segments ({exc}); "
+                    "keeping them as a compound.\n")
+                shape = Part.makeCompound(solids)
+        if not shape.isValid():
+            shape = Part.makeCompound(solids)
+
+    idx = _next_trace_index(doc)
+    obj = doc.addObject("Part::Feature", f"Trace_{idx:03d}")
+    obj.Shape = shape
+
+    obj.addProperty("App::PropertyBool", "IsRoutingTrace", "Routing",
+                     "Marks this object as a routed conductor trace")
+    obj.addProperty("App::PropertyLength", "TraceWidth", "Routing", "Trace width")
+    obj.addProperty("App::PropertyLength", "TraceThickness", "Routing", "Trace thickness")
+    obj.addProperty("App::PropertyLength", "Clearance", "Routing",
+                     "Obstacle clearance used when routing this trace")
+    obj.addProperty("App::PropertyVectorList", "Waypoints", "Routing",
+                     "Trace polyline waypoints")
+    obj.addProperty("App::PropertyString", "NetName", "Routing", "Net identifier")
+    obj.addProperty("App::PropertyString", "SourceObject", "Routing",
+                     "Object whose face(s) this trace was routed on")
+    obj.addProperty("App::PropertyInteger", "SourceFaceIndex", "Routing",
+                     "Index of the face this trace starts on")
+    obj.addProperty("App::PropertyIntegerList", "SourceFaceIndices", "Routing",
+                     "Every face this trace crosses, in order")
+
+    obj.IsRoutingTrace     = True
+    obj.TraceWidth         = width_mm
+    obj.TraceThickness     = thickness_mm
+    obj.Clearance          = clearance_mm
+    obj.Waypoints          = waypoints
+    obj.NetName            = f"Net_{idx:03d}"
+    obj.SourceObject       = obj_name
+    obj.SourceFaceIndex    = int(segments[0][0])
+    obj.SourceFaceIndices  = [int(f) for f, _p in segments]
+
+    if FreeCAD.GuiUp and obj.ViewObject is not None:
+        obj.ViewObject.ShapeColor = _TRACE_COLOR
+        obj.ViewObject.LineColor  = _TRACE_COLOR
+
+    _traces_group(doc).addObject(obj)
+    doc.recompute()
+
+    # Say plainly whether the trace came out in one piece. A trace that is
+    # broken at an edge looks almost right in the 3-D view — the gap is a
+    # fraction of a millimetre — so without this it is easy to believe the
+    # route succeeded when part of it is missing.
+    pieces = len(obj.Shape.Solids)
+    if pieces > 1:
+        FreeCAD.Console.PrintWarning(
+            f"[BodyRoute] {obj.Name} came out as {pieces} separate pieces "
+            "rather than one connected trace — it is broken at one or more "
+            "of the edges it crosses.\n")
+    note = f", {skipped} segment(s) left out" if skipped else ""
+    FreeCAD.Console.PrintMessage(
+        f"[BodyRoute] Created {obj.Name} across {len(segments)} face(s) "
+        f"with {len(waypoints)} waypoint(s){note}"
+        f"{'' if pieces == 1 else f' in {pieces} pieces'}.\n")
+    return obj
+
+
 def resolve_trace_frame(doc, trace_obj):
     """
     (frame, obj_name, face_index) for an existing Trace_NNN, or

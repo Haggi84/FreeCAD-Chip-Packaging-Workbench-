@@ -150,9 +150,9 @@ If you downloaded a ZIP archive instead of using git, extract it so that the fol
 3. Select **Chip-Packaging Workbench** from the list.
 4. Several toolbars should appear, each with a short caption underneath:
    **Tech**, **Import**, **Render**, **Package**, **Bonding**, **Routing**, **DRC** and
-   **Workbench**. Three further toolbars — *Wire Bonding Session*, *Trace Routing Session*
-   and *Batch Route Session* — stay hidden until the corresponding session is running;
-   that is intentional.
+   **Workbench**. Four further toolbars — *Wire Bonding Session*, *Trace Routing Session*,
+   *Batch Route Session* and *Contact Point Pattern* — stay hidden until the corresponding
+   session is running; that is intentional.
 5. Check the **Report View** (`View → Panels → Report View`). On a healthy start you should see
    `Commands loaded successfully` and `Toolbars initialized`.
 6. To confirm GDS import works, use **Load GDSII** and select the sample file at
@@ -236,7 +236,7 @@ The runner prints a summary, writes the same report to `tests/results.log`, and 
 non-zero if any check fails — so it can be dropped straight into CI. Expect output ending in:
 
 ```
-RESULTS: 541 passed, 0 failed, 541 total
+RESULTS: 645 passed, 0 failed, 645 total
 All checks passed.
 ```
 
@@ -354,8 +354,16 @@ listed by name — nothing is dropped silently.
 
 Both need an actual **face** — click the face itself in the 3-D view, not an edge, a vertex
 or the whole object in the tree. They refuse rather than falling back to a different
-reference, because a silently different answer is worse than a clear refusal. In the chip
-dialog, remember to press *↺ Read current FreeCAD selection* after picking.
+reference, because a silently different answer is worse than a clear refusal. Ctrl+click to
+add more faces; both tools accept several at once. In either dialog, remember to press
+*↺ Read current FreeCAD selection* after changing the selection.
+
+### Contact Point Pattern will not start
+
+It needs at least one **face** selected — Ctrl+click the faces to place points on.
+Selecting an existing contact point as well is optional: it copies that point's position
+onto the other faces, and its own face is a valid target too (select it to extend that
+point into a row on the same face).
 
 ### Mirrored contact points were "skipped"
 
@@ -363,6 +371,13 @@ Points whose mirror image falls outside the face are reported and skipped rather
 created off the part. This happens when the pattern is not symmetric with respect to the
 face's own outline — for example points near one edge of a face that is not itself
 symmetric about the mirror axis.
+
+### 3-D Route says the pads are not on one body
+
+It connects two pads on **different faces of the same body**, following the surface across
+the shared edges. Pads on two separate objects are refused deliberately — there is no
+surface between them to route along. If a route across one body still fails, raise
+**Max faces crossed**, or increase the clearance.
 
 ### Trace routing finds no path on a dense board
 

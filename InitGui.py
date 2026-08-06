@@ -30,6 +30,7 @@ try:
     from wirebond import SetContactPointsOnFaceCommand
     from wirebond import InteractiveContactPointCommand
     from wirebond import ContactPointSymmetryCommand   # noqa: F401
+    from wirebond import ContactPointPatternCommand   # noqa: F401
     from help import HelpGuideCommand
     from help import AboutCommand
     from session import SaveSessionCommand
@@ -42,6 +43,7 @@ try:
     from routing import InteractiveRouterCommand   # noqa: F401
     from routing import BatchRouteCommand   # noqa: F401
     from routing import TraceDragCommand   # noqa: F401
+    from routing import BodyRouteCommand   # noqa: F401
     from drc import DRCCommand   # noqa: F401
 
     FreeCAD.Console.PrintMessage("Commands loaded successfully\n")
@@ -147,6 +149,7 @@ class MyWorkbench(FreeCADGui.Workbench):
         "Trace Routing":            "Routing",
         "Trace Routing Session":    "Confirm / Abort / End",
         "Batch Route Session":      "Route All / Cancel",
+        "Contact Point Pattern":    "Confirm / Undo / Abort",
         "Design Rule Check":        "DRC",
         "Session and Help":         "Workbench",
     }
@@ -193,6 +196,7 @@ class MyWorkbench(FreeCADGui.Workbench):
                     "SetContactPointsOnFaceCommand",
                     "InteractiveContactPointCommand",
                     "ContactPointSymmetryCommand",
+                    "ContactPointPatternCommand",
                     "ShowContactPointPanelCommand",
                 ],
             )
@@ -229,6 +233,7 @@ class MyWorkbench(FreeCADGui.Workbench):
                     "TraceRoutingCommand",
                     "StartBatchRouteCommand",
                     "DragTraceCommand",
+                    "BodyRouteCommand",
                 ],
             )
 
@@ -261,6 +266,22 @@ class MyWorkbench(FreeCADGui.Workbench):
                 [
                     "RouteAllCommand",
                     "CancelBatchRouteCommand",
+                ],
+            )
+
+            # ── Contact Point Pattern (contextual) ──────────────────────
+            # Confirm keeps the placed points, Undo drops the last one,
+            # Abort removes them all. Hidden at startup by
+            # _hide_contact_point_pattern_toolbar below; shown/hidden
+            # dynamically by
+            # wirebond.ContactPointPatternCommand._set_session_toolbar_visible
+            # — same contextual-toolbar pattern as the routing sessions.
+            self.appendToolbar(
+                "Contact Point Pattern",
+                [
+                    "ConfirmPatternCommand",
+                    "UndoPatternCommand",
+                    "AbortPatternCommand",
                 ],
             )
 
@@ -299,6 +320,7 @@ class MyWorkbench(FreeCADGui.Workbench):
             _QtCore.QTimer.singleShot(400, self._hide_wirebond_session_toolbar)
             _QtCore.QTimer.singleShot(400, self._hide_trace_routing_session_toolbar)
             _QtCore.QTimer.singleShot(400, self._hide_batch_route_session_toolbar)
+            _QtCore.QTimer.singleShot(400, self._hide_contact_point_pattern_toolbar)
 
             _FreeCAD.Console.PrintMessage("Toolbars initialized\n")
         except Exception as e:
@@ -363,6 +385,25 @@ class MyWorkbench(FreeCADGui.Workbench):
             import FreeCAD as _FC
             _FC.Console.PrintWarning(
                 f"Batch Route Session toolbar hide failed: {exc}\n"
+            )
+
+    def _hide_contact_point_pattern_toolbar(self):
+        """Hide the contextual Contact Point Pattern toolbar at startup — it
+        only becomes visible while a pattern session is actually active (see
+        wirebond.ContactPointPatternCommand._set_session_toolbar_visible)."""
+        try:
+            from compat import QtWidgets as _QW
+            import FreeCADGui as _FCGui
+
+            mw = _FCGui.getMainWindow()
+            for tb in mw.findChildren(_QW.QToolBar):
+                if tb.windowTitle() == "Contact Point Pattern":
+                    tb.setVisible(False)
+                    break
+        except Exception as exc:
+            import FreeCAD as _FC
+            _FC.Console.PrintWarning(
+                f"Contact Point Pattern toolbar hide failed: {exc}\n"
             )
 
     _TOOLBAR_LABEL_MAX_RETRIES = 15   # ~15 s — see _inject_toolbar_labels

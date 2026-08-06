@@ -343,6 +343,24 @@ class PolyField:
         # supposed to be routed on.
         self.boundary = boundary
 
+    def _on_surface(self, pt, tol: float = 0.0) -> bool:
+        """
+        True when *pt* counts as being on the routable face.
+
+        Inside the outline, or — when *tol* is given — within that distance
+        of it. The tolerant form exists because a point sitting EXACTLY on
+        the boundary is genuinely ambiguous to an even-odd ray cast, and
+        such points are not an edge case here: a trace crossing from one
+        face of a body onto the next (see core.body_routing) hands over at a
+        point lying precisely on the shared edge, and must be routable to
+        and from it on both faces.
+        """
+        if point_in_poly(self.boundary, pt.x, pt.y):
+            return True
+        if tol <= 0.0:
+            return False
+        return seg_poly_edge_distance(pt, pt, self.boundary) <= tol
+
     def leaves_surface(self, p, q, edge_exempt: bool = False) -> bool:
         """
         True if [p, q] leaves the routable face, or hugs its edge closer
@@ -357,26 +375,27 @@ class PolyField:
         obstacle involved at all: confirmed against a real board, where a
         contact point sitting close to its own routing surface's edge could
         never be routed from or to, at any clearance the boundary itself
-        didn't also happen to tolerate. Still requires staying strictly
-        inside the boundary (point_in_poly is never relaxed) — only the
-        clearance MARGIN from the edge is excused, not leaving the face.
+        didn't also happen to tolerate.
+
+        When exempt, an endpoint ON the outline counts as on the face (see
+        _on_surface); a point genuinely away from the face is still refused,
+        so this never becomes permission to route off the surface.
         """
         if self.boundary is None:
             return False
-        if not (point_in_poly(self.boundary, p.x, p.y)
-                and point_in_poly(self.boundary, q.x, q.y)):
+        tol = self.clearance if edge_exempt else 0.0
+        if not (self._on_surface(p, tol) and self._on_surface(q, tol)):
             return True
         if edge_exempt:
             return False
         return seg_poly_edge_distance(p, q, self.boundary) < self.clearance
 
     def point_hugs_boundary(self, pt) -> bool:
-        """True if *pt* sits inside the boundary but within clearance of its
-        edge — the boundary-edge analogue of containing() used to decide
-        whether a leg touching *pt* gets leaves_surface()'s edge_exempt."""
+        """True if *pt* lies within clearance of the face's outline — the
+        boundary-edge analogue of containing(), used to decide whether a leg
+        touching *pt* gets leaves_surface()'s edge_exempt. Deliberately a
+        pure distance test, so a point exactly ON the outline qualifies."""
         if self.boundary is None:
-            return False
-        if not point_in_poly(self.boundary, pt.x, pt.y):
             return False
         return seg_poly_edge_distance(pt, pt, self.boundary) < self.clearance
 

@@ -319,6 +319,84 @@ def build_surface_trace_solid(frame: SurfaceFrame, pts2d, width_mm: float,
     return _fuse_oriented_boxes(frame, samples, width_mm, thickness_mm)
 
 
+def build_multiface_trace_solid(legs, width_mm: float, thickness_mm: float,
+                                max_step_mm: float = 0.5):
+    """
+    ONE trace solid for a route that spans several faces.
+
+    *legs* is [(frame, pts2d), ...] — one 2-D path per face, in order, as
+    core.body_routing.route_across_faces returns them.
+
+    Building each face's piece separately and fusing them does not work in
+    practice. Where a route clips a tiny face the piece is a degenerate disc
+    (measured: a 0.045 mm long segment of a 0.3 mm wide trace, on a 0.4 mm2
+    face of a real sample body), and OCCT then refuses to merge the pieces
+    even though they touch exactly — the trace comes out in several
+    disconnected parts, which is what "gaps at the edges, and at some edges
+    the routing just stops" looks like in the 3-D view.
+
+    Lofting the WHOLE path in one go sidesteps the fuse entirely, so the
+    result is a single solid by construction. Each cross-section is oriented
+    by the local surface normal of whichever face that sample belongs to, so
+    the trace still hugs the body; at a crossing the normal changes over one
+    short step, which rounds the corner very slightly rather than breaking
+    it.
+    """
+    if width_mm <= 0 or thickness_mm <= 0:
+        raise ValueError("build_multiface_trace_solid: width and thickness must be positive")
+
+    # (point, normal) for every densified sample along the whole route.
+    pts3, normals = [], []
+    for frame, pts2d in legs:
+        samples = []
+        for a, b in zip(pts2d, pts2d[1:]):
+            for s in frame.densify(a, b, max_step_mm):
+                if not samples or (abs(s[0] - samples[-1][0]) > 1e-9
+                                   or abs(s[1] - samples[-1][1]) > 1e-9):
+                    samples.append(s)
+        for s in samples:
+            p = frame.to_3d(*s)
+            if p is None:
+                continue
+            # The crossing point is shared by two consecutive legs; keeping it
+            # once from each face is what gives the loft its short normal
+            # transition, but a true duplicate would make a zero-length step.
+            if pts3 and (p - pts3[-1]).Length < 1e-9:
+                continue
+            pts3.append(p)
+            normals.append(frame.normal_at(*s))
+
+    if len(pts3) < 2:
+        raise ValueError("build_multiface_trace_solid: fewer than 2 distinct points")
+
+    wires = []
+    hw, ht = width_mm / 2.0, thickness_mm / 2.0
+    for i, p in enumerate(pts3):
+        nxt = pts3[min(i + 1, len(pts3) - 1)]
+        prv = pts3[max(i - 1, 0)]
+        tangent = nxt - prv
+        if tangent.Length < 1e-9:
+            continue
+        tangent.normalize()
+        normal = normals[i]
+        side = tangent.cross(normal)
+        if side.Length < 1e-9:
+            continue
+        side.normalize()
+        c0 = p + side * hw + normal * ht
+        c1 = p - side * hw + normal * ht
+        c2 = p - side * hw - normal * ht
+        c3 = p + side * hw - normal * ht
+        wires.append(Part.makePolygon([c0, c1, c2, c3, c0]))
+
+    if len(wires) < 2:
+        raise ValueError("build_multiface_trace_solid: not enough cross-sections")
+    solid = Part.makeLoft(wires, True, True)
+    if solid is None or solid.isNull():
+        raise ValueError("build_multiface_trace_solid: loft produced nothing")
+    return solid
+
+
 def _fuse_oriented_boxes(frame: SurfaceFrame, samples, width_mm, thickness_mm):
     """Fallback: one box per densified segment, each oriented by the local
     surface normal, fused together."""

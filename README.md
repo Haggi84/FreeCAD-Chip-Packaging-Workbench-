@@ -1,11 +1,11 @@
 # Chip-Packaging Workbench for FreeCAD
 
-![Version](https://img.shields.io/badge/version-0.12.0-green?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.17.0-green?style=flat-square)
 ![FreeCAD](https://img.shields.io/badge/FreeCAD-1.1-blue?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.11-yellow?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-lightgrey?style=flat-square)
 ![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-informational?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-541%20checks-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-645%20checks-brightgreen?style=flat-square)
 
 **An open-source FreeCAD workbench for chip-packaging design, developed as part of the BMBF research project DI-PASSIONATE.**
 
@@ -102,7 +102,9 @@ caption (Tech, Import, Render, Package, Bonding, Routing, Workbench).
 | **Leadframe Library** | Browse and import STEP package models from the MirrorSemi online catalogue. |
 | **Set Contact Points on Face** | Grid-based placement: pick faces, generate a UV grid, select points, confirm. |
 | **Interactive Contact Point** | Place individual contact points by clicking directly in the 3-D view. |
-| **Contact Point Symmetry** | Mirror, symmetrize or generate contact points about a face's centre — see [Symmetric Placement](#symmetric-placement). |
+| **Contact Point Symmetry** | Mirror, symmetrize or generate contact points about the centre of one or many faces — see [Symmetric Placement](#symmetric-placement). |
+| **Contact Point Pattern** | Place points face by face with a live cross-hair preview and exact numeric entry, optionally copying an existing point's position — see [Copying a point onto other faces](#copying-a-point-onto-other-faces). |
+| **Confirm / Undo / Abort** | Contextual toolbar shown only while a pattern session is active. |
 | **Contact Point Browser** | Dock panel listing all contact points by group, with hover highlighting. |
 
 ### Trace Routing
@@ -113,6 +115,7 @@ caption (Tech, Import, Render, Package, Bonding, Routing, Workbench).
 | **Trace Routing** | Grid and search based point-to-point router with angle presets. |
 | **Batch Auto-Route** | Queue several pad pairs, then route and bake them all in one pass. |
 | **Drag Trace** | Re-shape an existing trace by dragging it; it walks around other copper live. |
+| **3-D Route** | Route a trace across the faces of a 3-D body, connecting pads on different faces — see [Routing across a 3-D body](#routing-across-a-3-d-body). |
 | **Confirm / Abort / End** | Contextual toolbar shown only while a routing session is active. |
 
 ### Design Rule Check
@@ -199,9 +202,11 @@ otherwise take minutes.
 
 ## Trace Routing
 
-Three routers are provided; all produce identical `Trace_NNN` objects, so they can be
+Four routers are provided; all produce identical `Trace_NNN` objects, so they can be
 mixed freely in one design, and any of them can be re-shaped afterwards with
-[Drag Trace](#drag-trace).
+[Drag Trace](#drag-trace). The first three route within a single face (of any shape or
+orientation); [3-D Route](#routing-across-a-3-d-body) is the one that crosses between
+faces of a body.
 
 ### Interactive Route (recommended)
 
@@ -269,6 +274,46 @@ The trace keeps its identity — same object, name, net and width; only its shap
 Its endpoints never move, so dragging re-shapes a connection but can never accidentally
 re-connect it somewhere else.
 
+### Routing across a 3-D body
+
+All the routers above work **within one face**. That already covers flat, slanted and
+curved faces alike, because routing happens in the face's own metric 2-D space — but a
+trace can never leave the face it started on, since the routable-surface boundary stops it
+at the edge by design.
+
+**3-D Route** is the separate tool for what needs more: connecting two contact points on
+**different faces of the same body** — a pad on top of a package and one down its flank,
+say. Select the two contact points, set width/thickness/clearance, and press *Route
+selected pair*. It works out which faces touch which from the body's own topology, finds a
+sensible sequence of them, picks where to cross each shared edge, and routes within every
+face along the way with the same walk-around the other routers use.
+
+The result is baked as **one trace solid** that follows the body around its edges — the
+per-face pieces are fused, not left as separate fragments — and it records every face it
+crossed in `SourceFaceIndices`. A pair on a single face routes too, as one segment, so the
+tool is not restricted to the cross-face case.
+
+**Connecting many pads.** Add pairs to the **queue** and press *Route all queued*. They
+are routed one after another, and each finished trace becomes copper the later ones must
+keep clear of — the same design rules the single-face routers apply. Order therefore
+matters: queue the hardest connections first, while there is still room. Pairs that stay
+blocked are listed and left in the queue to retry with a smaller clearance or a higher face
+limit, rather than being silently dropped.
+
+Routes take the shortest way the body allows: the face sequence is found by a shortest-path
+search over the crossings themselves, measuring the real distance from one crossing to the
+next rather than between face centres. When the shortest sequence turns out to be blocked
+by copper already placed, alternatives that avoid each of its faces are tried in turn.
+
+Two things it will not do: it refuses two pads on *different bodies* with an explanation
+rather than routing through the air between them, and **Max faces crossed** bounds the
+search so a complicated body cannot turn one route into an unbounded one. Raise that limit
+if a trace legitimately needs a longer way round.
+
+On a strongly double-curved face the trace lies on the surface, but its width and the
+clearances it keeps hold only approximately — the tool says so in the report view when it
+happens.
+
 ---
 
 ## Symmetric Placement
@@ -292,19 +337,78 @@ In **Move / Rotate Chip**, select the target face in the 3-D view, press
 Unlike the older *Center XY on click point*, these ignore where exactly you clicked, so the
 result is the same wherever on the face you press — and stays correct on a face whose
 centroid is off-centre. A face must be selected; an edge or vertex is refused rather than
-silently producing a different answer.
+silently producing a different answer. Selecting **several faces** centres the chip on
+their combined extent, which is what you want for a pad split across two faces.
 
 ### Symmetric contact points
 
-**Contact Point Symmetry** offers three operations on the contact points of a selected
-face. Only points actually lying on that face take part, so markers belonging to another
-face are never disturbed.
+**Contact Point Symmetry** offers three operations on the contact points of the selected
+face — or of **several faces at once**, Ctrl+clicking to add them. Each face is treated
+about its *own* centre and sized to its *own* extent, so a package's four flanks get
+matching pad rings in a single press.
+
+Only points actually lying on a selected face take part, and each point is assigned to the
+**nearest** selected face. That matters where two faces meet at an edge: without it a point
+on the shared edge would be mirrored once per face, and symmetrize would move it twice with
+the second move undoing the first.
 
 | Operation | Effect |
 |---|---|
-| **Mirror U / V / both** | Reflects the existing points across the face's centre line(s), creating only the markers that are missing. For "I placed one side, now do the other". *Both* gives full four-fold symmetry. |
+| **Mirror U / V / both** | Reflects each face's existing points across its centre line(s), creating only the markers that are missing. For "I placed one side, now do the other". *Both* gives full four-fold symmetry. |
 | **Symmetrize** | Tidies a hand-placed set: nearly-symmetric pairs are **moved** onto exactly symmetric positions, a lone near-axis point is snapped onto the axis, and missing images are added. |
-| **Generate** | Lays down a fresh pattern — a bond-pad **ring** (N per side) or a **grid** (N × M) — inset from the edge, optionally at an exact pitch. |
+| **Generate** | Lays the same pattern onto every selected face — a bond-pad **ring** (N per side) or a **grid** (N × M) — inset from the edge, optionally at an exact pitch. |
+
+Mirror and Symmetrize leave a selected face that has no points of its own untouched;
+Generate fills every selected face.
+
+### Copying a point onto other faces
+
+**Contact Point Pattern** places contact points on one face after another, guided. Select
+the target faces and start the tool. Selecting an existing contact point as well copies
+**its** position onto the other faces; without one, points simply start from each face's
+centre. The source point's own face is a valid target too — select it to extend that point
+into a row on the same face.
+
+1. The view swings round to look straight at the first target face.
+2. Moving the mouse shows a dashed cross-hair where the point would land — or type exact
+   X/Y values in the dialog and watch the cross-hair follow.
+3. Lock the movement to one axis, or snap to an exact position, so the copies line up
+   exactly instead of merely looking aligned.
+4. Click (or press **Place point here**) — the marker appears immediately and **stays**,
+   shown in a distinct pending colour. The cross-hair carries straight on following the
+   mouse, so the next point can be aimed without interruption.
+5. Move to the next face and repeat.
+
+Points placed during a session are real objects from the moment you click, which is what
+lets Undo remove the last one and Abort remove them all. They are drawn in a pending
+colour until **Confirm**, which settles them into ordinary contact points — so it is always
+clear at a glance which points this session added.
+
+The dialog carries the numeric fields, the movement and snap settings, face navigation, and
+Undo / Confirm / Abort. It and the 3-D view are two views of one state: moving the mouse
+updates the numbers, typing moves the preview, and neither fights the other.
+
+| Key | Action |
+|---|---|
+| `X` / `Y` | Lock the movement to that axis; the other stays pinned to the reference |
+| `F` | Free movement again |
+| `M` | Cycle the exact snaps: middle of X → middle of Y → dead centre → off |
+| `N` | Go to the next target face |
+| `Backspace` | Undo the last placed point |
+| `Enter` | Confirm and end the session |
+| `Esc` | Abort — remove every point this session placed |
+
+The same three actions are on the contextual **Confirm / Undo / Abort** toolbar, which
+appears only while a session is running.
+
+Two details worth knowing. The source point's position is carried across as a **fraction**
+of its own face's extent, not as raw coordinates — so "a quarter of the way in, half way
+up" means the same thing on a target face of a different size. On the source's *own* face
+that reference is simply the source point itself, so locking an axis there slides the copy
+along in exact line with the original. And a snap deliberately **overrides** a movement
+lock, because asking for "the middle" is a stronger statement of intent than "keep this
+axis fixed"; the two combine constantly (lock to a row, snap to the centre). Positions
+outside the face are refused rather than placed off the part.
 
 The **tolerance** setting controls how far a point may be from exact symmetry and still
 count as intended-symmetric; clicked points are never pixel-perfect, and without it each

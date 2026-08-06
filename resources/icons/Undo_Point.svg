@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Same badge geometry as Confirm_Trace.svg / Abort_Trace.svg so the three
+       read as one session set: undo the last placed point. -->
+  <circle cx="32" cy="32" r="30" fill="#d08a1e" stroke="#8a5a10" stroke-width="2"/>
+  <!-- curved undo arrow -->
+  <path d="M42,42 A13,13 0 1 0 29,20 L20,20" fill="none" stroke="white"
+        stroke-width="6" stroke-linecap="round"/>
+  <polyline points="26,13 18,20 26,27" fill="none" stroke="white"
+            stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

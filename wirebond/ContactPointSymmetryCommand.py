@@ -68,17 +68,25 @@ def _parent_placement_of(obj):
     return pl
 
 
-def _picked_face():
-    """(face_in_world, object_name) for the face currently selected in the
-    3-D view, or (None, None)."""
+def _picked_faces():
+    """
+    [(face_in_world, object_name), ...] for EVERY face currently selected in
+    the 3-D view.
+
+    Several faces at once is the normal case, not the exception: a package
+    carries contact points on all four flanks, and each of those wants its
+    own symmetric pattern in one go.
+    """
     try:
         sel = FreeCADGui.Selection.getSelectionEx()
     except Exception:
         sel = []
+    out = []
     for s in sel:
         obj = s.Object
         if not hasattr(obj, "Shape"):
             continue
+        parent = _parent_placement_of(obj)
         for sub_name in (s.SubElementNames or []):
             if not sub_name.startswith("Face"):
                 continue
@@ -86,20 +94,33 @@ def _picked_face():
                 face = obj.Shape.getElement(sub_name)
             except Exception:
                 continue
-            parent = _parent_placement_of(obj)
             if not parent.isIdentity():
                 face = face.copy()
                 face.transformShape(parent.toMatrix())
-            return face, obj.Name
-    return None, None
+            out.append((face, obj.Name))
+    return out
 
 
 def _contact_points_on(doc, frame, band_mm: float = _ON_FACE_BAND_MM):
     """[(marker, (u, v)), ...] for every contact point lying on the frame's
     face. Markers belonging to some other face are excluded, so a symmetry
     operation never drags in points that are not part of this pattern."""
-    out = []
-    near = None
+    return _assign_points_to_faces(doc, [frame], band_mm)[0]
+
+
+def _assign_points_to_faces(doc, frames, band_mm: float = _ON_FACE_BAND_MM):
+    """
+    One bucket of [(marker, (u, v)), ...] per frame, assigning each contact
+    point to the NEAREST of the given faces.
+
+    Nearest-wins rather than "every face it is near to": faces that meet at
+    an edge both have points sitting within the band of the other, and
+    without this a shared-edge point would be mirrored once per face — and
+    worse, MOVED twice by symmetrize, the second move undoing the first.
+    """
+    buckets = [[] for _ in frames]
+    if doc is None or not frames:
+        return buckets
     for o in doc.Objects:
         if not getattr(o, "IsContactPoint", False):
             continue
@@ -107,17 +128,21 @@ def _contact_points_on(doc, frame, band_mm: float = _ON_FACE_BAND_MM):
         if pos is None:
             continue
         p = FreeCAD.Vector(pos)
-        try:
-            if frame.distance_to_surface(p) > band_mm:
+        best_i, best_d = None, band_mm
+        for i, frame in enumerate(frames):
+            try:
+                d = frame.distance_to_surface(p)
+            except Exception:
                 continue
-        except Exception:
+            if d <= best_d:
+                best_d, best_i = d, i
+        if best_i is None:
             continue
-        xy = frame.to_2d(p, near=near)
+        xy = frames[best_i].to_2d(p)
         if xy is None:
             continue
-        out.append((o, xy))
-        near = xy
-    return out
+        buckets[best_i].append((o, xy))
+    return buckets
 
 
 class ContactPointSymmetryDialog(QtWidgets.QDialog):
@@ -130,9 +155,9 @@ class ContactPointSymmetryDialog(QtWidgets.QDialog):
         self.setModal(False)
         self.setMinimumWidth(360)
 
-        self._face = None
-        self._face_obj = None
-        self._frame = None
+        # [(face, object_name, frame), ...] — every selected face, each
+        # carrying its own centre and axes.
+        self._faces = []
 
         self._build_ui()
         self._read_selection()
@@ -269,49 +294,72 @@ class ContactPointSymmetryDialog(QtWidgets.QDialog):
     # ── selection / context ───────────────────────────────────────────────
 
     def _read_selection(self):
-        face, obj_name = _picked_face()
-        if face is None:
-            self._face = self._face_obj = self._frame = None
+        picked = _picked_faces()
+        self._faces = []
+        for face, obj_name in picked:
+            try:
+                self._faces.append((face, obj_name, routing_frame.SurfaceFrame(face)))
+            except Exception as exc:
+                FreeCAD.Console.PrintWarning(
+                    f"[CPSymmetry] skipping an unusable face on {obj_name}: {exc}\n")
+
+        if not self._faces:
             self._lbl_face.setText(
-                "<b>No face selected.</b> Click a face in the 3D view, then "
-                "press '↺ Read current FreeCAD selection'.")
+                "<b>No face selected.</b> Click one or more faces in the 3D "
+                "view (Ctrl+click to add), then press "
+                "'↺ Read current FreeCAD selection'.")
             self._lbl_face.setStyleSheet("color: #cc8844;")
             return
-        try:
-            frame = routing_frame.SurfaceFrame(face)
-        except Exception as exc:
-            self._lbl_face.setText(f"<b>Unusable face:</b> {exc}")
-            return
-        self._face, self._face_obj, self._frame = face, obj_name, frame
 
         doc = FreeCAD.activeDocument()
-        n = len(_contact_points_on(doc, frame)) if doc else 0
-        ext = face_symmetry.outer_extent_2d(face, frame)
-        size = (f"{ext[2] - ext[0]:.2f} x {ext[3] - ext[1]:.2f} mm"
-                if ext else "unknown size")
-        self._lbl_face.setText(
-            f"<b>Face on {obj_name}</b> ({size}) — "
-            f"{n} contact point(s) currently on it.")
+        buckets = (_assign_points_to_faces(doc, [f[2] for f in self._faces])
+                   if doc else [[] for _ in self._faces])
+        n_pts = sum(len(b) for b in buckets)
+        objs = sorted({name for _f, name, _fr in self._faces})
+        where = objs[0] if len(objs) == 1 else f"{len(objs)} objects"
+        if len(self._faces) == 1:
+            face, _name, frame = self._faces[0]
+            ext = face_symmetry.outer_extent_2d(face, frame)
+            size = (f"{ext[2] - ext[0]:.2f} x {ext[3] - ext[1]:.2f} mm"
+                    if ext else "unknown size")
+            self._lbl_face.setText(
+                f"<b>1 face on {where}</b> ({size}) — "
+                f"{n_pts} contact point(s) on it.")
+        else:
+            self._lbl_face.setText(
+                f"<b>{len(self._faces)} faces on {where}</b> — {n_pts} contact "
+                "point(s) across them. Each face is treated about its OWN "
+                "centre.")
         self._lbl_face.setStyleSheet("color: #88cc88;")
 
     def _context(self):
-        """(doc, face, frame, centre) or None, warning the user if not ready."""
+        """(doc, faces) or None, warning the user if not ready.
+        *faces* is [(face, object_name, frame, centre), ...] — every selected
+        face with its own centre already resolved."""
         doc = FreeCAD.activeDocument()
         if doc is None:
             return None
-        if self._frame is None or self._face is None:
+        if not self._faces:
             QtWidgets.QMessageBox.warning(
                 self, "No face selected",
-                "Click a face in the 3D view and press "
-                "'↺ Read current FreeCAD selection' first.")
+                "Click one or more faces in the 3D view (Ctrl+click to add) "
+                "and press '↺ Read current FreeCAD selection' first.")
             return None
-        center = face_symmetry.face_center_2d(self._face, self._frame)
-        if center is None:
+        usable = []
+        for face, obj_name, frame in self._faces:
+            center = face_symmetry.face_center_2d(face, frame)
+            if center is None:
+                FreeCAD.Console.PrintWarning(
+                    f"[CPSymmetry] centre of a face on {obj_name} could not be "
+                    "determined; skipping it.\n")
+                continue
+            usable.append((face, obj_name, frame, center))
+        if not usable:
             QtWidgets.QMessageBox.warning(
-                self, "Unusable face",
-                "The centre of that face could not be determined.")
+                self, "Unusable faces",
+                "The centre of the selected face(s) could not be determined.")
             return None
-        return doc, self._face, self._frame, center
+        return doc, usable
 
     def _mode_from_combo(self):
         return (face_symmetry.MIRROR_U, face_symmetry.MIRROR_V,
@@ -319,22 +367,22 @@ class ContactPointSymmetryDialog(QtWidgets.QDialog):
 
     # ── marker creation ───────────────────────────────────────────────────
 
-    def _marker_kind(self, doc, existing):
-        """'gds' or 'package' — matched to the points already on the face so
+    def _marker_kind(self, doc, existing, obj_name):
+        """'gds' or 'package' — matched to the points already on THIS face so
         mirroring die pads yields die pads, falling back to the source
         object's own group when the face is still empty."""
         if existing:
             n_gds = sum(1 for m, _ in existing if m.Name.startswith("ContactPoint_"))
             return "gds" if n_gds * 2 >= len(existing) else "package"
-        return _get_source_assembly(doc, self._face_obj or "")
+        return _get_source_assembly(doc, obj_name or "")
 
-    def _create(self, doc, pts2d, kind, frame):
-        """Create markers for frame-space points that lie within the face.
+    def _create(self, doc, pts2d, kind, face, obj_name, frame):
+        """Create markers for frame-space points that lie within *face*.
         Returns (n_created, n_outside)."""
         created = 0
         outside = 0
         for p in pts2d:
-            if not face_symmetry.is_inside_face(p, self._face, frame):
+            if not face_symmetry.is_inside_face(p, face, frame):
                 outside += 1
                 continue
             world = face_symmetry.to_world([p], frame)
@@ -343,10 +391,10 @@ class ContactPointSymmetryDialog(QtWidgets.QDialog):
                 continue
             try:
                 if kind == "gds":
-                    m = _create_gds_marker(doc, self._face_obj or "",
+                    m = _create_gds_marker(doc, obj_name or "",
                                             world[0], _next_gds_index(doc))
                 else:
-                    m = _create_housing_marker(doc, self._face_obj or "",
+                    m = _create_housing_marker(doc, obj_name or "",
                                                 world[0], _next_housing_index(doc))
                 _add_to_contact_points_group(doc, m)
                 created += 1
@@ -354,6 +402,17 @@ class ContactPointSymmetryDialog(QtWidgets.QDialog):
                 FreeCAD.Console.PrintWarning(
                     f"[CPSymmetry] marker creation failed: {exc}\n")
         return created, outside
+
+    def _summary(self, verb: str, created: int, outside: int,
+                 n_faces: int, extra: str = "") -> str:
+        msg = f"{verb}: {created} contact point(s){extra}"
+        if n_faces > 1:
+            msg += f" across {n_faces} faces"
+        msg += "."
+        if outside:
+            msg += (f" {outside} image(s) fell outside their face and were "
+                    "skipped.")
+        return msg
 
     def _finish(self, doc, message: str):
         doc.recompute()
@@ -368,118 +427,143 @@ class ContactPointSymmetryDialog(QtWidgets.QDialog):
         ctx = self._context()
         if ctx is None:
             return
-        doc, _face, frame, center = ctx
-        existing = _contact_points_on(doc, frame)
-        if not existing:
+        doc, faces = ctx
+        buckets = _assign_points_to_faces(doc, [f[2] for f in faces])
+        if not any(buckets):
             QtWidgets.QMessageBox.information(
                 self, "Nothing to mirror",
-                "There are no contact points on that face yet. Place some "
-                "first, or use 'Generate a symmetric pattern'.")
+                "There are no contact points on the selected face(s) yet. "
+                "Place some first, or use 'Generate a symmetric pattern'.")
             return
 
-        pts = [xy for _m, xy in existing]
-        new_pts = face_symmetry.mirror_points_2d(pts, center, mode,
-                                                  tol=self._tol.value())
-        if not new_pts:
-            self._lbl_status.setText(
-                "Already symmetric — nothing to add.")
-            return
-
-        kind = self._marker_kind(doc, existing)
+        tol = self._tol.value()
+        created = outside = 0
+        touched = 0
         doc.openTransaction("Mirror Contact Points")
-        created, outside = self._create(doc, new_pts, kind, frame)
+        for (face, obj_name, frame, center), existing in zip(faces, buckets):
+            if not existing:
+                continue        # a face with no points of its own is left alone
+            new_pts = face_symmetry.mirror_points_2d(
+                [xy for _m, xy in existing], center, mode, tol=tol)
+            if not new_pts:
+                continue
+            kind = self._marker_kind(doc, existing, obj_name)
+            c, o = self._create(doc, new_pts, kind, face, obj_name, frame)
+            created += c
+            outside += o
+            touched += 1
         doc.commitTransaction()
-        msg = f"Mirrored: {created} contact point(s) added."
-        if outside:
-            msg += (f" {outside} image(s) fell outside the face and were "
-                    "skipped.")
-        self._finish(doc, msg)
+
+        if not created and not outside:
+            self._lbl_status.setText("Already symmetric — nothing to add.")
+            return
+        self._finish(doc, self._summary("Mirrored", created, outside, touched,
+                                         " added"))
 
     def _do_symmetrize(self):
         ctx = self._context()
         if ctx is None:
             return
-        doc, _face, frame, center = ctx
+        doc, faces = ctx
         mode = self._mode_from_combo()
-        existing = _contact_points_on(doc, frame)
-        if not existing:
+        buckets = _assign_points_to_faces(doc, [f[2] for f in faces])
+        if not any(buckets):
             QtWidgets.QMessageBox.information(
                 self, "Nothing to symmetrize",
-                "There are no contact points on that face yet.")
+                "There are no contact points on the selected face(s) yet.")
             return
 
-        pts = [xy for _m, xy in existing]
-        result, n_snapped, n_added = face_symmetry.symmetrize_points_2d(
-            pts, center, mode, tol=self._tol.value())
-
+        import Part
+        tol = self._tol.value()
+        moved = created = outside = 0
+        touched = 0
         doc.openTransaction("Symmetrize Contact Points")
-        moved = 0
-        # The first len(existing) entries correspond 1:1 to the existing
-        # markers (symmetrize preserves order), so those are MOVED rather
-        # than duplicated — the whole point of tidying rather than adding.
-        for (marker, old_xy), new_xy in zip(existing, result):
-            if abs(new_xy[0] - old_xy[0]) < 1e-9 and abs(new_xy[1] - old_xy[1]) < 1e-9:
+        for (face, obj_name, frame, center), existing in zip(faces, buckets):
+            if not existing:
                 continue
-            world = face_symmetry.to_world([new_xy], frame)
-            if not world:
-                continue
-            try:
-                import Part
-                marker.Shape = Part.Vertex(world[0].x, world[0].y, world[0].z)
-                marker.ContactPoint = world[0]
-                moved += 1
-            except Exception as exc:
-                FreeCAD.Console.PrintWarning(
-                    f"[CPSymmetry] moving {marker.Name} failed: {exc}\n")
+            result, _n_snapped, _n_added = face_symmetry.symmetrize_points_2d(
+                [xy for _m, xy in existing], center, mode, tol=tol)
 
-        kind = self._marker_kind(doc, existing)
-        created, outside = self._create(doc, result[len(existing):], kind, frame)
+            # The first len(existing) entries correspond 1:1 to the existing
+            # markers (symmetrize preserves order), so those are MOVED rather
+            # than duplicated — the whole point of tidying rather than adding.
+            for (marker, old_xy), new_xy in zip(existing, result):
+                if (abs(new_xy[0] - old_xy[0]) < 1e-9
+                        and abs(new_xy[1] - old_xy[1]) < 1e-9):
+                    continue
+                world = face_symmetry.to_world([new_xy], frame)
+                if not world:
+                    continue
+                try:
+                    marker.Shape = Part.Vertex(world[0].x, world[0].y, world[0].z)
+                    marker.ContactPoint = world[0]
+                    moved += 1
+                except Exception as exc:
+                    FreeCAD.Console.PrintWarning(
+                        f"[CPSymmetry] moving {marker.Name} failed: {exc}\n")
+
+            kind = self._marker_kind(doc, existing, obj_name)
+            c, o = self._create(doc, result[len(existing):], kind,
+                                 face, obj_name, frame)
+            created += c
+            outside += o
+            touched += 1
         doc.commitTransaction()
 
-        msg = (f"Symmetrized: {moved} point(s) moved onto exact positions, "
-               f"{created} added.")
-        if outside:
-            msg += f" {outside} image(s) fell outside the face and were skipped."
-        if not moved and not created:
-            msg = "Already symmetric — nothing changed."
-        self._finish(doc, msg)
+        if not moved and not created and not outside:
+            self._lbl_status.setText("Already symmetric — nothing changed.")
+            return
+        self._finish(doc, self._summary(
+            "Symmetrized", created, outside, touched,
+            f" added, {moved} moved onto exact positions"))
 
     def _do_generate(self):
         ctx = self._context()
         if ctx is None:
             return
-        doc, face, frame, _center = ctx
-        ext = face_symmetry.outer_extent_2d(face, frame)
-        if ext is None:
-            QtWidgets.QMessageBox.warning(
-                self, "Unusable face", "That face's extent could not be measured.")
-            return
-
+        doc, faces = ctx
         margin = self._margin.value()
         pitch = self._pitch.value() or None
-        if self._gen_mode.currentIndex() == 0:
-            pts = face_symmetry.symmetric_ring_2d(
-                ext, self._n_u.value(), margin, pitch)
-        else:
-            pts = face_symmetry.symmetric_grid_2d(
-                ext, self._n_u.value(), self._n_v.value(), margin, pitch, pitch)
-        if not pts:
+        is_ring = self._gen_mode.currentIndex() == 0
+        buckets = _assign_points_to_faces(doc, [f[2] for f in faces])
+
+        created = outside = 0
+        touched = 0
+        any_pattern = False
+        doc.openTransaction("Generate Symmetric Contact Points")
+        # The SAME pattern is laid onto every selected face, each about its
+        # own centre and sized to its own extent — a package's four flanks
+        # get matching pad rings in one go.
+        for (face, obj_name, frame, _center), existing in zip(faces, buckets):
+            ext = face_symmetry.outer_extent_2d(face, frame)
+            if ext is None:
+                FreeCAD.Console.PrintWarning(
+                    f"[CPSymmetry] extent of a face on {obj_name} could not be "
+                    "measured; skipping it.\n")
+                continue
+            if is_ring:
+                pts = face_symmetry.symmetric_ring_2d(
+                    ext, self._n_u.value(), margin, pitch)
+            else:
+                pts = face_symmetry.symmetric_grid_2d(
+                    ext, self._n_u.value(), self._n_v.value(), margin,
+                    pitch, pitch)
+            if not pts:
+                continue
+            any_pattern = True
+            kind = self._marker_kind(doc, existing, obj_name)
+            c, o = self._create(doc, pts, kind, face, obj_name, frame)
+            created += c
+            outside += o
+            touched += 1
+        doc.commitTransaction()
+
+        if not any_pattern:
             QtWidgets.QMessageBox.information(
                 self, "Nothing generated",
                 "That pattern has no points — check the counts.")
             return
-
-        existing = _contact_points_on(doc, frame)
-        kind = self._marker_kind(doc, existing)
-        doc.openTransaction("Generate Symmetric Contact Points")
-        created, outside = self._create(doc, pts, kind, frame)
-        doc.commitTransaction()
-
-        msg = f"Generated: {created} contact point(s)."
-        if outside:
-            msg += (f" {outside} fell outside the face (or beyond it at that "
-                    "pitch) and were skipped.")
-        self._finish(doc, msg)
+        self._finish(doc, self._summary("Generated", created, outside, touched))
 
 
 _dialog = None

@@ -49,6 +49,8 @@ import test_routing_frame
 import test_drc
 import test_batch_route
 import test_face_symmetry
+import test_point_pattern
+import test_body_routing
 
 MODULES = [
     test_wirebond_geometry,
@@ -72,6 +74,8 @@ MODULES = [
     test_drc,
     test_batch_route,
     test_face_symmetry,
+    test_point_pattern,
+    test_body_routing,
 ]
 
 RESULTS_LOG = os.path.join(_THIS_DIR, "results.log")

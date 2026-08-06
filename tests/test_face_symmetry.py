@@ -261,4 +261,89 @@ def run():
     finally:
         FreeCAD.closeDocument(doc.Name)
 
+    # ── several faces at once, each about its OWN centre ────────────────────
+    doc = new_document("TestFaceSymmetryMulti")
+    try:
+        body = doc.addObject("Part::Feature", "Body")
+        body.Shape = Part.makeBox(40, 20, 10, V(0, 0, 0))
+        doc.recompute()
+
+        # Two opposite side walls — the multi-face case a package presents.
+        walls = []
+        for i, f in enumerate(body.Shape.Faces):
+            n = f.normalAt(0, 0)
+            if abs(n.z) < 0.5 and abs(n.y) > 0.5:      # the two y-normal flanks
+                walls.append(f)
+        tc.check("multi-face fixture: found the two opposite side walls",
+                  len(walls) == 2, f"got {len(walls)}")
+
+        frames = [rf.SurfaceFrame(f) for f in walls]
+        centers = [fs.face_center_2d(f, fr) for f, fr in zip(walls, frames)]
+        tc.check("multi-face: each face resolves its own centre",
+                  all(c is not None for c in centers), f"got {centers}")
+
+        # One point on each wall, off-centre in the same direction. The
+        # offset is derived from each face's OWN extent — a side wall's u
+        # axis is only as long as the box is tall, so a fixed millimetre
+        # offset would fall off the face.
+        offsets = []
+        placed = []
+        for f, fr, c in zip(walls, frames, centers):
+            ext = fs.outer_extent_2d(f, fr)
+            off = 0.3 * (ext[2] - ext[0])
+            offsets.append(off)
+            w = fs.to_world([(c[0] - off, c[1])], fr)[0]
+            mk = _create_housing_marker(doc, body.Name, w, _next_housing_index(doc))
+            _add_to_contact_points_group(doc, mk)
+            placed.append(mk)
+        doc.recompute()
+
+        buckets = cps._assign_points_to_faces(doc, frames)
+        tc.check("multi-face: each wall's point is assigned to its OWN wall, "
+                  "exactly once",
+                  [len(b) for b in buckets] == [1, 1], f"got {[len(b) for b in buckets]}")
+        tc.check("multi-face: no point is assigned to two faces at once "
+                  "(nearest-face wins, so a shared edge is not double-counted)",
+                  sum(len(b) for b in buckets) == len(placed),
+                  f"{sum(len(b) for b in buckets)} assignments for {len(placed)} points")
+
+        # Mirroring should propose one new point PER WALL, each about that
+        # wall's own centre — not one wall's centre applied to both.
+        total_new = 0
+        for (f, fr, c, off), bucket in zip(zip(walls, frames, centers, offsets),
+                                            buckets):
+            pts = [xy for _mk, xy in bucket]
+            new = fs.mirror_points_2d(pts, c, fs.MIRROR_U)
+            total_new += len(new)
+            for p in new:
+                tc.check("multi-face: the mirrored point is symmetric about "
+                          "its own face's centre",
+                          abs((p[0] - c[0]) - off) < 1e-6,
+                          f"got {p} for centre {c}, offset {off}")
+                tc.check("multi-face: ...and lands inside that face",
+                          fs.is_inside_face(p, f, fr), f"got {p}")
+        tc.check("multi-face: mirroring across two selected faces yields one "
+                  "new point on each",
+                  total_new == 2, f"got {total_new}")
+
+        # A point far from every selected face still belongs to none of them.
+        far = _create_housing_marker(doc, body.Name, V(20, 10, 60),
+                                      _next_housing_index(doc))
+        _add_to_contact_points_group(doc, far)
+        doc.recompute()
+        tc.check("multi-face: a point off every selected face is assigned to none",
+                  sum(len(b) for b in cps._assign_points_to_faces(doc, frames)) == 2,
+                  f"got {sum(len(b) for b in cps._assign_points_to_faces(doc, frames))}")
+
+        # Generating onto both walls uses each wall's own extent.
+        for f, fr in zip(walls, frames):
+            ext = fs.outer_extent_2d(f, fr)
+            ring = fs.symmetric_ring_2d(ext, 2, margin=2.0)
+            tc.check("multi-face: a pattern generated for one wall stays "
+                      "inside that wall",
+                      all(fs.is_inside_face(p, f, fr) for p in ring),
+                      f"ext={ext} ring={ring}")
+    finally:
+        FreeCAD.closeDocument(doc.Name)
+
     return tc.results

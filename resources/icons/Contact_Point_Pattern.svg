@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- A source contact point on one face being copied onto another face,
+       with the dashed cross-hair that previews the target position. -->
+  <!-- source face (left) -->
+  <rect x="4" y="14" width="22" height="36" rx="2"
+        fill="#8a8a8a" fill-opacity="0.30" stroke="#555555" stroke-width="2"/>
+  <circle cx="15" cy="24" r="4" fill="#ffcc00" stroke="#7a5c00" stroke-width="2"/>
+  <!-- target face (right) -->
+  <rect x="34" y="14" width="26" height="36" rx="2"
+        fill="#8a8a8a" fill-opacity="0.30" stroke="#555555" stroke-width="2"/>
+  <!-- dashed cross-hair on the target -->
+  <path d="M47,12 L47,52" stroke="#3fa9f5" stroke-width="2"
+        stroke-dasharray="4,3" stroke-linecap="round"/>
+  <path d="M32,36 L62,36" stroke="#3fa9f5" stroke-width="2"
+        stroke-dasharray="4,3" stroke-linecap="round"/>
+  <circle cx="47" cy="36" r="4" fill="#ffcc00" fill-opacity="0.45"
+          stroke="#7a5c00" stroke-width="2" stroke-dasharray="2,2"/>
+  <!-- copy arrow -->
+  <path d="M18,56 L44,56" stroke="#3fa9f5" stroke-width="2" stroke-linecap="round"/>
+  <path d="M41,53 L44,56 L41,59" fill="none" stroke="#3fa9f5" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

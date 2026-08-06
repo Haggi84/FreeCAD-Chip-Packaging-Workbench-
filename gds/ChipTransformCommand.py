@@ -420,12 +420,14 @@ def _parent_placement_of(obj):
     return pl
 
 
-def _picked_face(sel_ex):
-    """The Part.Face the user actually clicked, in WORLD coordinates, or
-    None when the selection is not a face."""
+def _picked_faces(sel_ex):
+    """Every Part.Face the user clicked, in WORLD coordinates. Empty when
+    the selection contains no face."""
     obj = getattr(sel_ex, "Object", None)
     if obj is None or not hasattr(obj, "Shape"):
-        return None
+        return []
+    parent = _parent_placement_of(obj)
+    out = []
     for sub_name in (getattr(sel_ex, "SubElementNames", None) or []):
         if not sub_name.startswith("Face"):
             continue
@@ -433,35 +435,57 @@ def _picked_face(sel_ex):
             face = obj.Shape.getElement(sub_name)
         except Exception:
             continue
-        parent = _parent_placement_of(obj)
         if not parent.isIdentity():
             face = face.copy()
             face.transformShape(parent.toMatrix())
-        return face
-    return None
+        out.append(face)
+    return out
 
 
 def _face_center_xy(sel_ex):
     """
-    World (x, y) of the CENTRE of the clicked face, or None if no face was
-    clicked.
+    World (x, y) of the CENTRE of the clicked face(s), or None if no face
+    was clicked.
 
     Deliberately ignores PickedPoints (where exactly the click landed) and
     the area centroid — see core.face_symmetry for why the outer-boundary
     midpoint is the right notion of "the middle of this pad".
+
+    With several faces selected the centre of their COMBINED extent is used,
+    so a pad split across two faces (or a land plus its thermal tab) still
+    centres on the thing as a whole rather than on whichever face happened
+    to be first.
     """
-    face = _picked_face(sel_ex)
-    if face is None:
+    faces = _picked_faces(sel_ex)
+    if not faces:
         return None
-    try:
-        import core.face_symmetry as face_symmetry
-        c = face_symmetry.face_center_world(face)
-    except Exception as exc:
-        FreeCAD.Console.PrintWarning(f"[ChipAlign] face centre failed: {exc}\n")
+
+    if len(faces) == 1:
+        try:
+            import core.face_symmetry as face_symmetry
+            c = face_symmetry.face_center_world(faces[0])
+        except Exception as exc:
+            FreeCAD.Console.PrintWarning(f"[ChipAlign] face centre failed: {exc}\n")
+            return None
+        return (c.x, c.y) if c is not None else None
+
+    # Several faces: the middle of their COMBINED extent. Deliberately the
+    # union of the real extents rather than the average of the individual
+    # centres, which a large face and a small one would skew toward the side
+    # contributing more faces.
+    xs, ys = [], []
+    for f in faces:
+        try:
+            bb = f.BoundBox
+        except Exception:
+            continue
+        if not bb.isValid():
+            continue
+        xs.extend((bb.XMin, bb.XMax))
+        ys.extend((bb.YMin, bb.YMax))
+    if not xs:
         return None
-    if c is None:
-        return None
-    return c.x, c.y
+    return (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
 
 
 def _world_bbox_of_objects(objects):
