@@ -51,6 +51,8 @@ import test_batch_route
 import test_face_symmetry
 import test_point_pattern
 import test_body_routing
+import test_chip_texture
+import test_gds3d_process
 
 MODULES = [
     test_wirebond_geometry,
@@ -76,6 +78,8 @@ MODULES = [
     test_face_symmetry,
     test_point_pattern,
     test_body_routing,
+    test_chip_texture,
+    test_gds3d_process,
 ]
 
 RESULTS_LOG = os.path.join(_THIS_DIR, "results.log")

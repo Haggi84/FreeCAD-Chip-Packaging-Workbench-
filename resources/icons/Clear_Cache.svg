@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Stacked cache platters with a sweep, matching the disk-cache idea. -->
+  <ellipse cx="32" cy="16" rx="20" ry="7"
+           fill="#7fa8d0" stroke="#3d6389" stroke-width="2"/>
+  <path d="M12,16 L12,30 A20,7 0 0 0 52,30 L52,16"
+        fill="#9dbfdd" fill-opacity="0.75" stroke="#3d6389" stroke-width="2"/>
+  <path d="M12,30 L12,42 A20,7 0 0 0 52,42 L52,30"
+        fill="#b6d1e8" fill-opacity="0.6" stroke="#3d6389" stroke-width="2"/>
+  <!-- broom / clear stroke -->
+  <path d="M18,52 L44,26" stroke="#cc4422" stroke-width="5" stroke-linecap="round"/>
+  <path d="M14,56 L24,46 L20,42 L10,52 Z"
+        fill="#e8a33d" stroke="#8a5a10" stroke-width="2" stroke-linejoin="round"/>
+</svg>

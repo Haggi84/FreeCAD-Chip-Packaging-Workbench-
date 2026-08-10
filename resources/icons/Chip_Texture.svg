@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- A proxy block wearing a picture of its layout: plain box on the left,
+       the same box with the layout painted on it on the right. -->
+  <rect x="5" y="20" width="22" height="24" rx="2"
+        fill="#9a9a9a" fill-opacity="0.5" stroke="#555555" stroke-width="2"/>
+  <rect x="37" y="20" width="22" height="24" rx="2"
+        fill="#1a1a20" stroke="#555555" stroke-width="2"/>
+  <!-- painted layout on the right block -->
+  <g stroke="none">
+    <rect x="40" y="23" width="7" height="3" fill="#e05a3c"/>
+    <rect x="49" y="23" width="7" height="3" fill="#e05a3c"/>
+    <rect x="40" y="28" width="16" height="2.5" fill="#4fb3e8"/>
+    <rect x="40" y="32" width="5"  height="9" fill="#7ad17a"/>
+    <rect x="47" y="32" width="9"  height="4" fill="#e8c44f"/>
+    <rect x="47" y="38" width="9"  height="3" fill="#b98ce0"/>
+  </g>
+  <!-- transfer arrow -->
+  <path d="M29,32 L35,32" stroke="#3fa9f5" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M32.5,29 L35,32 L32.5,35" fill="none" stroke="#3fa9f5"
+        stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- pin-1 dot on both, showing orientation is preserved -->
+  <circle cx="9" cy="24" r="1.8" fill="#ffcc00"/>
+  <circle cx="41" cy="24" r="1.8" fill="#ffcc00"/>
+</svg>

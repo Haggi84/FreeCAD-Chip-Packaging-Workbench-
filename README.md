@@ -1,11 +1,11 @@
 # Chip-Packaging Workbench for FreeCAD
 
-![Version](https://img.shields.io/badge/version-0.17.0-green?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.20.1-green?style=flat-square)
 ![FreeCAD](https://img.shields.io/badge/FreeCAD-1.1-blue?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.11-yellow?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-lightgrey?style=flat-square)
 ![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-informational?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-645%20checks-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-703%20checks-brightgreen?style=flat-square)
 
 **An open-source FreeCAD workbench for chip-packaging design, developed as part of the BMBF research project DI-PASSIONATE.**
 
@@ -83,6 +83,8 @@ caption (Tech, Import, Render, Package, Bonding, Routing, Workbench).
 | **PCB Import** | Load a PCB from STEP; copper pad faces are auto-detected as ContactPoints. |
 | **Move / Rotate PCB** | Reposition a loaded PCB together with all of its pad ContactPoints. |
 | **Load GDSII** | Import `.gds` with KLayout colours, optional technology map and stackup for true Z-heights. Supports level-of-detail import. |
+| **View in GDS3D** | Open the selected chip's full layout in the external GDS3D viewer, generating its process file from the active PDK. Requires GDS3D installed separately. |
+| **Texture Chip Proxy** | Paint a proxy with a picture of its own layout so several proxies stay tellable apart — optional, purely visual. |
 | **Import Chip Proxy** | Create a lightweight stand-in for a die — footprint, real stack thickness and bond-pad positions only. Loads in well under a second on full-chip layouts that take minutes to tessellate in full. |
 
 ### Rendering
@@ -143,6 +145,7 @@ caption (Tech, Import, Render, Package, Bonding, Routing, Workbench).
 | **Layer on Leadframe** | Scale, rotate and place GDS layers onto a leadframe. |
 | **Define Contact Points** | Batch-place markers at the top-face centre of selected layer objects. |
 | **Pin Numbering** | Generate pin-number labels around a leadframe. |
+| **Clear GDSII Import Cache** | Delete cached import results (imports are cached automatically; ~10x faster re-open). |
 
 ### Workbench
 
@@ -171,6 +174,23 @@ caption (Tech, Import, Render, Package, Bonding, Routing, Workbench).
 ---
 
 ## GDSII Import
+
+Large layouts are kept fast by two measures, both tuneable. A **polygon budget**
+(`AUTO_POLY_BUDGET`, 25,000) caps how many polygons are built as real geometry across all
+layers, collapsing the heaviest remaining layers to bounding boxes until the import fits —
+this bounds the *time*, which a per-layer threshold alone cannot. Bounding-box extents are
+computed in one batched pass rather than per polygon, which on a 3.2-million-polygon layout
+is a 14x saving on that phase by itself. Measured end to end on a real 46 MB, 3.2M-polygon
+chip: **135 s before, 18 s after**; a 15 MB chip went from 70 s to 11 s. Promoting a layer
+to full detail (Detail Layer Control) bypasses the budget, so nothing you ask for
+explicitly is collapsed behind your back.
+
+Imports are **cached to disk automatically**. Measured on a real 15 MB, 70-layer chip, a
+full B-rep import builds 92,000 solids / 630,000 faces in about 70 s; re-opening the same
+layout from cache takes roughly 10 s. The cache key folds in the file's modification time
+and every import option, so it can never serve stale geometry. It is capped at 2 GB with
+least-recently-used eviction — a single full-chip entry is around 100 MB — and
+*Advanced Tools -> Clear GDSII Import Cache* empties it.
 
 The layer selector exposes the import options that matter for large layouts:
 
@@ -415,6 +435,32 @@ count as intended-symmetric; clicked points are never pixel-perfect, and without
 would merely gain a near-duplicate neighbour instead of being tidied up. Points whose
 mirror image would fall outside the face are skipped and reported rather than created
 off the part.
+
+---
+
+## Working on a proxy instead of full geometry
+
+Full GDSII geometry is expensive to *display*, not to compute: after import, FreeCAD still
+has to create objects, tessellate and build scene graphs, which is where minutes go on a
+large chip. The workbench is built so you never have to pay that.
+
+**Every tool works on the proxy.** Verified on a 46 MB, 3.2-million-polygon layout: the
+proxy builds in **0.78 s**, carries all 20 bond pads as ContactPoints, and trace routing,
+wire bonding and the Design Rule Check all run against it unchanged. They depend on the
+semantic layer — contact points, footprint, real stack thickness — never on the polygons.
+
+**View in GDS3D** hands the looking to a tool built for it.
+[GDS3D](https://github.com/trilomix/GDS3D) is an external C++/OpenGL viewer that renders a
+layout as triangles with no CAD kernel, which is why it copes with layouts FreeCAD cannot —
+and equally why it cannot route or check anything. Select a proxy and the workbench writes
+a process-definition file from the active PDK (stack heights and thicknesses from the
+stackup, colours from the `.lyp`, vias flagged so net highlighting traces through them) and
+launches the viewer on the original GDS. Its `F` key exports the geometry for Gmsh.
+
+GDS3D is **not bundled**: it is GPL-2 (because of the Gmsh code it contains), which is
+incompatible with this workbench's GPL-3-or-later for combining them into one program.
+Launching it as a separate process keeps them at arm's length. Install it yourself and the
+command will ask for the executable once.
 
 ---
 

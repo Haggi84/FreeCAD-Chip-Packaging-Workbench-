@@ -18,6 +18,9 @@ try:
     from gds import ShowLayerSliderCommand
     from gds import TogglePerformanceModeCommand
     from gds import ToggleViaDetailCommand
+    from gds import ClearGDSCacheCommand   # noqa: F401
+    from gds import ChipTextureCommand   # noqa: F401
+    from gds import ViewInGDS3DCommand   # noqa: F401
     from ui import LODManager as _LODManager  # noqa: F401  (side-effect: registers WorkbenchState provider)
     from gds import ShowDetailLayerPanelCommand
     from leadframe import LeadframeCommand
@@ -85,6 +88,7 @@ class AdvancedMenuCommand:
         ("Layer on Leadframe",       "LayeronLeadframe",           "Layer on Leadframe.png"),
         ("Define Contact Points",    "DefineContactPointsCommand", "Define_Contact_Points.svg"),
         ("Pin Numbering",            "PinNumberingCommand",        "Pin_Numbering.svg"),
+        ("Clear GDSII Import Cache", "ClearGDSCacheCommand",       "Clear_Cache.svg"),
     ]
 
     def GetResources(self):
@@ -173,6 +177,8 @@ class MyWorkbench(FreeCADGui.Workbench):
                     "PCBPlacementCommand",
                     "GDSCommand",
                     "ImportChipProxyCommand",
+                    "ChipTextureCommand",
+                    "ViewInGDS3DCommand",
                 ],
             )
 

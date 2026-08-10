@@ -28,6 +28,15 @@ except ImportError:
 # taking 30 minutes).  0 = disabled.
 AUTO_BBOX_POLY_THRESHOLD: int = 50_000
 
+# Cap on the TOTAL number of polygons built as real geometry, across all
+# layers. The per-layer threshold above says nothing about overall import
+# time; this does, because build time tracks the surviving polygon count
+# almost linearly. Measured on a real 46 MB, 3.2M-polygon layout: 82,000
+# surviving polygons took 51 s, 8,700 took 15 s. 25,000 keeps a large chip
+# comfortably inside half a minute while leaving ordinary layouts — which
+# never reach the cap — completely untouched.
+AUTO_POLY_BUDGET: int = 25_000
+
 # Layers whose MEDIAN polygon area (in µm²) is below this threshold are
 # auto-collapsed to a bounding box, regardless of polygon count.
 # This catches sub-micron Fill-Metal / Dummy-Metal layers (e.g. Layer 6/DT0
@@ -50,6 +59,12 @@ def _gds_cache_dir() -> Path:
     return base / "FreeCAD" / "DI-PASSIONATE" / "gds_cache"
 
 _GDS_CACHE_DIR = _gds_cache_dir()
+
+# Upper bound on the import cache. A single full-chip entry measured about
+# 115 MB, so an unbounded cache reaches gigabytes within a few imports —
+# not acceptable for something that is on by default. Oldest entries are
+# evicted once the total exceeds this.
+_GDS_CACHE_MAX_BYTES = 2 * 1024 ** 3
 
 
 # ── cache helpers ─────────────────────────────────────────────────────────────
@@ -102,8 +117,96 @@ def _save_cache(key: str, results: list):
         p = _GDS_CACHE_DIR / f"{key}.pkl"
         with open(p, "wb") as fh:
             pickle.dump(payload, fh, protocol=4)
+        prune_gds_cache()
     except Exception as exc:
         FreeCAD.Console.PrintWarning(f"GDS cache save failed: {exc}\n")
+
+
+def prune_gds_cache(max_bytes: int = None) -> int:
+    """
+    Evict least-recently-used entries until the cache fits its budget.
+    Returns the number of files removed.
+
+    Called after every save, so the cache being on by default cannot quietly
+    consume the disk — one full-chip entry is on the order of 100 MB.
+    """
+    limit = _GDS_CACHE_MAX_BYTES if max_bytes is None else int(max_bytes)
+    removed = 0
+    try:
+        files = []
+        total = 0
+        for p in _GDS_CACHE_DIR.glob("*.pkl"):
+            try:
+                st = p.stat()
+            except Exception:
+                continue
+            files.append((st.st_mtime, st.st_size, p))
+            total += st.st_size
+        if total <= limit:
+            return 0
+        files.sort()                    # oldest first
+        for _mtime, size, p in files:
+            if total <= limit:
+                break
+            try:
+                p.unlink()
+                total -= size
+                removed += 1
+            except Exception:
+                continue
+        if removed:
+            FreeCAD.Console.PrintMessage(
+                f"GDS cache: evicted {removed} old entr(y/ies) to stay under "
+                f"{limit / 1024 ** 3:.1f} GB.\n")
+    except Exception as exc:
+        FreeCAD.Console.PrintWarning(f"GDS cache prune failed: {exc}\n")
+    return removed
+
+
+def gds_cache_dir() -> Path:
+    """Where the import cache lives, for the UI to show."""
+    return _GDS_CACHE_DIR
+
+
+def gds_cache_size() -> tuple:
+    """(file_count, total_bytes) currently held in the import cache."""
+    n = 0
+    total = 0
+    try:
+        for p in _GDS_CACHE_DIR.glob("*.pkl"):
+            try:
+                total += p.stat().st_size
+                n += 1
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return n, total
+
+
+def clear_gds_cache() -> tuple:
+    """
+    Delete every cached import. Returns (files_removed, bytes_freed).
+
+    The cache key already folds in the GDS file's modification time and the
+    import options, so a stale entry cannot be served for a changed file —
+    clearing is for reclaiming disk space, or after a workbench update
+    changes how geometry is built.
+    """
+    removed = 0
+    freed = 0
+    try:
+        for p in _GDS_CACHE_DIR.glob("*.pkl"):
+            try:
+                size = p.stat().st_size
+                p.unlink()
+                removed += 1
+                freed += size
+            except Exception:
+                continue
+    except Exception as exc:
+        FreeCAD.Console.PrintWarning(f"GDS cache clear failed: {exc}\n")
+    return removed, freed
 
 
 # ── vectorised geometry helpers ───────────────────────────────────────────────
@@ -783,10 +886,11 @@ def load_gds(gds_path,
              flat_layer_keys=None,    # (layer_id, datatype) always rendered as flat 2D face (never extruded)
              mesh_3d=False,           # bypass OCCT B-rep: build Mesh.Mesh directly from triangulated polygons
              auto_bbox_threshold=None,# collapse layer to bbox when polygon count exceeds this (None = use module default)
+             poly_budget=None,        # cap on TOTAL polygons built as real geometry (None = module default)
              force_bbox_keys=None,    # user-selected (layer_id, datatype) pairs to always render as bounding box
              exclude_auto_bbox_keys=None, # user-selected keys that must never be auto-collapsed to bbox
              use_gdstk_union=False,   # merge overlapping polygons per layer in C++ before building shapes
-             use_cache=False,         # serialise result to disk; second import is near-instant
+             use_cache=True,          # serialise result to disk; second import is near-instant
              parallel_workers=0,      # number of threads for data-prep phase (0 = serial)
              progress_callback=None
              ):
@@ -806,12 +910,14 @@ def load_gds(gds_path,
         }
     """
     _bbox_threshold = AUTO_BBOX_POLY_THRESHOLD if auto_bbox_threshold is None else int(auto_bbox_threshold)
+    _poly_budget = AUTO_POLY_BUDGET if poly_budget is None else int(poly_budget)
 
     # ── disk-cache check ──────────────────────────────────────────────────────
     _cache_options = {
         "preview_2d": preview_2d, "min_area": min_area_mm2,
         "decimate": decimate_tol_mm, "fill_bbox": fill_as_bbox,
         "mesh_3d": mesh_3d, "bbox_thresh": _bbox_threshold,
+        "budget": _poly_budget,
         "force_bbox": tuple(sorted(force_bbox_keys or [])),
         "excl_bbox":  tuple(sorted(exclude_auto_bbox_keys or [])),
     }
@@ -1016,6 +1122,49 @@ def load_gds(gds_path,
                             f"(threshold {_bbox_threshold:,}) → bounding box\n"
                         )
 
+        # ── Polygon budget: bound the import TIME, not just per-layer size ────
+        # The per-layer threshold above cannot promise anything about how long
+        # an import takes: a layout made of many medium layers slips under it
+        # and still builds a hundred thousand solids. Measured on a real 46 MB
+        # layout, build time tracks the surviving polygon count closely —
+        # 82,000 polygons took 51 s, 8,700 took 15 s — so capping that count
+        # is what actually caps the wait.
+        #
+        # The heaviest surviving layers are collapsed first, since they cost
+        # the most and are the least legible anyway (a layer of 40,000 tiny
+        # shapes reads as a filled area at any sane zoom). Layers the user has
+        # explicitly kept are never touched.
+        # auto_bbox_threshold=0 is the callers' existing way of saying "give me
+        # everything" — core.lod_import uses it when the user promotes a layer
+        # to full detail on purpose. Applying a budget there would quietly
+        # collapse the very layer that was just asked for.
+        if _poly_budget and _poly_budget > 0 and _bbox_threshold > 0:
+            _survivor_counts = {}
+            for lyr, dt, _ in polygons:
+                k = (lyr, dt)
+                if k in wanted and k not in _fill_keys and not _is_filler(lyr, dt):
+                    _survivor_counts[k] = _survivor_counts.get(k, 0) + 1
+            _remaining = sum(_survivor_counts.values())
+            if _remaining > _poly_budget:
+                for k, cnt in sorted(_survivor_counts.items(), key=lambda kv: -kv[1]):
+                    if _remaining <= _poly_budget:
+                        break
+                    if k in _exclude_auto_bbox:
+                        continue
+                    _fill_keys.add(k)
+                    _remaining -= cnt
+                    FreeCAD.Console.PrintWarning(
+                        f"  Budget bbox: layer {k[0]}/{k[1]} ({cnt:,} polygons) "
+                        f"→ bounding box, to keep the import under "
+                        f"{_poly_budget:,} polygons\n"
+                    )
+                FreeCAD.Console.PrintMessage(
+                    f"  Polygon budget: building {_remaining:,} of "
+                    f"{sum(_survivor_counts.values()):,} polygons. Raise "
+                    f"poly_budget, or keep a layer explicitly, for more "
+                    f"detail.\n"
+                )
+
         # ── Micro-area pre-scan: collapse sub-micron Fill-Metal layers ────────
         # Many process nodes (e.g. IHP SG13G2) insert hundreds of thousands of
         # sub-micron dummy-metal rectangles for CMP planarisation.  These are
@@ -1103,52 +1252,76 @@ def load_gds(gds_path,
                 )
             polygons = filtered_contact + rest_out
 
-        # ── Phase 1: bbox accumulators (serial) + bucket normal polygons ────────
+        # ── Phase 1: bucket polygons; bbox extents are computed in BATCH ───────
+        # A layer bound for a bounding box needs only the min/max over all its
+        # points, so it must not be transformed one polygon at a time. On a
+        # real 46 MB layout the bbox-bound layers hold 3.2 MILLION polygons of
+        # 4-6 points each, where NumPy's per-call overhead dwarfs the actual
+        # arithmetic: measured 23.7 s that way versus 1.7 s for the same points
+        # concatenated and transformed once — a 14x difference, and the single
+        # largest cost in the whole import.
         _raw_normals: dict = {}   # key -> [pts_array, ...]
+        _body_raw: list = []      # contacts_only_3d: everything outside contacts
+        _fill_raw: dict = {}      # key -> [pts_array, ...] awaiting one bbox
         for layer, datatype, poly_pts_raw in polygons:
-            poly_pts = _points_array(poly_pts_raw)
             key = (layer, datatype)
             if key not in wanted:
                 continue
+            poly_pts = _points_array(poly_pts_raw)
 
             # contacts_only_3d: non-contact layers → body bbox accumulator
             if contacts_only_3d and key not in _contact_keys:
-                _arr_b = _vec_transform(poly_pts, s, rot_deg, mirror_y, tx, ty)
-                if len(_arr_b) > 0:
-                    if _HAS_NP and isinstance(_arr_b, _np.ndarray):
-                        _xmn, _xmx = float(_arr_b[:, 0].min()), float(_arr_b[:, 0].max())
-                        _ymn, _ymx = float(_arr_b[:, 1].min()), float(_arr_b[:, 1].max())
-                    else:
-                        _xmn, _xmx = min(p[0] for p in _arr_b), max(p[0] for p in _arr_b)
-                        _ymn, _ymx = min(p[1] for p in _arr_b), max(p[1] for p in _arr_b)
-                    if _body_extents is None:
-                        _body_extents = [_xmn, _ymn, _xmx, _ymx]
-                    else:
-                        _body_extents[0] = min(_body_extents[0], _xmn)
-                        _body_extents[1] = min(_body_extents[1], _ymn)
-                        _body_extents[2] = max(_body_extents[2], _xmx)
-                        _body_extents[3] = max(_body_extents[3], _ymx)
+                _body_raw.append(poly_pts)
                 continue
 
             if _is_filler(layer, datatype):
                 if fill_as_bbox:
-                    _arr_f = _vec_transform(poly_pts, s, rot_deg, mirror_y, tx, ty)
-                    if len(_arr_f) > 0:
-                        if _HAS_NP and isinstance(_arr_f, _np.ndarray):
-                            _xmn, _xmx = float(_arr_f[:, 0].min()), float(_arr_f[:, 0].max())
-                            _ymn, _ymx = float(_arr_f[:, 1].min()), float(_arr_f[:, 1].max())
-                        else:
-                            _xmn, _xmx = min(p[0] for p in _arr_f), max(p[0] for p in _arr_f)
-                            _ymn, _ymx = min(p[1] for p in _arr_f), max(p[1] for p in _arr_f)
-                        if key in fill_extents:
-                            e = fill_extents[key]
-                            e[0] = min(e[0], _xmn); e[1] = min(e[1], _ymn)
-                            e[2] = max(e[2], _xmx); e[3] = max(e[3], _ymx)
-                        else:
-                            fill_extents[key] = [_xmn, _ymn, _xmx, _ymx]
+                    _fill_raw.setdefault(key, []).append(poly_pts)
                 continue
 
             _raw_normals.setdefault(key, []).append(poly_pts)
+
+        def _batched_extents(arrays):
+            """[xmin, ymin, xmax, ymax] over many polygons, transformed once."""
+            if not arrays:
+                return None
+            if _HAS_NP:
+                try:
+                    big = _np.concatenate(
+                        [_np.asarray(a, dtype=float).reshape(-1, 2)
+                         for a in arrays if len(a) > 0], axis=0)
+                except ValueError:
+                    return None
+                if big.size == 0:
+                    return None
+                out = _vec_transform(big, s, rot_deg, mirror_y, tx, ty)
+                arr = _np.asarray(out, dtype=float)
+                return [float(arr[:, 0].min()), float(arr[:, 1].min()),
+                        float(arr[:, 0].max()), float(arr[:, 1].max())]
+            # No NumPy: fall back to the original per-polygon walk.
+            ext = None
+            for a in arrays:
+                t = _vec_transform(a, s, rot_deg, mirror_y, tx, ty)
+                if not len(t):
+                    continue
+                xs = [p[0] for p in t]
+                ys = [p[1] for p in t]
+                cur = [min(xs), min(ys), max(xs), max(ys)]
+                if ext is None:
+                    ext = cur
+                else:
+                    ext[0] = min(ext[0], cur[0]); ext[1] = min(ext[1], cur[1])
+                    ext[2] = max(ext[2], cur[2]); ext[3] = max(ext[3], cur[3])
+            return ext
+
+        if _body_raw:
+            _be = _batched_extents(_body_raw)
+            if _be is not None:
+                _body_extents = _be
+        for _fk, _fl in _fill_raw.items():
+            _fe = _batched_extents(_fl)
+            if _fe is not None:
+                fill_extents[_fk] = _fe
 
         # progress total from normal-polygon count
         _all_raw_count = sum(len(v) for v in _raw_normals.values())

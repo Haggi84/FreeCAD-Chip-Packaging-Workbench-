@@ -236,7 +236,7 @@ The runner prints a summary, writes the same report to `tests/results.log`, and 
 non-zero if any check fails — so it can be dropped straight into CI. Expect output ending in:
 
 ```
-RESULTS: 645 passed, 0 failed, 645 total
+RESULTS: 703 passed, 0 failed, 703 total
 All checks passed.
 ```
 
@@ -371,6 +371,23 @@ Points whose mirror image falls outside the face are reported and skipped rather
 created off the part. This happens when the pattern is not symmetric with respect to the
 face's own outline — for example points near one edge of a face that is not itself
 symmetric about the mirror axis.
+
+### View in GDS3D asks for an executable
+
+GDS3D is a separate program and is **not bundled** — it is GPL-2 (because of the Gmsh code
+it contains), which cannot be combined with this workbench's GPL-3-or-later into one work.
+Launching it as its own process is fine, so you install it yourself:
+
+- **Prebuilt (all platforms):** <https://sourceforge.net/projects/gds3d/files/> →
+  `GDS3D_1.8.zip`
+- **From source:** <https://github.com/trilomix/GDS3D> — Windows: open `win32/GDS3D.sln` in
+  Visual Studio and build. Linux: `make -C linux` (needs G++, GL, GLU, GLX and X11 dev
+  packages). macOS: `mac/GDS3D.xcodeproj` in Xcode.
+
+The command asks for the executable once and remembers it. Note the SourceForge 1.8 build
+is the original University of Twente release; the Gmsh export (`F` key) and the
+`Material` / `MinSpace` fields are documented in the active forks, so build a fork if the
+export is missing.
 
 ### 3-D Route says the pads are not on one body
 
