@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<!--
+  Stackup for the SkyWater SKY130 (sky130A) open PDK.
+
+  Z POSITIONS are the sky130A metal-stack heights in micrometres above the
+  silicon surface, as published by SkyWater and used by open_pdks.
+
+  SUBSTRATE OFFSET is a PACKAGING ASSUMPTION, not a PDK constant. SKY130
+  does not specify a die thickness: a wafer is ~725 um as fabricated and is
+  ground to whatever the assembly flow needs. 300 um is a
+  common thinned value and is stated in this file's NAME so the assumption
+  travels with it — exactly as SG13G2_200um.xml does for the IHP PDK.
+
+  If your dies are thinned differently, copy this file, change the Substrate
+  Offset and the name, or simply type the real thickness into the Chip
+  Proxy Dimensions dialog at import.
+
+  Datatype attributes are REQUIRED here and absent from the IHP stackup:
+  SKY130 draws met1 on 68/20 and the via above it on 68/44, so the layer
+  number alone cannot tell a metal from a via.
+-->
+  <Stackup schemaVersion="2.0">
+    <Materials>
+      <Material Name="diff" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="93a1a1"/>
+      <Material Name="tap" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="b58900"/>
+      <Material Name="poly" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="d33682"/>
+      <Material Name="licon1" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="dc322f"/>
+      <Material Name="li1" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="6c71c4"/>
+      <Material Name="mcon" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="cb4b16"/>
+      <Material Name="met1" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="4d4dff"/>
+      <Material Name="via" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="ff5555"/>
+      <Material Name="met2" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="ff4dff"/>
+      <Material Name="via2" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="ff8c42"/>
+      <Material Name="met3" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="3fd1c8"/>
+      <Material Name="via3" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="ffb000"/>
+      <Material Name="met4" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="d1c73f"/>
+      <Material Name="via4" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="ff6f91"/>
+      <Material Name="met5" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="c87137"/>
+      <Material Name="SiO2" Type="Dielectric" Permittivity="4.1" DielectricLossTangent="0.0" Conductivity="0" Color="fffcad"/>
+      <Material Name="EPI" Type="Semiconductor" Permittivity="11.9" DielectricLossTangent="0" Conductivity="5.0" Color="294fff"/>
+      <Material Name="Substrate" Type="Semiconductor" Permittivity="11.9" DielectricLossTangent="0" Conductivity="2.0" Color="01e0ff"/>
+      <Material Name="AIR" Type="Dielectric" Permittivity="1.0" DielectricLossTangent="0.0" Conductivity="0" Color="d0d0d0"/>
+    </Materials>
+    <ELayers LengthUnit="um">
+      <Dielectrics>
+        <Dielectric Name="AIR" Material="AIR" Thickness="200.0000" />
+        <Dielectric Name="SiO2" Material="SiO2" Thickness="6.6311" />
+        <!--
+          EPI + Substrate together make the die body, and together they must
+          equal the Substrate Offset below — core.substrate derives the body
+          by accumulating these from the bottom until they reach that offset,
+          and refuses to build anything if the two disagree.
+
+          SKY130 is bulk CMOS with a thin p-epi on a p+ handle wafer. 2.0 um
+          is a representative epi thickness; like the 300 um total it is an
+          assembly-side figure, not a PDK constant.
+        -->
+        <Dielectric Name="EPI" Material="EPI" Thickness="2.0000" />
+        <Dielectric Name="Substrate" Material="Substrate" Thickness="298.0000" />
+      </Dielectrics>
+      <Layers>
+        <Substrate Offset="300.00"/>
+        <Layer Name="diff" Type="conductor" Zmin="0.0000" Zmax="0.1200" Material="diff" Layer="65" Datatype="20" />
+        <Layer Name="tap" Type="conductor" Zmin="0.0000" Zmax="0.1200" Material="tap" Layer="65" Datatype="44" />
+        <Layer Name="poly" Type="conductor" Zmin="0.3262" Zmax="0.5062" Material="poly" Layer="66" Datatype="20" />
+        <Layer Name="licon1" Type="via" Zmin="0.0000" Zmax="0.9361" Material="licon1" Layer="66" Datatype="44" />
+        <Layer Name="li1" Type="conductor" Zmin="0.9361" Zmax="1.0361" Material="li1" Layer="67" Datatype="20" />
+        <Layer Name="mcon" Type="via" Zmin="1.0361" Zmax="1.3761" Material="mcon" Layer="67" Datatype="44" />
+        <Layer Name="met1" Type="conductor" Zmin="1.3761" Zmax="1.7361" Material="met1" Layer="68" Datatype="20" />
+        <Layer Name="via" Type="via" Zmin="1.7361" Zmax="2.0061" Material="via" Layer="68" Datatype="44" />
+        <Layer Name="met2" Type="conductor" Zmin="2.0061" Zmax="2.3661" Material="met2" Layer="69" Datatype="20" />
+        <Layer Name="via2" Type="via" Zmin="2.3661" Zmax="2.7861" Material="via2" Layer="69" Datatype="44" />
+        <Layer Name="met3" Type="conductor" Zmin="2.7861" Zmax="3.6311" Material="met3" Layer="70" Datatype="20" />
+        <Layer Name="via3" Type="via" Zmin="3.6311" Zmax="4.0211" Material="via3" Layer="70" Datatype="44" />
+        <Layer Name="met4" Type="conductor" Zmin="4.0211" Zmax="4.8661" Material="met4" Layer="71" Datatype="20" />
+        <Layer Name="via4" Type="via" Zmin="4.8661" Zmax="5.3711" Material="via4" Layer="71" Datatype="44" />
+        <Layer Name="met5" Type="conductor" Zmin="5.3711" Zmax="6.6311" Material="met5" Layer="72" Datatype="20" />
+      </Layers>
+    </ELayers>
+  </Stackup>

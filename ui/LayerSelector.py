@@ -48,6 +48,9 @@ class LayerSelector(QtWidgets.QDialog):
             "highlight_bondable": True,
             "extrude_3d":         False,
             "auto_pin_contacts":  False,
+            "keep_via_detail":    True,
+            "add_die_body":       True,
+            "drop_to_die_surface": True,
             "layer_bbox":         set(),
         })
 
@@ -72,7 +75,52 @@ class LayerSelector(QtWidgets.QDialog):
             "Auto-detect top PIN layers and create contact points")
         self.check_auto_pin.setChecked(bool(self.options.get("auto_pin_contacts", False)))
 
-        for w in (self.check_match, self.check_hl, self.check_3d, self.check_auto_pin):
+        self.check_vias = QtWidgets.QCheckBox(
+            "Keep VIA layers in full detail (never auto-simplify)")
+        self.check_vias.setChecked(bool(self.options.get("keep_via_detail", True)))
+        self.check_vias.setToolTip(
+            "Via layers hold the most polygons on a chip, so the automatic\n"
+            "simplification collapses them first — and collapsing a via array\n"
+            "to one bounding box turns separate pillars into a solid slab.\n\n"
+            "On (recommended): via layers are always built as real geometry.\n"
+            "Off: they are simplified like any other layer when the import\n"
+            "gets heavy.\n\n"
+            "Independent of Toggle VIA Detail, which clusters already-loaded\n"
+            "vias into blocks and keeps the array's structure."
+        )
+
+        self.check_body = QtWidgets.QCheckBox(
+            "Add the die body below the layout (epi + substrate, from the stackup)")
+        self.check_body.setChecked(bool(self.options.get("add_die_body", True)))
+        self.check_body.setToolTip(
+            "A die is mostly the silicon under the lowest drawn layer. On\n"
+            "IHP SG13G2 the drawn stack is 14.23 µm and the body beneath it\n"
+            "is 183.75 µm — epi 3.75 µm on 180 µm of substrate — so without\n"
+            "this the imported object is under 8% of the real part.\n\n"
+            "The slabs are built from the stackup XML's own <Dielectric>\n"
+            "entries and span the die outline. Nothing is built if the\n"
+            "stackup does not declare them."
+        )
+
+        self.check_drop = QtWidgets.QCheckBox(
+            "Drop the layer stack onto the die surface (close the gap below it)")
+        self.check_drop.setChecked(
+            bool(self.options.get("drop_to_die_surface", True)))
+        self.check_drop.setToolTip(
+            "Importing only part of a stack leaves it floating. Loading just\n"
+            "the top of an SG13G2 stack puts Metal5 at 5.09 µm with nothing\n"
+            "beneath it, because Activ, the contacts and Metal1-4 were never\n"
+            "built — a 4.89 µm gap above the die surface.\n\n"
+            "On: the loaded layers slide down together so the lowest one\n"
+            "starts at the die surface. Relative spacing is preserved, and\n"
+            "the substrate and epi do not move.\n"
+            "Off: every layer keeps its true PDK height.\n\n"
+            "No effect on a full import — the lowest layer is already there."
+        )
+
+        for w in (self.check_match, self.check_hl, self.check_3d,
+                  self.check_auto_pin, self.check_vias, self.check_body,
+                  self.check_drop):
             opt_top.addWidget(w)
 
         layout.addLayout(opt_top)
@@ -260,6 +308,9 @@ class LayerSelector(QtWidgets.QDialog):
         self.options["highlight_bondable"] = self.check_hl.isChecked()
         self.options["extrude_3d"]         = self.check_3d.isChecked()
         self.options["auto_pin_contacts"]  = self.check_auto_pin.isChecked()
+        self.options["keep_via_detail"]    = self.check_vias.isChecked()
+        self.options["add_die_body"]       = self.check_body.isChecked()
+        self.options["drop_to_die_surface"] = self.check_drop.isChecked()
         # mesh_3d and contacts_only_3d no longer in dialog — set internally
         self.options["mesh_3d"]          = False
         self.options["contacts_only_3d"] = False

@@ -53,6 +53,11 @@ import test_point_pattern
 import test_body_routing
 import test_chip_texture
 import test_gds3d_process
+import test_theme
+import test_desktop_shortcut
+import test_tech_profiles
+import test_via_detail
+import test_substrate
 
 MODULES = [
     test_wirebond_geometry,
@@ -80,6 +85,11 @@ MODULES = [
     test_body_routing,
     test_chip_texture,
     test_gds3d_process,
+    test_theme,
+    test_desktop_shortcut,
+    test_tech_profiles,
+    test_via_detail,
+    test_substrate,
 ]
 
 RESULTS_LOG = os.path.join(_THIS_DIR, "results.log")

@@ -234,12 +234,43 @@ def _run_render(doc, layer_objects, pending_colors):
 
 # ── Post-import: PIN instances, group ────────────────────────────────────────
 
+def _add_die_body(doc, gds_path, stackup_data, options):
+    """
+    Build the epi + silicon slabs under the lowest drawn layer.
+
+    A die is mostly the body below the interconnect — on SG13G2 the drawn
+    stack is 14.23 um and the silicon under it is 183.75 um — and none of it
+    was being modelled, so the imported object was under 8% of the real part.
+
+    The footprint comes from the die outline (seal ring / prBoundary) rather
+    than the bounding box of whatever layers happened to be loaded: in LOD
+    mode that is two contact layers, which would put a substrate under only
+    part of the die.
+    """
+    if not bool(options.get("add_die_body", True)):
+        return []
+    try:
+        import core.substrate as substrate
+        from core.chip_proxy import describe_die_footprint
+
+        if not substrate.substrate_layers_mm(stackup_data):
+            return []          # stackup declares no body; nothing to build
+        outline = describe_die_footprint(gds_path)
+        return substrate.build_substrate_objects(
+            doc, outline["footprint_mm"], stackup_data)
+    except Exception as exc:
+        FreeCAD.Console.PrintWarning(f"[Substrate] not built: {exc}\n")
+        return []
+
+
 def _post_import(doc, gds_path, ihp_map, selected_layers,
-                 auto_pin_contacts, before_objs):
+                 auto_pin_contacts, before_objs,
+                 stackup_data=None, options=None):
     """
     After the actual import:
     - Display GDS cells named "pin" as flat 2D shapes
     - Auto-PIN detection (optional)
+    - Build the die body (epi + substrate) below the layout
     - Create GDS_Die group
     Returns cp_count (0 if auto_pin_contacts is disabled).
     """
@@ -260,6 +291,10 @@ def _post_import(doc, gds_path, ihp_map, selected_layers,
             selected_layers=selected_layers, top_n=3,
         )
 
+    # Die body — built before the group is formed, so the slabs are swept
+    # into GDS_Die with everything else the import produced.
+    _add_die_body(doc, gds_path, stackup_data, options or {})
+
     # GDS_Die group
     grp = doc.addObject("App::DocumentObjectGroup", "GDS_Die")
     grp.Label = "GDS_Die"
@@ -270,15 +305,23 @@ def _post_import(doc, gds_path, ihp_map, selected_layers,
     return cp_count
 
 
-def _apply_performance_mode(doc, pending_colors):
+def _apply_performance_mode(doc, pending_colors, keep_via_detail=True):
     """Performance mode after import; reapply colours afterwards."""
     try:
         from gds.TogglePerformanceModeCommand import apply_performance_mode
         apply_performance_mode(doc)
     except Exception as e:
         FreeCAD.Console.PrintWarning(f"[GDS] Performance mode: {e}\n")
-    # VIA layers → simple outlined blocks by default (full detail on demand
-    # via the Toggle VIA Detail button).
+    # VIA layers → simple outlined blocks, unless the user asked to keep via
+    # detail. This step runs AFTER the geometry is built and swaps the real
+    # via arrays for clustered blocks, so on its own it undoes every
+    # protection applied during the build — which is exactly how an import
+    # could report "VIA detail protected" and still show blocks.
+    if keep_via_detail:
+        FreeCAD.Console.PrintMessage(
+            "[GDS] Via simplify skipped — 'Keep VIA layers in full detail' is "
+            "on. Use Toggle VIA Detail to cluster them into blocks.\n")
+        return
     try:
         from gds.ToggleViaDetailCommand import apply_via_simplified
         apply_via_simplified(doc)
@@ -438,7 +481,8 @@ def load_gds_layers():
         pp.update_properties(layers_to_load, unique_colors, layer_objects)
 
         cp_count = _post_import(doc, gds_path, ihp_map, layers_to_load,
-                                aux["auto_pin_contacts"], before_objs)
+                                aux["auto_pin_contacts"], before_objs,
+                                stackup_data=stackup_data, options=options)
 
         if aux["auto_pin_contacts"]:
             if cp_count:
@@ -465,7 +509,9 @@ def load_gds_layers():
         # promote requests from the DetailLayerPanel.
         _start_lod_manager(doc, gds_path, aux)
 
-        _apply_performance_mode(doc, pending_colors)
+        _apply_performance_mode(
+            doc, pending_colors,
+            keep_via_detail=bool(options.get("keep_via_detail", True)))
 
         return (doc, layer_objects, all_avail_layers, unique_colors,
                 gds_path, lyp_path, options, map_path)

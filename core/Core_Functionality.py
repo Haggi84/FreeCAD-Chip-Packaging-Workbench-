@@ -251,6 +251,23 @@ def _arr_to_tuples(arr) -> list:
 # KLayout LYP parsing (colors)
 # -------------------------------
 
+def _parse_lyp_source(source: str):
+    """
+    '68/20', '68/20@1' or '68/20@*' -> (68, 20).
+
+    KLayout appends '@n' to name the layout it applies to, and the official
+    SkyWater sky130A.lyp does so on every single entry. int('20@1') raises,
+    so without this the whole file parsed to zero layers — each one warned
+    about individually and then skipped, leaving an import with no geometry
+    and no obvious cause.
+    """
+    src = str(source).strip()
+    if "@" in src:
+        src = src.split("@", 1)[0]
+    layer_str, _, datatype_str = src.partition("/")
+    return int(layer_str), int(datatype_str)
+
+
 def parse_lyp(lyp_path, layer_map=None):
     """
     Parse a KLayout LYP file and return:
@@ -280,7 +297,7 @@ def parse_lyp(lyp_path, layer_map=None):
 
             if visible and source:
                 try:
-                    layer_id, datatype = map(int, source.split("/"))
+                    layer_id, datatype = _parse_lyp_source(source)
                     layer_dict["layer_id"] = layer_id
                     layer_dict["datatype"] = datatype
 
@@ -391,17 +408,33 @@ def parse_stackup_xml(xml_path):
                 continue
             gds_layer_str = layer.get("Layer", "")
             gds_layer = int(gds_layer_str) if gds_layer_str.isdigit() else -1
+            # Optional. SG13G2 gives every layer its own number, so a bare
+            # number identifies it. SKY130 does not: met1 is 68/20 and the
+            # via above it is 68/44, so without a datatype both collapse onto
+            # key 68 and one of them silently takes the other's Z position.
+            gds_dt_str = layer.get("Datatype", "")
+            gds_dt = int(gds_dt_str) if gds_dt_str.strip().isdigit() else None
             entry = {
                 "zmin_um":      zmin_um,
                 "zmax_um":      zmax_um,
                 "thickness_um": abs(zmax_um - zmin_um),
                 "gds_layer":    gds_layer,
+                "gds_datatype": gds_dt,
                 "type":         ltype,
             }
             if name:
                 result[name.upper()] = entry
             if gds_layer >= 0:
-                result[gds_layer] = entry
+                if gds_dt is not None:
+                    result[(gds_layer, gds_dt)] = entry
+                # The bare number stays, for stackups without datatypes and
+                # for lookups that only know a number. Where several layers
+                # share one number, the conductor wins it: guessing "metal"
+                # is the better error than guessing "via".
+                prev = result.get(gds_layer)
+                if prev is None or (prev.get("type") != "conductor"
+                                    and ltype == "conductor"):
+                    result[gds_layer] = entry
 
         substrate = root.find(".//Substrate")
         if substrate is not None:
@@ -410,9 +443,45 @@ def parse_stackup_xml(xml_path):
             except (ValueError, TypeError):
                 pass
 
+        # Materials, for the colours the dielectric slabs are drawn in.
+        materials = {}
+        for mat in root.findall(".//Material"):
+            name = (mat.get("Name") or "").strip()
+            if not name:
+                continue
+            materials[name.upper()] = {
+                "name": name,
+                "type": (mat.get("Type") or "").strip().lower(),
+                "color": (mat.get("Color") or "").strip(),
+            }
+        if materials:
+            result["_materials"] = materials
+
+        # Dielectrics, in document order (top of the stack first). The
+        # <Layer> elements describe only the interconnect; the physical body
+        # a die is actually made of — the epitaxial layer and the silicon
+        # substrate below it — is declared HERE and was being discarded, so
+        # nothing under the lowest metal was ever modelled.
+        dielectrics = []
+        for die in root.findall(".//Dielectric"):
+            name = (die.get("Name") or "").strip()
+            try:
+                thickness = float(die.get("Thickness", 0))
+            except (ValueError, TypeError):
+                continue
+            if not name or thickness <= 0.0:
+                continue
+            dielectrics.append({
+                "name": name,
+                "material": (die.get("Material") or name).strip(),
+                "thickness_um": thickness,
+            })
+        if dielectrics:
+            result["_dielectrics"] = dielectrics
+
         FreeCAD.Console.PrintMessage(
             f"Loaded stackup XML '{xml_path}': "
-            f"{sum(isinstance(k, str) and k != '_substrate_offset_um' for k in result)} layers.\n"
+            f"{sum(isinstance(k, str) and not k.startswith('_') for k in result)} layers.\n"
         )
         return result
     except FileNotFoundError:
@@ -568,9 +637,11 @@ def build_stack_mm_from_xml(selected_layers, ihp_map, stackup_data):
         (layer_id, datatype) -> {'t_mm': float, 'z0_mm': float}
 
     Lookup order for each layer:
-      1. By GDS layer number (exact match in stackup_data)
-      2. By EDI name from ihp_map (case-insensitive)
-      3. Fall back to build_stack_mm() heuristics for anything not found.
+      1. By (GDS layer, datatype) — the only key that separates a metal from
+         the via drawn on the same layer number, as SKY130 does throughout.
+      2. By GDS layer number alone (stackups that carry no datatypes)
+      3. By EDI name from ihp_map (case-insensitive)
+      4. Fall back to build_stack_mm() heuristics for anything not found.
     """
     if not stackup_data:
         return build_stack_mm(selected_layers, ihp_map)
@@ -583,10 +654,14 @@ def build_stack_mm_from_xml(selected_layers, ihp_map, stackup_data):
         dt  = L.get("datatype",  0)
         key = (lid, dt)
 
-        # 1. Match by GDS layer number
-        entry = stackup_data.get(lid)
+        # 1. Match by layer AND datatype
+        entry = stackup_data.get(key)
 
-        # 2. Match by EDI name
+        # 2. Match by GDS layer number
+        if entry is None:
+            entry = stackup_data.get(lid)
+
+        # 3. Match by EDI name
         if entry is None:
             m = ihp_map.get(key)
             if m:
@@ -596,6 +671,12 @@ def build_stack_mm_from_xml(selected_layers, ihp_map, stackup_data):
             out[key] = {
                 "t_mm":  entry["thickness_um"] / 1000.0,
                 "z0_mm": entry["zmin_um"]       / 1000.0,
+                # True only when the XML actually states this layer's height.
+                # Marker layers — EdgeSeal.boundary, prBoundary, Recog — are
+                # not in the stackup and get rank-based fallback heights that
+                # carry no physical meaning, so they must be distinguishable
+                # from layers whose Z is real. See drop_stack_to_die_surface.
+                "from_xml": True,
             }
         else:
             fallback_layers.append(L)
@@ -889,6 +970,7 @@ def load_gds(gds_path,
              poly_budget=None,        # cap on TOTAL polygons built as real geometry (None = module default)
              force_bbox_keys=None,    # user-selected (layer_id, datatype) pairs to always render as bounding box
              exclude_auto_bbox_keys=None, # user-selected keys that must never be auto-collapsed to bbox
+             protect_via_keys=None,   # VIA layers that must never be auto-collapsed — see below
              use_gdstk_union=False,   # merge overlapping polygons per layer in C++ before building shapes
              use_cache=True,          # serialise result to disk; second import is near-instant
              parallel_workers=0,      # number of threads for data-prep phase (0 = serial)
@@ -913,6 +995,27 @@ def load_gds(gds_path,
     _poly_budget = AUTO_POLY_BUDGET if poly_budget is None else int(poly_budget)
 
     # ── disk-cache check ──────────────────────────────────────────────────────
+    # EVERY argument that can change the geometry has to be in this key. It is
+    # not a place to be selective: an omitted argument does not degrade the
+    # cache, it silently serves geometry built under different rules and the
+    # import looks like it ignored the setting entirely.
+    #
+    # protect_via_keys was exactly that failure. Turning via protection on
+    # produced a byte-identical key, so the cache returned the flattened via
+    # layers built before the option existed — the fix appeared to do nothing.
+    # stack_mm was the same bug waiting to happen: switching PDK profile
+    # changes every Z position while leaving the key untouched.
+    def _stack_fingerprint(stack):
+        if not stack:
+            return ()
+        try:
+            return tuple(sorted(
+                (k, round(float(v.get("t_mm", 0.0)), 9),
+                 round(float(v.get("z0_mm", 0.0)), 9))
+                for k, v in stack.items()))
+        except Exception:
+            return (repr(stack),)
+
     _cache_options = {
         "preview_2d": preview_2d, "min_area": min_area_mm2,
         "decimate": decimate_tol_mm, "fill_bbox": fill_as_bbox,
@@ -920,6 +1023,20 @@ def load_gds(gds_path,
         "budget": _poly_budget,
         "force_bbox": tuple(sorted(force_bbox_keys or [])),
         "excl_bbox":  tuple(sorted(exclude_auto_bbox_keys or [])),
+        "protect_via": tuple(sorted(protect_via_keys or [])),
+        "fill_keys":  tuple(sorted(fill_layer_keys or [])),
+        "flat_keys":  tuple(sorted(flat_layer_keys or [])),
+        "contacts_only": bool(contacts_only_3d),
+        "contact_keys": tuple(sorted(contact_keys or [])),
+        "max_polys": max_polys_per_layer,
+        "skip_fill_dt": bool(skip_fill_datatype),
+        "gdstk_union": bool(use_gdstk_union),
+        "compound": bool(compound_per_layer),
+        "stack": _stack_fingerprint(stack_mm),
+        "fill_map": tuple(sorted(
+            k for k, v in (ihp_map or {}).items()
+            if "FILL" in {t.upper() for t in v.get("edi_types", set())})),
+        "transform": repr(transform) if transform is not None else None,
     }
     _ck = _cache_key(gds_path, selected_layers, _cache_options) if use_cache else None
     if _ck:
@@ -1102,6 +1219,24 @@ def load_gds(gds_path,
         # collapses it to a single bounding-box solid instead of processing
         # each polygon individually.
         _exclude_auto_bbox = set(exclude_auto_bbox_keys or [])
+
+        # VIA layers are never auto-collapsed. Both mechanisms below replace a
+        # layer with ONE bounding box, and for a via array that is not a
+        # simplification but a falsehood: an array of separate pillars between
+        # two metals becomes a single solid slab shorting them together. It
+        # also destroys the one thing vias are looked at for — where the
+        # vertical connections actually are.
+        #
+        # A via layer is also the WORST case for the budget's own heuristic,
+        # which collapses the heaviest layers first: vias are always among the
+        # most numerous polygons on a chip, so they are collapsed first while
+        # being the least acceptable to lose.
+        #
+        # Callers that genuinely want vias simplified have two purpose-built
+        # routes that keep the array's structure: force_bbox_keys (explicit,
+        # per layer) and gds.ToggleViaDetailCommand (proximity clustering).
+        _protect_via = set(protect_via_keys or [])
+
         if _bbox_threshold > 0:
             _key_counts: dict = {}
             for lyr, dt, _ in polygons:
@@ -1110,7 +1245,12 @@ def load_gds(gds_path,
                     _key_counts[k] = _key_counts.get(k, 0) + 1
             for k, cnt in _key_counts.items():
                 if cnt > _bbox_threshold and not _is_filler(k[0], k[1]):
-                    if k in _exclude_auto_bbox:
+                    if k in _protect_via:
+                        FreeCAD.Console.PrintMessage(
+                            f"  Auto-bbox skipped: layer {k[0]}/{k[1]} has {cnt:,} polygons "
+                            f"but is a VIA layer — kept in full detail\n"
+                        )
+                    elif k in _exclude_auto_bbox:
                         FreeCAD.Console.PrintMessage(
                             f"  Auto-bbox skipped: layer {k[0]}/{k[1]} has {cnt:,} polygons "
                             f"but user kept full geometry\n"
@@ -1142,7 +1282,16 @@ def load_gds(gds_path,
             _survivor_counts = {}
             for lyr, dt, _ in polygons:
                 k = (lyr, dt)
-                if k in wanted and k not in _fill_keys and not _is_filler(lyr, dt):
+                # Protected vias are left out of the accounting, not merely
+                # out of the collapse list. Counting them was measured to be
+                # actively harmful: on a six-layer import of a real chip the
+                # budget could not reach its target anyway (the protected via
+                # layers alone are 100k polygons), so it collapsed every metal
+                # to a bounding box, took the same 62 s, and left via pillars
+                # floating against featureless slabs. The budget should govern
+                # only what it is actually allowed to act on.
+                if (k in wanted and k not in _fill_keys
+                        and k not in _protect_via and not _is_filler(lyr, dt)):
                     _survivor_counts[k] = _survivor_counts.get(k, 0) + 1
             _remaining = sum(_survivor_counts.values())
             if _remaining > _poly_budget:
@@ -1209,7 +1358,19 @@ def load_gds(gds_path,
                     continue
                 median_um2 = float(_np.median(areas_um2))
                 if median_um2 < MICRO_AREA_BBOX_THRESHOLD_UM2:
-                    if k in _exclude_auto_bbox:
+                    if k in _protect_via:
+                        # Vias are sub-micron BY DEFINITION — an SG13G2
+                        # contact is about 0.16 um^2 against this 2 um^2
+                        # threshold — so this scan, written to kill dummy
+                        # fill, collapses every via layer on every chip. It
+                        # is the mechanism that flattens a via array into a
+                        # slab even when the polygon budget never fires.
+                        FreeCAD.Console.PrintMessage(
+                            f"  Micro-area bbox skipped: layer {k[0]}/{k[1]} "
+                            f"median={median_um2:.4f} um^2 but is a VIA layer "
+                            f"— kept in full detail\n"
+                        )
+                    elif k in _exclude_auto_bbox:
                         FreeCAD.Console.PrintMessage(
                             f"  Micro-area bbox skipped: layer {k[0]}/{k[1]} "
                             f"median={median_um2:.4f} µm² but user kept full geometry\n"
@@ -1269,8 +1430,20 @@ def load_gds(gds_path,
                 continue
             poly_pts = _points_array(poly_pts_raw)
 
-            # contacts_only_3d: non-contact layers → body bbox accumulator
-            if contacts_only_3d and key not in _contact_keys:
+            # contacts_only_3d: non-contact layers → body bbox accumulator.
+            #
+            # Protected vias are exempt. This is the FOURTH mechanism that
+            # flattens a via layer and the one that survives all the others:
+            # it does not collapse the layer to its own bounding box, it
+            # merges it into the single combined body solid, so a via array
+            # comes out as one slab spanning the whole die — visibly bridging
+            # pads that share nothing.
+            #
+            # It fires on layers the user explicitly ticked for immediate
+            # load, since LOD mode categorises vias as "routing" and only
+            # contact layers escape the accumulator.
+            if (contacts_only_3d and key not in _contact_keys
+                    and key not in _protect_via):
                 _body_raw.append(poly_pts)
                 continue
 

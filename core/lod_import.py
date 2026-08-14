@@ -86,6 +86,76 @@ def categorize_layers(all_layers: list, ihp_map: dict) -> dict:
     return categories
 
 
+# Layer names that mean "vertical connection" across the PDKs this workbench
+# handles, matched against the part of the name before the first '.'.
+#
+# A plain substring test, deliberately: prefix/suffix matching missed
+# "TopVia1" and "TopVia2" — the exact two layers in the report that started
+# this — because they neither start nor end with "via". None of the metal,
+# implant or boundary layer names in either bundled PDK contains one of these
+# tokens, which is what the tests pin.
+_VIA_NAME_TOKENS = ("via", "licon", "mcon", "vmim")
+
+# Kept separate: "cont" would also match nothing harmful in the bundled PDKs,
+# but it is short enough to be risky in a PDK we have not seen, so it must
+# match the whole base name rather than appear anywhere in it.
+_VIA_NAME_EXACT = ("cont", "contact")
+
+
+def _name_says_via(name: str) -> bool:
+    base = str(name or "").split(".")[0].strip().lower()
+    if not base:
+        return False
+    if base in _VIA_NAME_EXACT:
+        return True
+    return any(token in base for token in _VIA_NAME_TOKENS)
+
+
+def via_layer_keys(all_layers: list, ihp_map: dict, stackup_data: dict) -> set:
+    """
+    The (layer, datatype) keys that are VIA layers.
+
+    Three independent sources, because no PDK reliably provides all three:
+
+      1. the stackup XML's Type="via"      — most authoritative when present
+      2. the stream map's VIA type         — IHP's .map carries this
+      3. the layer's own name              — the only signal for a PDK
+                                              configured with neither
+
+    Checked by (layer, datatype) BEFORE bare layer number: SKY130 puts met1
+    on 68/20 and the via above it on 68/44, so a lookup by number alone
+    reports the metal and every sky130 via would go unprotected.
+    """
+    keys = set()
+    stack = stackup_data or {}
+    mapping = ihp_map or {}
+    for layer in all_layers or []:
+        key = (layer.get("layer_id", 0), layer.get("datatype", 0))
+
+        entry = stack.get(key)
+        if entry is None:
+            entry = stack.get(key[0])
+        if isinstance(entry, dict) and entry.get("type") == "via":
+            keys.add(key)
+            continue
+
+        # "VIA" alone is NOT enough: IHP's sg13g2.map lists VIA among the
+        # types for every routing metal too ("Metal1 NET,SPNET,PIN,LEFPIN,VIA"),
+        # because a metal layer can carry via shapes in the EDI stream. Taking
+        # that at face value marked Metal1..Metal5 and both TopMetals as vias.
+        # What separates them is NET/SPNET, which only a real routing layer has.
+        m = mapping.get(key)
+        if m:
+            types = {t.upper() for t in m.get("edi_types", set())}
+            if "VIA" in types and not (types & {"NET", "SPNET"}):
+                keys.add(key)
+                continue
+
+        if _name_says_via(layer.get("name")):
+            keys.add(key)
+    return keys
+
+
 def initial_load_layers(all_layers: list, categories: dict) -> list:
     """
     Returns the subset that is loaded immediately on import:
@@ -154,9 +224,38 @@ def build_lod_import_params(
         stack_mm = Core_Functionality.build_stack_mm_from_xml(
             all_layers, ihp_map, stackup_data   # always across the full stack
         )
+        # Close the gap a partial import leaves under the loaded stack.
+        #
+        # Measured over all_layers — which is LYP-intersect-GDS, i.e. the
+        # layers this FILE actually contains, not the whole PDK. That is the
+        # right set: a file holding only the top of the stack has nothing
+        # below Metal5 to sit on, while a file holding Activ already reaches
+        # the die surface and the shift comes out as zero. Using it also
+        # means a layer promoted later from the detail panel lands
+        # consistently with the ones imported immediately.
+        if bool(options.get("drop_to_die_surface", True)):
+            from core.tech.stackup import drop_stack_to_die_surface
+            stack_mm, shift_mm = drop_stack_to_die_surface(stack_mm)
+            if shift_mm:
+                FreeCAD.Console.PrintMessage(
+                    f"[LOD] Layer stack dropped {shift_mm * 1000.0:.4f} µm so "
+                    f"its lowest layer sits on the die surface. Substrate and "
+                    f"epi are unaffected.\n")
 
     all_keys  = {(l["layer_id"], l["datatype"]) for l in all_layers}
     excl_bbox = all_keys - user_bbox_keys
+
+    # VIA layers are protected from automatic simplification unless the user
+    # turns that off, or has explicitly asked for THIS layer as a bounding box
+    # (force_bbox wins — an explicit choice must beat a blanket protection).
+    keep_via_detail = bool(options.get("keep_via_detail", True))
+    via_keys = (via_layer_keys(all_layers, ihp_map, stackup_data) - user_bbox_keys
+                 if keep_via_detail else set())
+    if via_keys:
+        FreeCAD.Console.PrintMessage(
+            f"[LOD] VIA detail protected on {len(via_keys)} layer(s): "
+            + ", ".join(f"{l}/{d}" for l, d in sorted(via_keys)) + "\n"
+        )
 
     load_kwargs = dict(
         transform               = None,
@@ -170,6 +269,7 @@ def build_lod_import_params(
         flat_layer_keys         = flat_layer_keys,
         force_bbox_keys         = user_bbox_keys,
         exclude_auto_bbox_keys  = excl_bbox,
+        protect_via_keys        = via_keys,
         ihp_map                 = ihp_map,
         stack_mm                = stack_mm,
         contacts_only_3d        = lod_mode,
@@ -196,6 +296,7 @@ def build_lod_import_params(
         mesh_3d            = mesh_3d,
         ihp_map            = ihp_map,
         stackup_data       = stackup_data,
+        via_keys           = via_keys,
     )
 
     return load_kwargs, aux
@@ -228,6 +329,11 @@ def get_lazy_load_params(layer_dict: dict, gds_path: str, aux: dict,
         flat_layer_keys         = flat_layer_keys,
         force_bbox_keys         = set(),
         exclude_auto_bbox_keys  = {key},
+        # Promoting a via layer from the detail panel is the main way vias
+        # reach the document at all — LOD mode folds every non-contact layer
+        # into one body box at import time. Without this the micro-area scan
+        # still flattens the layer the user just asked to see.
+        protect_via_keys        = {key} & set(aux.get("via_keys") or ()),
         ihp_map                 = aux.get("ihp_map", {}),
         stack_mm                = single_stack,
         contacts_only_3d        = False,

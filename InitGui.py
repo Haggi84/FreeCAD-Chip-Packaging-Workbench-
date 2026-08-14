@@ -40,6 +40,8 @@ try:
     from session import LoadSessionCommand
     from session import SessionMenuCommand
     from ui import TechConfigDialog  # noqa: F401  (side-effect: registers TechConfigCommand)
+    from ui import ChipTheme   # noqa: F401
+    from ui import DesktopShortcutCommand   # noqa: F401
     from pcb import PCBImportCommand      # noqa: F401
     from pcb import PCBPlacementCommand   # noqa: F401
     from routing import TraceRoutingCommand   # noqa: F401
@@ -89,6 +91,7 @@ class AdvancedMenuCommand:
         ("Define Contact Points",    "DefineContactPointsCommand", "Define_Contact_Points.svg"),
         ("Pin Numbering",            "PinNumberingCommand",        "Pin_Numbering.svg"),
         ("Clear GDSII Import Cache", "ClearGDSCacheCommand",       "Clear_Cache.svg"),
+        ("Create Desktop Shortcut",  "CreateDesktopShortcutCommand", "Desktop_Shortcut.svg"),
     ]
 
     def GetResources(self):
@@ -310,6 +313,7 @@ class MyWorkbench(FreeCADGui.Workbench):
                 [
                     "SessionMenuCommand",
                     "AdvancedMenuCommand",
+                    "ChipThemeCommand",
                     "HelpGuideCommand",
                     "AboutCommand",
                 ],
@@ -507,13 +511,7 @@ class MyWorkbench(FreeCADGui.Workbench):
 
                 lbl = _QW.QLabel(self._TOOLBAR_LABELS[name])
                 lbl.setAlignment(_QC.Qt.AlignCenter)
-                lbl.setStyleSheet(
-                    "QLabel {"
-                    "  color: #546e7a;"
-                    "  font-size: 9px;"
-                    "  font-weight: bold;"
-                    "}"
-                )
+                lbl.setStyleSheet(self._caption_style())
                 outer.addWidget(lbl)
 
                 tb.clear()   # detaches the actions from this toolbar's own
@@ -564,15 +562,7 @@ class MyWorkbench(FreeCADGui.Workbench):
             )
 
             # Style: subtle inset look
-            lbl.setStyleSheet(
-                "QLabel {"
-                "  background: #F5F5F5;"
-                "  border: 1px solid #BDBDBD;"
-                "  border-radius: 3px;"
-                "  padding: 2px 6px;"
-                "  margin: 2px 4px;"
-                "}"
-            )
+            lbl.setStyleSheet(self._status_label_style())
 
             target_tb.addSeparator()
             target_tb.addWidget(lbl)
@@ -585,6 +575,69 @@ class MyWorkbench(FreeCADGui.Workbench):
             _FC.Console.PrintWarning(
                 f"TechConfig: status label injection failed: {exc}\n"
             )
+
+    # ── Chip skin ─────────────────────────────────────────────────────────
+    # Both widgets below set an explicit per-widget stylesheet, which beats
+    # anything inherited from the main window — so they have to ask for the
+    # themed colours rather than receive them. Their light-theme originals
+    # stay as the fallback for anyone who switches the skin off; a near-white
+    # status label on a dark FreeCAD was exactly the problem.
+
+    def _caption_style(self):
+        try:
+            from ui import ChipTheme
+            flavour = ChipTheme.active_flavour()
+            if flavour:
+                import core.theme as _theme
+                return _theme.caption_style(flavour)
+        except Exception:
+            pass
+        return ("QLabel {"
+                "  color: #546e7a;"
+                "  font-size: 9px;"
+                "  font-weight: bold;"
+                "}")
+
+    def _status_label_style(self):
+        try:
+            from ui import ChipTheme
+            flavour = ChipTheme.active_flavour()
+            if flavour:
+                import core.theme as _theme
+                return _theme.status_label_style(flavour)
+        except Exception:
+            pass
+        return ("QLabel {"
+                "  background: #F5F5F5;"
+                "  border: 1px solid #BDBDBD;"
+                "  border-radius: 3px;"
+                "  padding: 2px 6px;"
+                "  margin: 2px 4px;"
+                "}")
+
+    def Activated(self):
+        """
+        Put the chip skin on when this workbench comes to the front.
+
+        Scoped to the workbench on purpose: leaving it restores whatever
+        FreeCAD theme the user had, so installing this workbench never
+        changes how the rest of FreeCAD looks.
+        """
+        try:
+            from ui import ChipTheme
+            if ChipTheme.is_enabled():
+                ChipTheme.apply_theme()
+        except Exception as exc:
+            import FreeCAD as _FC
+            _FC.Console.PrintWarning(f"Chip theme not applied: {exc}\n")
+
+    def Deactivated(self):
+        try:
+            from ui import ChipTheme
+            ChipTheme.remove_theme()
+        except Exception as exc:
+            import FreeCAD as _FC
+            _FC.Console.PrintWarning(f"Chip theme not removed: {exc}\n")
 
     def GetClassName(self):
         return "Gui::PythonWorkbench"

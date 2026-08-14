@@ -414,6 +414,38 @@ Install it into FreeCAD's Python:
 "C:\Program Files\FreeCAD 1.1\bin\python.exe" -m pip install debugpy
 ```
 
+### The desktop shortcut opens FreeCAD but not the workbench
+
+The shortcut passes FreeCAD a generated macro
+(`resources/DI-PASSIONATE_Launch.FCMacro`) that activates the workbench once the GUI is
+up. Open the Report view (**View → Panels → Report view**) and look for a `[Launcher]`
+line:
+
+- *"Chip-Packaging workbench active"* — it worked; nothing to do.
+- *"did not register in time"* — the workbench was not discovered within about ten
+  seconds. Confirm it appears in the workbench dropdown at all; if it does not, that is
+  the real problem (see *Workbench does not appear in the selector* above).
+- No `[Launcher]` line at all — FreeCAD did not run the macro. Check the shortcut's
+  **Target** in its Properties dialog: it should be `FreeCAD.exe` with the macro path in
+  quotes as its argument. Re-run **Create Desktop Shortcut** to regenerate it.
+
+### The desktop shortcut was created but is nowhere on the desktop
+
+On managed Windows 11 the Desktop is usually redirected to OneDrive, and the shortcut is
+written there. The command reports the full path it used in the confirmation dialog and
+in the Report view — check that path before assuming nothing happened.
+
+### The interface stays light / the theme does not apply
+
+The chip skin is applied only while this workbench is the active one, and only if it has
+not been switched off. Choose an accent from **Chip Theme ▾** in the Workbench toolbar; a
+`[ChipTheme]` line in the Report view confirms it. Selecting **Off** there disables it
+permanently, and the choice is remembered between sessions.
+
+If the 3-D background stays dark after switching the theme off, FreeCAD may not have
+reloaded the viewport parameters — reopening the document restores them. The original
+colours are stashed before they are replaced, so they are not lost.
+
 ### FreeCAD crashes on startup after installing the workbench
 
 A syntax error in a workbench file can crash the FreeCAD Python loader. Check the FreeCAD log file:

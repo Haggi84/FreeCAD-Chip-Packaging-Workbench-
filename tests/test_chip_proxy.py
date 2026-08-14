@@ -63,6 +63,9 @@ def run():
         tc.check("footprint extraction is fast (<5 s) even on the full-chip sample",
                   box["elapsed"] < 5.0, f"took {box['elapsed']:.3f} s")
 
+    _check_outline_provenance(tc)
+    _check_dimension_overrides(tc)
+
     # ── thickness: stackup XML including <Substrate Offset> ────────────────
     stackup_data = parse_stackup_xml(_XML)
     tc.check("parse_stackup_xml exposes _substrate_offset_um",
@@ -251,3 +254,100 @@ def run():
 
     FreeCAD.closeDocument(doc.Name)
     return tc.results
+
+
+def _check_outline_provenance(tc):
+    """
+    The die outline must come from the layout's own outline layer when it
+    draws one, and must not include tooling artefacts.
+
+    Both matter for the same reason: a proxy discards the layout and keeps
+    only the box, so the box is the entirety of what it claims. A stray
+    marker overhanging the seal ring, or a Cadence '$$$CONTEXT_INFO$$$' cell
+    folded into the union, silently makes that claim wrong.
+    """
+    d = chip_proxy.describe_die_footprint(_GDS)
+    x0, y0, x1, y1 = d["footprint_mm"]
+    tc.check("describe_die_footprint: ALL_LNA measures 0.78 x 0.98 mm",
+              abs((x1 - x0) - 0.78) < 1e-6 and abs((y1 - y0) - 0.98) < 1e-6,
+              f"got {(x1 - x0):.4f} x {(y1 - y0):.4f}")
+    tc.check("describe_die_footprint: reports where the outline came from",
+              "EdgeSeal" in d["source"], d["source"])
+    tc.check("describe_die_footprint: names the die cell",
+              d["cell"] == "ALL_LNA", d["cell"])
+
+    # 6_final carries BOTH outline layers plus a Cadence context cell, so it
+    # exercises the choice as well as the filtering.
+    if os.path.exists(_GDS_PADFRAME):
+        d2 = chip_proxy.describe_die_footprint(_GDS_PADFRAME)
+        w = d2["footprint_mm"][2] - d2["footprint_mm"][0]
+        h = d2["footprint_mm"][3] - d2["footprint_mm"][1]
+        tc.check("6_final: the seal ring is preferred over prBoundary, which "
+                  "overhangs it by a fraction of a micron",
+                  abs(w - 1.05) < 1e-6 and abs(h - 1.05) < 1e-6,
+                  f"got {w:.4f} x {h:.4f}")
+        names = {c["name"] for c in d2["candidates"]}
+        tc.check("6_final: both outline layers are reported as candidates, "
+                  "so the choice is visible and not silent",
+                  {"EdgeSeal.boundary", "prBoundary.boundary"} <= names,
+                  str(sorted(names)))
+        tc.check("6_final: the Cadence context cell is not chosen as the die",
+                  not chip_proxy.is_artifact_cell(d2["cell"]), d2["cell"])
+
+    tc.check("is_artifact_cell: recognises the Cadence context cell",
+              chip_proxy.is_artifact_cell("$$$CONTEXT_INFO$$$"))
+    tc.check("is_artifact_cell: leaves ordinary cell names alone",
+              not chip_proxy.is_artifact_cell("ALL_LNA")
+              and not chip_proxy.is_artifact_cell("I2cGpioExpanderTop"))
+
+
+def _check_dimension_overrides(tc):
+    """Typed-in dimensions must win, and must not move the pads."""
+    base = {
+        "footprint_mm": (1.0, 2.0, 3.0, 5.0),      # 2.0 x 3.0 mm at (1, 2)
+        "footprint_source": "bounding box of all geometry",
+        "thickness_mm": 0.3,
+        "thickness_source": "no_stackup_default",
+    }
+
+    untouched = chip_proxy.apply_dimension_overrides(dict(base))
+    tc.check("apply_dimension_overrides: all-None changes nothing",
+              untouched["footprint_mm"] == base["footprint_mm"]
+              and untouched["thickness_mm"] == base["thickness_mm"])
+    tc.check("apply_dimension_overrides: provenance is untouched when nothing "
+              "was entered — it must not claim a measurement was typed in",
+              untouched["footprint_source"] == base["footprint_source"]
+              and untouched["thickness_source"] == base["thickness_source"])
+
+    d = chip_proxy.apply_dimension_overrides(dict(base), width_mm=4.0)
+    tc.check("apply_dimension_overrides: width is applied",
+              abs((d["footprint_mm"][2] - d["footprint_mm"][0]) - 4.0) < 1e-9,
+              str(d["footprint_mm"]))
+    tc.check("apply_dimension_overrides: the origin stays put, because the "
+              "pads were measured in these coordinates and re-centring would "
+              "slide every one of them off the die",
+              d["footprint_mm"][0] == 1.0 and d["footprint_mm"][1] == 2.0,
+              str(d["footprint_mm"]))
+    tc.check("apply_dimension_overrides: length is left as measured when "
+              "only width was given",
+              abs((d["footprint_mm"][3] - d["footprint_mm"][1]) - 3.0) < 1e-9)
+    tc.check("apply_dimension_overrides: says the outline was entered by hand",
+              "hand" in d["footprint_source"], d["footprint_source"])
+
+    d = chip_proxy.apply_dimension_overrides(dict(base), thickness_mm=0.2142)
+    tc.check("apply_dimension_overrides: thickness is applied",
+              abs(d["thickness_mm"] - 0.2142) < 1e-9)
+    tc.check("apply_dimension_overrides: thickness provenance records the "
+              "override, so a hand value is never mistaken for a PDK one",
+              d["thickness_source"] == "entered_by_hand")
+    tc.check("apply_dimension_overrides: a thickness override leaves the "
+              "footprint alone",
+              d["footprint_mm"] == base["footprint_mm"])
+
+    for bad in (0.0, -1.0):
+        d = chip_proxy.apply_dimension_overrides(
+            dict(base), width_mm=bad, thickness_mm=bad)
+        tc.check(f"apply_dimension_overrides: ignores a non-positive {bad} "
+                  f"rather than building a degenerate block",
+                  d["footprint_mm"] == base["footprint_mm"]
+                  and d["thickness_mm"] == base["thickness_mm"])

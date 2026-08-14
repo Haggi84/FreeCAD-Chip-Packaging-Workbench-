@@ -1,0 +1,47 @@
+#-------------------------------------------------------------------------
+# Stream layer mapping table for SkyWater SKY130 (sky130A)
+#
+# Same four-column format as the IHP sg13g2.map this workbench already
+# reads: <name>  <types>  <GDS layer>  <GDS datatype>
+#
+# Layer/datatype numbers are the published sky130A values. This table is a
+# packaging-oriented subset covering the routing metals, their vias, the
+# pad opening and the cell boundary.
+#-------------------------------------------------------------------------
+#NAME             TYPES                       LAYER   DATATYPE
+#==============   ==============              =====   ========
+
+nwell            LEFOBS                     64      20
+diff             NET,SPNET,PIN,LEFPIN       65      20
+tap              NET,SPNET,PIN,LEFPIN       65      44
+poly             NET,SPNET,PIN,LEFPIN       66      20
+licon1           VIA                        66      44
+li1              NET,SPNET,PIN,LEFPIN       67      20
+mcon             VIA                        67      44
+met1             NET,SPNET,PIN,LEFPIN       68      20
+via              VIA                        68      44
+met2             NET,SPNET,PIN,LEFPIN       69      20
+via2             VIA                        69      44
+met3             NET,SPNET,PIN,LEFPIN       70      20
+via3             VIA                        70      44
+met4             NET,SPNET,PIN,LEFPIN       71      20
+via4             VIA                        71      44
+met5             NET,SPNET,PIN,LEFPIN       72      20
+pad              LEFOBS                     76      20
+hvtp             LEFOBS                     78      44
+nsdm             LEFOBS                     93      44
+psdm             LEFOBS                     94      20
+npc              LEFOBS                     95      20
+prBoundary       LEFOBS                     235     4
+li1              PIN,LEFPIN                 67      16
+li1              NAME                       67      5
+met1             PIN,LEFPIN                 68      16
+met1             NAME                       68      5
+met2             PIN,LEFPIN                 69      16
+met2             NAME                       69      5
+met3             PIN,LEFPIN                 70      16
+met3             NAME                       70      5
+met4             PIN,LEFPIN                 71      16
+met4             NAME                       71      5
+met5             PIN,LEFPIN                 72      16
+met5             NAME                       72      5

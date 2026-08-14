@@ -45,6 +45,24 @@ _EMPTY_PROFILE = {
 
 _DEFAULT_NAME = "Default"
 
+# Profiles that ship with the workbench. Seeded on first run and offered by
+# "Load bundled PDK" in the Technology Configuration dialog.
+#
+# name -> (description, subdirectory, lyp, map, xml)
+BUILTIN_PROFILES = {
+    "IHP-PDK SG13G2": (
+        "IHP SG13G2 BiCMOS 130 nm PDK — 200 µm stack",
+        "IHP-PDK_SG13G2", "sg13g2.lyp", "sg13g2.map", "SG13G2_200um.xml",
+    ),
+    "SkyWater SKY130": (
+        "SkyWater SKY130 (sky130A) open PDK — 300 µm assumed die thickness",
+        "SkyWater-PDK_SKY130", "sky130.lyp", "sky130.map", "SKY130A_300um.xml",
+    ),
+}
+
+# Which one a fresh install starts on.
+_SEED_ACTIVE = "IHP-PDK SG13G2"
+
 
 # ── Manager ────────────────────────────────────────────────────────────────────
 
@@ -56,7 +74,7 @@ class TechConfigManager:
         self._local:  dict = dict(_EMPTY_PROFILE)
         self._config_file: Path = self._resolve_config_path()
         self._load_global()
-        self._ensure_ihp_sg13g2_profile()
+        self._ensure_builtin_profiles()
         self._init_local()
 
     # ── Config-file location ───────────────────────────────────────────────
@@ -92,23 +110,51 @@ class TechConfigManager:
             except Exception:
                 pass
 
-    def _ensure_ihp_sg13g2_profile(self):
-        """Seed the built-in IHP-PDK SG13G2 profile on first run.
+    @staticmethod
+    def _stack_root() -> Path:
+        return Path(__file__).parent.parent / "resources" / "stack_info"
 
-        Only runs when no user config file exists yet, so existing user
-        settings are never overwritten.
+    @classmethod
+    def builtin_profile(cls, name: str) -> dict:
+        """The paths for one bundled PDK, or an empty profile if unknown."""
+        spec = BUILTIN_PROFILES.get(name)
+        if spec is None:
+            return dict(_EMPTY_PROFILE)
+        description, subdir, lyp, map_, xml = spec
+        d = cls._stack_root() / subdir
+        return {
+            "description": description,
+            "lyp_path":    str(d / lyp),
+            "map_path":    str(d / map_),
+            "xml_path":    str(d / xml),
+        }
+
+    @staticmethod
+    def builtin_profile_names() -> list:
+        return list(BUILTIN_PROFILES.keys())
+
+    def _ensure_builtin_profiles(self):
         """
-        profile_name = "IHP-PDK SG13G2"
-        if self._config_file.exists():
+        Seed the bundled PDK profiles.
+
+        A profile is only written if a profile of that name does not already
+        exist, so a user who edited "IHP-PDK SG13G2" keeps their edits — and
+        so a PDK added in a later release (SKY130 was) still appears for
+        someone whose config file was written before it existed. The earlier
+        version bailed out entirely once the config file was present, which
+        would have hidden every future addition.
+        """
+        added = []
+        for name in BUILTIN_PROFILES:
+            if name in self._global.get("profiles", {}):
+                continue
+            self.set_profile(name, self.builtin_profile(name))
+            added.append(name)
+        if not added:
             return
-        stack_dir = Path(__file__).parent.parent / "resources" / "stack_info" / "IHP-PDK_SG13G2"
-        self.set_profile(profile_name, {
-            "description": "IHP SG13G2 BiCMOS 130 nm PDK — 200 µm stack",
-            "lyp_path":    str(stack_dir / "sg13g2.lyp"),
-            "map_path":    str(stack_dir / "sg13g2.map"),
-            "xml_path":    str(stack_dir / "SG13G2_200um.xml"),
-        })
-        self.set_active_name(profile_name)
+        if not self.get_active_name() or self.get_active_name() == _DEFAULT_NAME:
+            self.set_active_name(
+                _SEED_ACTIVE if _SEED_ACTIVE in added else added[0])
         self.save_global()
 
     def save_global(self):
@@ -178,12 +224,19 @@ class TechConfigManager:
         """Copy a specific global profile into the session config."""
         self._local = dict(self.get_profile(name))
 
-    def apply_builtin_to_local(self):
-        """Set the session config to the bundled IHP SG13G2 resources."""
-        stack_dir = Path(__file__).parent.parent / "resources" / "stack_info" / "IHP-PDK_SG13G2"
-        self._local["lyp_path"] = str(stack_dir / "sg13g2.lyp")
-        self._local["map_path"] = str(stack_dir / "sg13g2.map")
-        self._local["xml_path"] = str(stack_dir / "SG13G2_200um.xml")
+    def apply_builtin_to_local(self, name: str = _SEED_ACTIVE):
+        """
+        Set the session config to one of the bundled PDKs.
+
+        Defaults to SG13G2 so the pre-existing no-argument callers keep the
+        behaviour they had before SKY130 was added.
+        """
+        profile = self.builtin_profile(name)
+        if not profile.get("lyp_path"):
+            return
+        self._local["lyp_path"] = profile["lyp_path"]
+        self._local["map_path"] = profile["map_path"]
+        self._local["xml_path"] = profile["xml_path"]
 
     def set_local(self, lyp: str = None, map_: str = None, xml: str = None):
         """Override individual paths for the current session only."""

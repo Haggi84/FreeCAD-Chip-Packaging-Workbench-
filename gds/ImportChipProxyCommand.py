@@ -73,6 +73,18 @@ class ImportChipProxyCommand:
 
         try:
             proxy_data = extract_chip_proxy(gds_path, lyp_path, map_path, xml_path)
+
+            # Confirm the outer box BEFORE building it. A proxy keeps nothing
+            # but its dimensions, and thickness in particular cannot be read
+            # from a GDS at all — warning about that after the block already
+            # exists leaves the user to fix it by hand.
+            from ui.ChipDimensionsDialog import ChipDimensionsDialog
+            dlg = ChipDimensionsDialog(proxy_data, FreeCADGui.getMainWindow())
+            if dlg.exec_() != QtWidgets.QDialog.Accepted:
+                FreeCAD.Console.PrintMessage("[ChipProxy] Import cancelled.\n")
+                return
+            proxy_data = dlg.apply_to(proxy_data)
+
             block = build_chip_proxy_object(doc, proxy_data, name=name)
         except Exception as exc:
             import traceback
@@ -94,16 +106,13 @@ class ImportChipProxyCommand:
         shown_name = block.Label.replace(" Die Block", "")
         msg = (
             f"Chip proxy '{shown_name}' created:\n"
-            f"  Footprint:  {w:.3f} x {h:.3f} mm\n"
-            f"  Thickness:  {proxy_data['thickness_mm']:.3f} mm\n"
+            f"  Width  (X): {w:.4f} mm\n"
+            f"  Length (Y): {h:.4f} mm\n"
+            f"  Thickness:  {proxy_data['thickness_mm']:.4f} mm\n"
             f"  Bond pads:  {len(proxy_data['pads'])}\n"
+            f"\nOutline:   {proxy_data.get('footprint_source', 'unknown')}"
+            f"\nThickness: {proxy_data.get('thickness_source', 'unknown')}"
         )
-        if proxy_data["thickness_source"] != "xml_with_substrate":
-            msg += (
-                "\nNote: no stackup XML with a substrate offset was found, "
-                "so the thickness is an estimate, not a PDK-verified value.\n"
-                "Provide a stackup XML for an accurate number."
-            )
         QtWidgets.QMessageBox.information(None, "Chip Proxy Imported", msg)
 
     def IsActive(self):

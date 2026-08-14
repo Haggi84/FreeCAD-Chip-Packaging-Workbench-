@@ -74,7 +74,7 @@ caption (Tech, Import, Render, Package, Bonding, Routing, Workbench).
 
 | Tool | Description |
 |---|---|
-| **Technology Configuration** | Select the active PDK profile (`.lyp` / `.map` / stackup `.xml`) once and reuse it across all import dialogs. The status bar shows which files resolved. |
+| **Technology Configuration** | Select the active PDK profile (`.lyp` / `.map` / stackup `.xml`) once and reuse it across all import dialogs. The status bar shows which files resolved. Two PDKs ship with the workbench — see [Bundled PDKs](#bundled-pdks). |
 
 ### Import
 
@@ -146,11 +146,74 @@ caption (Tech, Import, Render, Package, Bonding, Routing, Workbench).
 | **Define Contact Points** | Batch-place markers at the top-face centre of selected layer objects. |
 | **Pin Numbering** | Generate pin-number labels around a leadframe. |
 | **Clear GDSII Import Cache** | Delete cached import results (imports are cached automatically; ~10x faster re-open). |
+| **Create Desktop Shortcut** | Windows only — put an icon on the desktop that opens FreeCAD straight into this workbench. |
 
 ### Workbench
 
 **Session ▾** (save / load a design as a native `.FCStd`), **Advanced Tools ▾**,
-**Help Guide** (in-app documentation), and **About**.
+**Chip Theme ▾**, **Help Guide** (in-app documentation), and **About**.
+
+---
+
+## Appearance
+
+### Chip Theme
+
+The workbench ships its own dark skin — a silicon-slate base with a
+material-coloured accent — and applies it while the workbench is active. The
+3-D viewport background is matched to it, so the viewport does not read as a
+bright hole in a dark window.
+
+Pick an accent from the **Chip Theme ▾** dropdown:
+
+| Flavour | Accent | Evokes |
+|---|---|---|
+| **Copper** (default) | `#c87137` | A routed trace |
+| **Gold** | `#d4a017` | A bond wire |
+| **Solder** | `#3f8f5a` | Solder mask |
+| **Silicon** | `#5a7fa8` | A bare die, for anyone who finds warm accents loud |
+
+Only the accent changes; the dark base is shared, so switching flavour does
+not mean re-learning the interface.
+
+The skin is **scoped to this workbench and fully reversible**:
+
+- It is layered on the main window, never on `QApplication`, so your own
+  FreeCAD theme is not overwritten — Qt propagates the sheet to child
+  widgets, which is what makes one line of setup reach every panel.
+- Switching to another workbench removes it, restoring FreeCAD's normal look.
+  Installing this workbench therefore never changes how the rest of FreeCAD
+  appears.
+- The 3-D background lives in FreeCAD's parameter store rather than in Qt, so
+  it cannot be undone by dropping a stylesheet. The previous values are
+  stashed before they are replaced and restored when the theme is switched
+  off — your own colours come back, not a guess at the defaults.
+
+Choose **Off** in the dropdown to keep FreeCAD's own theme permanently; the
+choice is remembered between sessions.
+
+### Desktop Shortcut (Windows)
+
+**Advanced Tools ▾ → Create Desktop Shortcut** puts a launcher on the desktop
+that starts FreeCAD and opens directly in this workbench. It asks before
+creating or replacing anything.
+
+FreeCAD has no `--workbench` command-line switch, so the shortcut instead
+passes FreeCAD a small generated macro
+(`resources/DI-PASSIONATE_Launch.FCMacro`), which FreeCAD executes once the
+GUI is up. That macro *retries* rather than activating once: FreeCAD
+discovers `Mod/` directories on a timer, so a single immediate call would
+succeed or fail depending on disk speed. If the workbench never registers,
+the macro says so in the Report view and FreeCAD simply opens normally.
+
+The icon is written as a genuine multi-size `.ico`
+(16/24/32/48/64/128/256 px) rather than one bitmap, because Windows picks a
+different size for the taskbar, the desktop and the alt-tab switcher, and a
+single-size icon gets the rest by smearing that one.
+
+If your Desktop is redirected to OneDrive — the norm on managed Windows 11 —
+the shortcut is written there rather than to `%USERPROFILE%\Desktop`, which
+by then is usually an empty folder nobody looks at.
 
 ---
 
@@ -201,6 +264,141 @@ The layer selector exposes the import options that matter for large layouts:
 | 3-D extrusion | Extrude each layer to its real Z-height from the stackup |
 | Contacts-only 3-D | Full geometry for bond-pad layers only; everything else collapses to a bounding solid |
 | Auto PIN contact detection | Create ContactPoint markers on top PIN layers automatically |
+
+### The die body (epi + substrate)
+
+**Add the die body below the layout** in the import dialog (on by default) builds the
+silicon a die is actually made of.
+
+A die is mostly *not* the interconnect. On IHP SG13G2 the drawn stack is 14.23 µm and the
+body beneath it is 183.75 µm — 3.75 µm of epi on 180 µm of substrate — so modelling only the
+layers produced an object with **under 8 % of the real part's thickness**. Anything treating
+the die as a physical thing was working from the wrong solid: bond-wire clearance, package
+cavity height, a thermal export.
+
+The stackup XML already declared both, as `<Dielectric>` entries — `parse_stackup_xml` simply
+discarded that section. The body is now derived from them:
+
+| PDK | Body | Total |
+|---|---|---|
+| IHP SG13G2 | Substrate 180 µm, then EPI 3.75 µm | 183.75 µm |
+| SkyWater SKY130 | Substrate 298 µm, then EPI 2 µm | 300 µm |
+
+The slabs span the **die outline** (seal ring / prBoundary), not the bounding box of whatever
+layers happened to load — in LOD mode that is two contact layers, which would put a substrate
+under only part of the die. Each is tagged `IsDieBody` and records its `StackMaterial`, is
+coloured from the stackup's own `<Material>` entry, and is 60 % transparent (silicon is the
+largest object in the document and would otherwise hide the entire layout).
+
+Which dielectrics form the body is **derived, not assumed**: the `<Dielectrics>` list runs
+top-down and also contains AIR, passivation and inter-metal oxide, none of which belong below
+the die — AIR alone is 200 µm and would more than double it. Accumulating from the bottom
+until the total reaches the declared `<Substrate Offset>` picks out exactly the right
+entries, and the sum then acts as a check. If the two disagree, **nothing is built** and a
+warning says why: a body of the wrong depth would look plausible and be silently wrong.
+
+The result meets the die's own `z0` underneath and lands exactly on z = 0 on top, so the
+proxy and the full import describe the same physical part.
+
+### Closing the gap under a partial import
+
+**Drop the layer stack onto the die surface** in the import dialog (on by default).
+
+Importing a subset of the layers leaves the loaded stack floating. Selecting only the top of
+an SG13G2 stack puts Metal5 at 5.09 µm with nothing beneath it, because Activ, the contacts
+and Metal1–4 were never built — a **4.89 µm gap** between the die surface and the lowest
+thing in the document. The seal-ring outline sits down at the surface while the metals hover
+above it.
+
+The loaded layers now slide down together so the lowest one starts at z = 0, on top of the
+epi. Relative spacing is preserved — the stack moves as one — and the substrate and epi do
+not move.
+
+Two rules keep the correction from doing damage:
+
+- **Only layers whose height the stackup actually states are measured and moved.** Marker
+  layers — `EdgeSeal.boundary`, `prBoundary`, `Recog` — are absent from the stackup and get
+  rank-based fallback heights that carry no physical meaning. (This is why the seal ring sat
+  at 0.0–0.2 µm in one file and at 1.6–1.8 µm, interleaved among real metals, in another.)
+  They stay put, which is where the die outline belongs.
+- **It is a no-op for a full import.** When Activ is loaded it already sits at z = 0, the
+  shift computes to zero, and every layer keeps its true PDK height. Verified on
+  `6_final.gds`: shift 0.0000 µm.
+
+Measured on `IC_Pad_EdgeSeal.boundary.gds`, a top-of-stack selection:
+
+| Layer | Before | After |
+|---|---|---|
+| EdgeSeal.boundary (marker) | 0.0000 µm | 0.0000 µm — not moved |
+| Metal5 (lowest real layer) | 5.0900 µm | **0.0000 µm** |
+| TopMetal2 | 11.2303 µm | 6.1403 µm |
+
+Turn it off to keep every layer at its true PDK height and accept the gap.
+
+### VIA layers
+
+**Keep VIA layers in full detail** in the import dialog (on by default) guarantees that via
+arrays are built as real geometry.
+
+**Four** separate mechanisms in the loader can replace a via layer with a box, and all four
+produce the same falsehood: separate pillars between two metals become a solid slab shorting
+them together, with no error reported anywhere.
+
+| Mechanism | Trips on | Result |
+|---|---|---|
+| Per-layer polygon threshold | > 5,000 polygons | layer → its own bbox |
+| Total polygon budget | heaviest layers first | layer → its own bbox |
+| Micro-area pre-scan | median polygon < 2 µm² | layer → its own bbox |
+| **`contacts_only_3d` body box** | any non-contact layer in LOD mode | layer merged into **one die-wide slab** |
+| **Automatic via simplification** | *every* import, unconditionally | real via arrays hidden, replaced by clustered blocks |
+
+The last one runs *after* the geometry is built and swaps the finished via arrays for
+clustered blocks, so on its own it undid every protection applied during the build — which is
+how an import could log `VIA detail protected` and still show blocks. It is now skipped when
+**Keep VIA layers in full detail** is on; **Toggle VIA Detail** still clusters them on
+demand.
+
+The last is the one that survives the others and is the most visibly wrong: it does not
+collapse the layer to its own bounding box, it merges it into the single combined body
+solid, so the via array becomes a block spanning the whole die that visibly bridges pads
+sharing nothing. It fires on layers you *explicitly ticked* for immediate load, because LOD
+mode categorises vias as "routing" and only contact layers escape the accumulator.
+
+The micro-area scan catches every chip regardless of size. It was written to kill sub-micron
+dummy fill and trips below 2 µm² — but **a via is sub-micron by definition**. SG13G2's
+TopVia1 measures 0.1764 µm². All four mechanisms now consult the protected set, and the
+bbox ones report the layer they kept in the Report view.
+
+Measured on `samples/IC_Pad_EdgeSeal.boundary.gds` (the GSGPad cell), imported in LOD mode
+exactly as the GUI does it:
+
+| Layer | Before | After |
+|---|---|---|
+| TopVia1 (125/0) | 1 solid, 0.1000 × 0.2800 × 0.0792 mm — the die-wide body slab | **884 solids**, 0.0139 × 0.2214 × 0.0009 mm |
+| TopVia2 (133/0) | 1 solid, same slab | **154 solids**, 0.0127 × 0.2205 × 0.0028 mm |
+
+A via layer is identified from three independent sources, since no PDK provides all three:
+the stackup's `Type="via"`, the stream map's `VIA` type, and the layer name. The map test
+needs care — IHP's `sg13g2.map` lists `VIA` among the types for *every* routing metal
+(`Metal1 NET,SPNET,PIN,LEFPIN,VIA`), because a metal can carry via shapes in the EDI stream;
+what separates a real via is the absence of `NET`/`SPNET`.
+
+Full via detail is not free: on a 3.2-million-polygon chip, a six-layer import goes from
+**10 s to 63 s** and builds 101,187 via solids instead of two boxes. Turn the option off, or
+mark a specific layer as a bounding box in the layer list — an explicit per-layer request
+still outranks the blanket protection.
+
+Two other, deliberate ways to reduce via detail remain untouched, and both keep the array's
+structure rather than replacing it with a slab: **Toggle VIA Detail** (proximity clustering
+into blocks — this is what creates the `GDS Via Blocks` group) and per-layer bounding boxes
+in the layer selector.
+
+> **If an import still shows flattened vias, clear the import cache**
+> (Advanced Tools ▾ → Clear GDSII Import Cache). Entries written before this
+> release were built with the vias already collapsed. The cache key now covers
+> every argument that changes the geometry, so old entries can no longer be
+> matched — but a `GDS cache hit … skipping import` line in the Report view
+> immediately after `VIA detail protected` is the signature of a stale entry.
 
 ### Level of Detail
 
@@ -438,6 +636,64 @@ off the part.
 
 ---
 
+## Bundled PDKs
+
+Two profiles are seeded into **Technology Configuration** on first run, and any profile
+added by a later release appears automatically without disturbing profiles you have
+edited yourself.
+
+| Profile | Files | Notes |
+|---|---|---|
+| **IHP-PDK SG13G2** | `sg13g2.lyp`, `sg13g2.map`, `SG13G2_200um.xml` | BiCMOS 130 nm. Die measures 0.198 mm thick from the stackup. |
+| **SkyWater SKY130** | `sky130.lyp`, `sky130.map`, `SKY130A_300um.xml` | sky130A open PDK. Metal stack `li1` → `met5`. |
+
+### What the SKY130 files are, and are not
+
+The layer/datatype numbers and the metal-stack Z heights are the published sky130A values.
+Two things are deliberately *not* claims about the PDK:
+
+- **The display colours are this workbench's, not SkyWater's** — chosen for legibility here.
+- **The 300 µm substrate is a packaging assumption, not a PDK constant.** SKY130 does not
+  specify a die thickness: a wafer is ~725 µm as fabricated and ground to whatever the
+  assembly flow needs. The assumption is stated in the file *name*, the same convention
+  `SG13G2_200um.xml` already uses — 200 µm is equally an assembly choice there. If your
+  dies are thinned differently, copy the file and change `<Substrate Offset=…/>`, or just
+  type the real number into the Chip Proxy Dimensions dialog at import.
+
+The `.lyp` is a **curated subset**, covering what packaging work actually needs: the routing
+metals, the vias between them, the pad opening and the cell boundary. Implant and pin/label
+layers are present but `visible=false`, which is what keeps them out of imported geometry.
+To use the full official file instead, point the profile's LYP path at the `sky130A.lyp`
+from your own PDK install.
+
+### Two things SKY130 required that SG13G2 never exposed
+
+**Layer numbers are reused.** SG13G2 gives every layer its own number (Metal1 = 8,
+Via1 = 19, Metal2 = 10). SKY130 does not: `met1` is 68/20 and the via above it is **68/44**,
+sharing layer 68 — as do 69, 70 and 71. The stackup was keyed by layer number alone, so one
+of each pair silently inherited the other's Z position: geometry at the wrong height with no
+error anywhere. `<Layer>` now accepts an optional `Datatype` attribute and lookups try
+`(layer, datatype)` first. The IHP stackup declares no datatypes and is unaffected. Where a
+number is still ambiguous, the **conductor** wins it — guessing "metal" is the better error
+than guessing "via".
+
+**KLayout's `@n` source suffix.** The official `sky130A.lyp` writes `<source>68/20@1</source>`
+on every entry, and the parser did `int("20@1")` — which raised, warned once per layer, and
+left the import with zero visible layers. That reads as "the layout is empty", not as a parse
+failure. Both forms are now accepted, which is what makes "point at your own PDK install"
+work at all.
+
+### Die outlines
+
+SKY130 layouts have no seal ring, so the die outline comes from `prBoundary` on **235/4** —
+which is also the layer Cadence Virtuoso writes a prBoundary on by default, and therefore
+turns up in SG13G2 exports too. It is tried *last*, after `EdgeSeal` (39/4): an SG13G2 layout
+carrying both keeps using its seal ring, while a SKY130 layout gets a real outline instead of
+the raw bounding box. Verified on `samples/PassionateSocRing.gds`, a genuine sky130 layout,
+which measures 2.1500 × 2.1500 mm from `235/4`.
+
+---
+
 ## Working on a proxy instead of full geometry
 
 Full GDSII geometry is expensive to *display*, not to compute: after import, FreeCAD still
@@ -448,6 +704,48 @@ large chip. The workbench is built so you never have to pay that.
 proxy builds in **0.78 s**, carries all 20 bond pads as ContactPoints, and trace routing,
 wire bonding and the Design Rule Check all run against it unchanged. They depend on the
 semantic layer — contact points, footprint, real stack thickness — never on the polygons.
+
+### The outer dimensions are the proxy's whole claim
+
+A proxy discards the layout and keeps only the box, so the box has to be right. Import
+therefore ends with a **Chip Proxy Dimensions** dialog showing width, length and thickness
+with the provenance of each, editable before anything is built.
+
+**Width and length** are read from the layout's own outline layer when it draws one, in
+this order of authority:
+
+| Layer | Meaning |
+|---|---|
+| `EdgeSeal.boundary` (39/4) | The seal ring — the physical edge of the diced die, which is what a package actually contains. Preferred. |
+| `prBoundary.boundary` (189/4) | The place-and-route boundary: design intent, typically a fraction of a micron larger. |
+
+Falling back to the bounding box of all geometry when neither is present. The raw bounding
+box is *not* the die: labels, alignment marks, dummy fill and P&R markers routinely stick
+out past the physical edge. On `6_final.gds` that difference is real — the seal ring is
+exactly 1.0500 × 1.0500 mm while the overall bounding box is 1.0502 × 1.0508 mm.
+
+An outline layer is only believed if it accounts for at least 80 % of the bounding-box
+area, so a lone stray marker sitting on an outline layer cannot shrink the die — an error
+that would be far worse than being a micron too large.
+
+Cadence Virtuoso's `$$$CONTEXT_INFO$$$` cell is excluded. It carries no geometry of its own
+but does reference other cells, so it appears in `top_level()` with a bounding box and used
+to be unioned into the die silently.
+
+**Thickness cannot be read from a GDS at all** — it comes from the stackup XML. With the
+IHP SG13G2 profile configured, `6_final` measures 0.198 mm from the PDK. Without a stackup
+the import falls back to a flat 0.3 mm, and the dialog says so in as many words rather than
+warning after the block already exists. Type the real value in and it is recorded as
+`entered_by_hand`, so a hand-entered number is never mistaken for a PDK-derived one.
+
+Resizing by hand keeps the footprint's **origin** and grows towards +X/+Y rather than
+re-centring: the bond pads were measured in those coordinates, and moving the origin would
+slide every one of them off the die.
+
+The result is stored on the block as `DieWidth`, `DieLength`, `DieThickness`,
+`FootprintSource` and `ThicknessSource` — readable in the property editor, and unlike
+`Shape.BoundBox` they keep reporting the die's own size after the chip has been positioned
+on a carrier.
 
 **View in GDS3D** hands the looking to a tool built for it.
 [GDS3D](https://github.com/trilomix/GDS3D) is an external C++/OpenGL viewer that renders a
@@ -556,6 +854,9 @@ DI-PASSIONATE-FreeCAD/
 │   ├── trace_walkaround.py     KiCad-style posture head and walk-around
 │   ├── trace_routing.py        Grid, visibility graph and A* router
 │   ├── TechConfig.py           Active PDK profile
+│   ├── theme.py                Chip skin palette and stylesheet generation
+│   ├── ico.py                  Multi-size Windows .ico writer
+│   ├── desktop_shortcut.py     Launcher macro and .lnk generation
 │   ├── gds_io/                 GDS caching, inspection, extraction
 │   ├── tech/                   Technology file parsers and stackup handling
 │   └── geometry/               Polygon, transform and mesh utilities
@@ -569,7 +870,8 @@ DI-PASSIONATE-FreeCAD/
 ├── ui/                     Dialogs and dock panels
 ├── help/                   In-app help and about
 ├── tests/                  Headless test suite
-└── resources/              Icons, sample layouts, help content, PDK files
+└── resources/              Icons, sample layouts, help content
+    └── stack_info/         Bundled PDKs — IHP-PDK_SG13G2, SkyWater-PDK_SKY130
 ```
 
 The codebase separates **algorithms** (`core/`, Qt-free and headlessly testable) from
@@ -585,9 +887,16 @@ tests need a live FreeCAD and OCCT:
 & "C:\Program Files\FreeCAD 1.1\bin\freecadcmd.exe" tests\run_all.py
 ```
 
-451 checks across 18 modules covering geometry construction, GDS import, level-of-detail
-state, routing, obstacle handling and session state. Results are also written to
-`tests/results.log`. The runner exits non-zero on failure, so it is suitable for CI.
+986 checks across 30 modules covering geometry construction, GDS import, level-of-detail
+state, routing, obstacle handling, session state, theme generation and shortcut
+creation. Results are also written to `tests/results.log`. The runner exits non-zero on
+failure, so it is suitable for CI.
+
+Anything that needs a live GUI — applying a stylesheet, rasterising an SVG, the COM call
+that writes a `.lnk` — is deliberately left out of `core/` so the surrounding logic stays
+testable. The `.ico` container, the launcher macro and the PowerShell quoting are all
+verified by parsing back what was produced rather than by re-deriving it from the code
+that produced it.
 
 ---
 

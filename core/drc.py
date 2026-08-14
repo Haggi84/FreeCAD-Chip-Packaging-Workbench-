@@ -315,26 +315,70 @@ def _clearance_check(name_a, shape_a, name_b, shape_b, min_clearance_mm: float, 
     return []
 
 
-# ── entry point ──────────────────────────────────────────────────────────────
+# ── rule registry ────────────────────────────────────────────────────────────
+#
+# Each rule is a callable (ctx) -> list[DRCFinding], registered here at import
+# time. run_drc() below is now just: build the shared context once, then run
+# every registered rule against it. Adding a rule = one @rule("id") function;
+# it never touches run_drc. This keeps run_drc from growing back into the kind
+# of god-function core.Core_Functionality was refactored out of.
+#
+# Registration order is the order findings are produced (min-width before
+# clearance, matching the original run_drc), so existing test expectations that
+# don't care about order stay green either way.
 
-def run_drc(doc, min_clearance_mm: float = DEFAULT_MIN_CLEARANCE_MM,
-           min_trace_width_mm: float = DEFAULT_MIN_TRACE_WIDTH_MM):
+RULES = []   # list[(rule_id, fn)]
+
+
+def rule(rule_id):
+    """Register a rule function; returns it unchanged so it stays callable."""
+    def _register(fn):
+        RULES.append((rule_id, fn))
+        return fn
+    return _register
+
+
+class _DRCContext:
+    """Everything the rules share, built once per run_drc call.
+
+    Pure-property rules (min-width, future max-wire-length/loop-height) read
+    only .routed and .params; geometric rules (clearance) additionally use the
+    shared spatial index and the same-net exemption map. The index and exempt
+    map are built eagerly here exactly as the original run_drc did — same work,
+    same cost, just hoisted so every rule sees the same context.
     """
-    Check every Trace_NNN / BondWire_NNN in *doc* for clearance violations
-    (against each other and against nearby pre-existing copper) and, for
-    traces, a minimum width. Returns a list of DRCFinding.
-    """
+
+    def __init__(self, doc, routed, params):
+        self.doc = doc
+        self.routed = routed
+        self.routed_names = {o.Name for o in routed}
+        self.params = params
+
+        # Scale reference for the substrate heuristic (see _SUBSTRATE_AREA_RATIO):
+        # a candidate far bigger than the largest routed object itself is a
+        # board/paddle/body the object is routed ON, not a feature beside it.
+        max_routed_area = 0.0
+        for o in routed:
+            try:
+                max_routed_area = max(max_routed_area, _footprint_area(o.Shape.BoundBox))
+            except Exception:
+                continue
+
+        # ONE shared spatial index over copper AND the workbench's own routed
+        # objects — trace-vs-copper and trace-vs-trace fall out of the same loop.
+        self.copper_index = _CopperIndex(doc, max_footprint_area_mm2=max_routed_area)
+        self.exempt_map = {o.Name: _exempt_solids_for(doc, o, self.copper_index)
+                           for o in routed}
+
+
+# ── rules ────────────────────────────────────────────────────────────────────
+
+@rule("min-width")
+def _check_min_width(ctx):
+    """Trace width — a pure property read, no geometry needed."""
+    min_trace_width_mm = ctx.params.get("min_trace_width_mm", DEFAULT_MIN_TRACE_WIDTH_MM)
     findings = []
-    if doc is None:
-        return findings
-
-    routed = [o for o in doc.Objects
-              if (_is_routing_trace(o) or _is_bond_wire(o)) and _has_geometry(o)]
-    if not routed:
-        return findings
-
-    # Trace width — a pure property read, no geometry needed.
-    for o in routed:
+    for o in ctx.routed:
         if not _is_routing_trace(o):
             continue
         w = getattr(o, "TraceWidth", None)
@@ -350,28 +394,24 @@ def run_drc(doc, min_clearance_mm: float = DEFAULT_MIN_CLEARANCE_MM,
                 f"{o.Name} width {w:.4f} mm is below the minimum {min_trace_width_mm:g} mm",
                 None,
             ))
+    return findings
 
-    routed_names = {o.Name for o in routed}
-    # Scale reference for the substrate heuristic (see _SUBSTRATE_AREA_RATIO):
-    # a candidate far bigger than the largest routed object itself is a
-    # board/paddle/body the object is routed ON, not a feature beside it.
-    max_routed_area = 0.0
-    for o in routed:
-        try:
-            max_routed_area = max(max_routed_area, _footprint_area(o.Shape.BoundBox))
-        except Exception:
-            continue
 
-    # ONE shared spatial index over copper AND the workbench's own routed
-    # objects: a routed object's "nearby candidates" are just as likely to
-    # be another trace/wire as pre-existing copper, and using a single index
-    # means trace-vs-copper and trace-vs-trace/wire-vs-wire fall out of the
-    # same loop instead of needing two separate passes.
-    copper_index = _CopperIndex(doc, max_footprint_area_mm2=max_routed_area)
-    exempt_map = {o.Name: _exempt_solids_for(doc, o, copper_index) for o in routed}
+@rule("clearance")
+def _check_clearance(ctx):
+    """Clearance of every routed object against nearby copper and against each
+    other, via the shared spatial index. Logic moved verbatim from the original
+    run_drc main loop — dedup of symmetric pairs and same-net/shared-pad
+    exemptions unchanged."""
+    min_clearance_mm = ctx.params.get("min_clearance_mm", DEFAULT_MIN_CLEARANCE_MM)
+    doc = ctx.doc
+    copper_index = ctx.copper_index
+    exempt_map = ctx.exempt_map
+    routed_names = ctx.routed_names
 
+    findings = []
     checked_pairs = set()
-    for o in routed:
+    for o in ctx.routed:
         name = o.Name
         shape = o.Shape
         exempt_ids = exempt_map[name]
@@ -384,11 +424,6 @@ def run_drc(doc, min_clearance_mm: float = DEFAULT_MIN_CLEARANCE_MM,
                 continue        # the pad this object legitimately lands on
 
             if cname in routed_names:
-                # Checking two routed objects against each other: dedupe the
-                # symmetric (A,B)/(B,A) pair, and exempt two traces/wires
-                # that both legitimately converge on the SAME pad (they will
-                # be very close to each other right at that shared point,
-                # which is expected, not a violation).
                 pair_key = tuple(sorted((name, cname)))
                 if pair_key in checked_pairs:
                     continue
@@ -403,5 +438,33 @@ def run_drc(doc, min_clearance_mm: float = DEFAULT_MIN_CLEARANCE_MM,
             else:
                 findings.extend(_clearance_check(
                     name, shape, cname, solid, min_clearance_mm, bb.Center))
+    return findings
 
+
+# ── entry point ──────────────────────────────────────────────────────────────
+
+def run_drc(doc, min_clearance_mm: float = DEFAULT_MIN_CLEARANCE_MM,
+           min_trace_width_mm: float = DEFAULT_MIN_TRACE_WIDTH_MM):
+    """
+    Check every Trace_NNN / BondWire_NNN in *doc* for violations, by running
+    every registered rule (see RULES) against a shared context. Public
+    signature and return type (list[DRCFinding]) are unchanged.
+    """
+    findings = []
+    if doc is None:
+        return findings
+
+    routed = [o for o in doc.Objects
+              if (_is_routing_trace(o) or _is_bond_wire(o)) and _has_geometry(o)]
+    if not routed:
+        return findings
+
+    params = {
+        "min_clearance_mm": min_clearance_mm,
+        "min_trace_width_mm": min_trace_width_mm,
+    }
+    ctx = _DRCContext(doc, routed, params)
+
+    for _rule_id, fn in RULES:
+        findings.extend(fn(ctx))
     return findings

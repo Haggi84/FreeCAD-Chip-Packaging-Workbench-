@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- A desktop launcher: monitor with a chip on screen, plus the small
+       arrow badge Windows draws on every shortcut. -->
+  <rect x="6" y="10" width="52" height="36" rx="3"
+        fill="#171d26" stroke="#303c4b" stroke-width="2.5"/>
+  <path d="M24,52 L40,52 L38,46 L26,46 Z" fill="#303c4b"/>
+  <rect x="18" y="55" width="28" height="3.5" rx="1.75" fill="#303c4b"/>
+
+  <!-- the die on screen -->
+  <rect x="22" y="18" width="20" height="20" rx="2" fill="#212a36"
+        stroke="#c87137" stroke-width="2"/>
+  <rect x="27" y="23" width="10" height="10" fill="#c87137" fill-opacity="0.45"/>
+  <g fill="#c87137">
+    <rect x="25" y="14.5" width="3" height="3.5"/>
+    <rect x="30.5" y="14.5" width="3" height="3.5"/>
+    <rect x="36" y="14.5" width="3" height="3.5"/>
+    <rect x="25" y="38" width="3" height="3.5"/>
+    <rect x="30.5" y="38" width="3" height="3.5"/>
+    <rect x="36" y="38" width="3" height="3.5"/>
+  </g>
+  <circle cx="25" cy="21" r="1.6" fill="#d4a017"/>
+
+  <!-- shortcut badge -->
+  <rect x="4" y="34" width="16" height="16" rx="2.5" fill="#f5f5f5"
+        stroke="#303c4b" stroke-width="1.5"/>
+  <path d="M9,45 L15,39" stroke="#1a2029" stroke-width="2.2"
+        stroke-linecap="round"/>
+  <path d="M11,39 L15,39 L15,43" fill="none" stroke="#1a2029"
+        stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
