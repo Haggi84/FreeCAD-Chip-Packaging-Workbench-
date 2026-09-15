@@ -372,6 +372,29 @@ def _sweep_circle_along_polyline(points, r: float) -> Part.Shape:
 
 # ── public entry point ─────────────────────────────────────────────────────────
 
+def _spine_length(points, smooth: bool) -> float:
+    """Length of the curve the tube is swept along: the same interpolated
+    BSpline _sweep_circle_along builds, or the straight segments of
+    _sweep_circle_along_polyline."""
+    if smooth:
+        bsp = Part.BSplineCurve()
+        bsp.interpolate(points)
+        return bsp.toShape().Length
+    return sum((points[i + 1] - points[i]).Length for i in range(len(points) - 1))
+
+
+def _record_length(info, points, smooth: bool, extra: float = 0.0):
+    if info is None:
+        return
+    try:
+        info["arc_length_mm"] = _spine_length(points, smooth) + extra
+        info["arc_length_exact"] = True
+    except Exception as exc:
+        FreeCAD.Console.PrintWarning(
+            f"[wirebond] could not measure the wire's length along its loop, "
+            f"recording the straight distance instead: {exc}\n")
+
+
 def _cut_below_contact(shape: Part.Shape, p_end: Base.Vector,
                        p_other: Base.Vector, z_cut: float) -> Part.Shape:
     """
@@ -413,7 +436,7 @@ def _cut_below_contact(shape: Part.Shape, p_end: Base.Vector,
 
 
 def create_bond_wire_3d(start: Base.Vector, end: Base.Vector,
-                        config: dict) -> Part.Shape:
+                        config: dict, info: dict = None) -> Part.Shape:
     """
     Build a realistic 3-D bond-wire solid between *start* and *end*.
 
@@ -435,6 +458,11 @@ def create_bond_wire_3d(start: Base.Vector, end: Base.Vector,
 
     Proportions scale with config['diameter'].  Falls back to a plain swept
     tube, then a straight line, on OCCT failure.
+
+    If *info* is a dict it receives span_mm, loop_height_mm and arc_length_mm
+    — the length along the wire's centre line, pad to pad. The solid's own
+    Shape.Length is not that: it sums every edge, profile circles included.
+    arc_length_exact is False when only the straight distance is known.
     """
     bond_type    = config.get("bond_type", "Ball-Wedge")
     wedge_style  = config.get("wedge_style", "cut")   # 'cut' or 'solid'
@@ -471,6 +499,14 @@ def create_bond_wire_3d(start: Base.Vector, end: Base.Vector,
             f"[wirebond] loop_height {loop_height:.3f} mm capped to {H:.3f} mm "
             f"for a {L:.3f} mm span (≤35 % of span).\n"
         )
+
+    if info is not None:
+        info.update({
+            "span_mm": math.hypot(B.x - A.x, B.y - A.y),
+            "loop_height_mm": H,
+            "arc_length_mm": (B - A).Length,
+            "arc_length_exact": False,
+        })
 
     # Foot dimensions (multiples of wire diameter d)
     b_r, b_h      = d * 1.1, d * 0.75            # ball: equatorial r, height
@@ -513,6 +549,9 @@ def create_bond_wire_3d(start: Base.Vector, end: Base.Vector,
                     _spine_point(a_xy, e_xy, L, 1.00, wedge_end_z(zB)),
                 ]
                 sweep_fn = _sweep_circle_along
+            # Measured before the terminal dips below the pads are added:
+            # those are trimmed off, and are not wire.
+            _record_length(info, pts, sweep_fn is _sweep_circle_along)
             if cut_wedge:
                 # Dip straight *down* at each contact XY (a short vertical stub)
                 # so the flat cut lands a full face exactly on the contact point
@@ -551,6 +590,9 @@ def create_bond_wire_3d(start: Base.Vector, end: Base.Vector,
                     _spine_point(a_xy, e_xy, L, 1.00, wedge_end_z(zB)),     # stitch landing
                 ]
                 sweep_fn = _sweep_circle_along
+            # The spine starts at the top of the ball's neck, not on the pad.
+            _record_length(info, pts, sweep_fn is _sweep_circle_along,
+                           extra=z_neck - zA)
             if cut_wedge:
                 # Dip straight down at the contact XY (short vertical stub) so
                 # the flat cut leaves a full face exactly on the contact point.
@@ -1211,52 +1253,21 @@ class ManualWireBonding:
         doc = self.doc
         doc.openTransaction("Place Bond Wire")
         try:
-            # Build the wire foot-first (no penetration below the contact Z),
-            # then subtract any real bodies it is embedded in (PCB, encapsulant,
-            # vias, chips, pads) so nothing sticks through a surface.
-            shape    = create_bond_wire_3d(start, end, self.config)
-            shape    = self._subtract_obstacles(shape, cp1, cp2)
-            idx      = len(self.bonds) + 1
-            wire_obj = doc.addObject("Part::Feature", f"BondWire_{idx:03d}")
-            wire_obj.Shape = shape
-
-            wire_obj.ViewObject.ShapeColor = _COLOR_WIRE
-            wire_obj.ViewObject.LineColor  = _COLOR_WIRE
-            wire_obj.ViewObject.LineWidth  = 2
-
-            def _prop(ptype, name, grp, desc):
-                if not hasattr(wire_obj, name):
-                    wire_obj.addProperty(ptype, name, grp, desc)
-
-            _prop("App::PropertyVector", "StartPoint",  "Wirebond", "First contact point position")
-            _prop("App::PropertyVector", "EndPoint",    "Wirebond", "Second contact point position")
-            _prop("App::PropertyString", "StartCP",     "Wirebond", "First ContactPoint object name")
-            _prop("App::PropertyString", "EndCP",       "Wirebond", "Second ContactPoint object name")
-            _prop("App::PropertyString", "NetName",     "Wirebond", "Net identifier")
-            _prop("App::PropertyLength", "WireLength",  "Wirebond", "Wire arc length (mm)")
-
-            wire_obj.StartPoint = start
-            wire_obj.EndPoint   = end
-            wire_obj.StartCP    = cp1.Name
-            wire_obj.EndCP      = cp2.Name
-            wire_obj.NetName    = f"Net_{idx:03d}"
-            # Use straight-line distance as a meaningful arc-length approximation.
-            # shape.Length on a swept solid returns total edge length (all profile
-            # circles included), which is not the wire arc length.
-            wire_obj.WireLength = (start - end).Length
+            wire_obj = place_bond_wire(doc, cp1, cp2, self.config)
 
             doc.commitTransaction()
             doc.recompute()
 
+            length = float(wire_obj.WireLength.Value)
             self.bonds.append({
                 "cp1": cp1, "cp2": cp2,
                 "start": start, "end": end,
-                "wire": wire_obj,
+                "wire": wire_obj, "length": length,
             })
 
             FreeCAD.Console.PrintMessage(
-                f"  Bond {idx:03d}: {cp1.Name} -> {cp2.Name}  "
-                f"length={shape.Length:.3f} mm\n"
+                f"  {wire_obj.Name}: {cp1.Name} -> {cp2.Name}  "
+                f"{length:.3f} mm along the loop\n"
             )
 
             # Refresh the Contact Point Browser so newly connected CPs are
@@ -1335,10 +1346,10 @@ class ManualWireBonding:
         if not self.bonds:
             FreeCAD.Console.PrintMessage("No bonds were created.\n")
             return
-        total = sum((b["start"] - b["end"]).Length for b in self.bonds)
+        total = sum(b["length"] for b in self.bonds)
         lines = [
             f"  Bond {i+1:03d}: {b['cp1'].Name} -> {b['cp2'].Name}"
-            f"  {(b['start'] - b['end']).Length:.3f} mm"
+            f"  {b['length']:.3f} mm"
             for i, b in enumerate(self.bonds)
         ]
         FreeCAD.Console.PrintMessage(
@@ -1346,6 +1357,78 @@ class ManualWireBonding:
             + "\n".join(lines)
             + f"\n  Total: {len(self.bonds)} bonds, {total:.3f} mm wire\n"
         )
+
+
+# ── placing a wire without a session ─────────────────────────────────────────
+
+def _next_wire_index(doc) -> int:
+    used = [int(o.Name[len("BondWire_"):]) for o in doc.Objects
+            if o.Name.startswith("BondWire_") and o.Name[len("BondWire_"):].isdigit()]
+    return max(used, default=0) + 1
+
+
+_WIRE_PROPERTIES = (
+    ("App::PropertyVector", "StartPoint",   "First contact point position"),
+    ("App::PropertyVector", "EndPoint",     "Second contact point position"),
+    ("App::PropertyString", "StartCP",      "First ContactPoint object name"),
+    ("App::PropertyString", "EndCP",        "Second ContactPoint object name"),
+    ("App::PropertyString", "NetName",      "Net identifier"),
+    ("App::PropertyLength", "WireLength",   "Length along the loop, pad to pad"),
+    ("App::PropertyLength", "SpanLength",   "Straight plan-view distance between the pads"),
+    ("App::PropertyLength", "LoopHeight",   "Loop apex above the higher pad"),
+    ("App::PropertyLength", "WireDiameter", "Wire diameter"),
+    ("App::PropertyString", "BondType",     "Ball-Wedge or Wedge-Wedge"),
+)
+
+
+def place_bond_wire(doc, cp1, cp2, config: dict, net_name: str = None):
+    """
+    Build one bond wire between two contact points and add it to *doc*.
+
+    Shared by the interactive session and netlist import, so a wire placed
+    either way is the same object with the same properties. It opens no
+    transaction and touches no GUI state — the caller owns both. Numbering
+    continues from the highest existing BondWire_NNN, so wires from an
+    earlier session are never renamed or collided with.
+
+    The wire is built foot-first (nothing below the contact Z), then every
+    real body it is embedded in is subtracted so nothing sticks through a
+    surface. Returns the new object.
+    """
+    start = resolve_snap_point(cp1)
+    end = resolve_snap_point(cp2)
+    info = {}
+    shape = create_bond_wire_3d(start, end, config, info)
+
+    # Not a session: only its obstacle subtraction is used, which needs
+    # nothing but the document.
+    helper = ManualWireBonding()
+    helper.doc = doc
+    shape = helper._subtract_obstacles(shape, cp1, cp2)
+
+    idx = _next_wire_index(doc)
+    wire_obj = doc.addObject("Part::Feature", f"BondWire_{idx:03d}")
+    wire_obj.Shape = shape
+    if FreeCAD.GuiUp and getattr(wire_obj, "ViewObject", None) is not None:
+        wire_obj.ViewObject.ShapeColor = _COLOR_WIRE
+        wire_obj.ViewObject.LineColor  = _COLOR_WIRE
+        wire_obj.ViewObject.LineWidth  = 2
+
+    for ptype, name, desc in _WIRE_PROPERTIES:
+        if not hasattr(wire_obj, name):
+            wire_obj.addProperty(ptype, name, "Wirebond", desc)
+
+    wire_obj.StartPoint   = start
+    wire_obj.EndPoint     = end
+    wire_obj.StartCP      = cp1.Name
+    wire_obj.EndCP        = cp2.Name
+    wire_obj.NetName      = net_name or f"Net_{idx:03d}"
+    wire_obj.WireLength   = info.get("arc_length_mm", (end - start).Length)
+    wire_obj.SpanLength   = info.get("span_mm", math.hypot(end.x - start.x, end.y - start.y))
+    wire_obj.LoopHeight   = info.get("loop_height_mm", 0.0)
+    wire_obj.WireDiameter = float(config.get("diameter", 0.025))
+    wire_obj.BondType     = str(config.get("bond_type", "Ball-Wedge"))
+    return wire_obj
 
 
 # Module-level singleton shared across all WirebondCommand instances.

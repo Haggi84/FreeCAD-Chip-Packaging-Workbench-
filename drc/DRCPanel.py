@@ -109,11 +109,40 @@ class DRCPanel(QtWidgets.QDockWidget):
         wire_row.addStretch()
         layout.addLayout(wire_row)
 
+        length_row = QtWidgets.QHBoxLayout()
+        length_row.addWidget(QtWidgets.QLabel("Wire length (mm):"))
+        self.spin_min_length = self._spin(
+            0.0, 50.0, 3, 0.1, drc.DEFAULT_MIN_WIRE_LENGTH_MM,
+            "Shortest allowed wire, measured along its loop")
+        length_row.addWidget(self.spin_min_length)
+        length_row.addWidget(QtWidgets.QLabel("to"))
+        self.spin_max_length = self._spin(
+            0.0, 50.0, 3, 0.5, drc.DEFAULT_MAX_WIRE_LENGTH_MM,
+            "Longest allowed wire, measured along its loop (0 = no limit)")
+        length_row.addWidget(self.spin_max_length)
+        length_row.addStretch()
+        layout.addLayout(length_row)
+
+        die_row = QtWidgets.QHBoxLayout()
+        die_row.addWidget(QtWidgets.QLabel("Max bond angle (°):"))
+        self.spin_bond_angle = self._spin(
+            0.0, 90.0, 1, 5.0, drc.DEFAULT_MAX_BOND_ANGLE_DEG,
+            "Largest plan-view angle between a wire and the perpendicular to "
+            "the die edge it leaves across")
+        die_row.addWidget(self.spin_bond_angle)
+        die_row.addSpacing(12)
+        die_row.addWidget(QtWidgets.QLabel("Min die-edge clearance (mm):"))
+        self.spin_die_edge = self._spin(
+            0.0, 10.0, 3, 0.005, drc.DEFAULT_MIN_DIE_EDGE_CLEARANCE_MM,
+            "Smallest gap between a wire and the top edge of the die it leaves")
+        die_row.addWidget(self.spin_die_edge)
+        die_row.addStretch()
+        layout.addLayout(die_row)
+
         run_row = QtWidgets.QHBoxLayout()
         self.btn_run = QtWidgets.QPushButton("Run Check")
         self.btn_run.setToolTip("Check every routed trace and bond wire in the "
-                                 "active document for clearance, width, wire "
-                                 "spacing, wire crossings and lid clearance")
+                                 "active document against every rule above")
         self.btn_run.clicked.connect(self.run_check)
         run_row.addWidget(self.btn_run)
         self._lbl_summary = QtWidgets.QLabel("Not run yet.")
@@ -141,6 +170,16 @@ class DRCPanel(QtWidgets.QDockWidget):
 
     # ── public API ────────────────────────────────────────────────────
 
+    @staticmethod
+    def _spin(low, high, decimals, step, value, tooltip):
+        spin = QtWidgets.QDoubleSpinBox()
+        spin.setRange(low, high)
+        spin.setDecimals(decimals)
+        spin.setSingleStep(step)
+        spin.setValue(value)
+        spin.setToolTip(tooltip)
+        return spin
+
     def run_check(self):
         doc = FreeCAD.activeDocument()
         self._findings = []
@@ -155,6 +194,10 @@ class DRCPanel(QtWidgets.QDockWidget):
             min_trace_width_mm=self.spin_width.value(),
             min_wire_spacing_mm=self.spin_wire_spacing.value(),
             min_lid_clearance_mm=self.spin_lid_clearance.value(),
+            min_wire_length_mm=self.spin_min_length.value(),
+            max_wire_length_mm=self.spin_max_length.value(),
+            max_bond_angle_deg=self.spin_bond_angle.value(),
+            min_die_edge_clearance_mm=self.spin_die_edge.value(),
         )
         self._populate_table()
 

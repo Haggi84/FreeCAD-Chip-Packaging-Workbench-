@@ -33,11 +33,12 @@ legitimately touches (distance 0) the pad it starts and ends on — that is
 the entire point of a connection. Skipping this would flag every single
 trace/wire against its own landing pad on the very first run.
 
-Bond wires also get three rules of their own, at wire scale rather than
-trace scale: wire-to-wire spacing (the general clearance is sized for board
+Bond wires also get rules of their own, at wire scale rather than trace
+scale: wire-to-wire spacing (the general clearance is sized for board
 copper and would flag every neighbouring wire on a fine-pitch die), wires
-that cross in plan view, and the headroom between the top of each loop and
-the package lid.
+that cross in plan view, headroom between the top of each loop and the
+package lid, wire length along the loop, the angle at which a wire leaves
+its die, and how close it passes to the die's edge.
 """
 
 import math
@@ -61,6 +62,24 @@ DEFAULT_MIN_WIRE_SPACING_MM = 0.025
 # The lid (or the top of the housing) has to clear the highest point of every
 # loop by a margin, or the wire is pressed into it when the package closes.
 DEFAULT_MIN_LID_CLEARANCE_MM = 0.1
+
+# The same bounds the Wire Bonding Configurator offers by default. Too long
+# and the loop sags and sweeps; too short and it cannot form a loop at all.
+DEFAULT_MIN_WIRE_LENGTH_MM = 0.5
+DEFAULT_MAX_WIRE_LENGTH_MM = 5.0
+
+# Angle in plan view between a wire and the perpendicular to the die edge it
+# leaves across. Steeper wires crowd their neighbours and pull the ball bond
+# sideways; assembly rules commonly cap it around 45°.
+DEFAULT_MAX_BOND_ANGLE_DEG = 45.0
+
+# Gap between a wire and the top edge of the die it leaves, where a low loop
+# touches the seal ring or the die's chipped edge.
+DEFAULT_MIN_DIE_EDGE_CLEARANCE_MM = 0.025
+
+# A wire end counts as on a die when it is inside the outline and no lower
+# than this below the die's top.
+_ON_DIE_Z_TOL_MM = 0.1
 
 # Duplicated from core.housing.find_housing_body for the same reason
 # _inside_partdesign_body is duplicated below: this module is loaded
@@ -628,12 +647,178 @@ def _check_lid_clearance(ctx):
     return findings
 
 
+# ── wire length, bond angle, die edge ────────────────────────────────────────
+
+def _wire_points(doc, obj):
+    """[start, end] of a bond wire, or [] when not known."""
+    pts = [getattr(obj, p, None) for p in ("StartPoint", "EndPoint")]
+    if any(p is None for p in pts):
+        pts = _endpoints_of(doc, obj)
+    return pts if len(pts) == 2 else []
+
+
+def _wire_length(doc, obj):
+    """The length along the loop the wire records; for a wire placed before
+    that was recorded, the straight distance between its ends."""
+    value = getattr(obj, "WireLength", None)
+    try:
+        length = float(getattr(value, "Value", value))
+        if length > 0.0:
+            return length
+    except (TypeError, ValueError):
+        pass
+    pts = _wire_points(doc, obj)
+    return (pts[1] - pts[0]).Length if pts else None
+
+
+@rule("wire-length")
+def _check_wire_length(ctx):
+    shortest = ctx.params.get("min_wire_length_mm", DEFAULT_MIN_WIRE_LENGTH_MM)
+    longest = ctx.params.get("max_wire_length_mm", DEFAULT_MAX_WIRE_LENGTH_MM)
+    findings = []
+    for o in _bond_wires(ctx):
+        length = _wire_length(ctx.doc, o)
+        if length is None:
+            continue
+        if longest > 0.0 and length > longest:
+            findings.append(DRCFinding(
+                "violation", "wire-length", [o.Name],
+                f"{o.Name} is {length:.3f} mm long (maximum {longest:g} mm)", None))
+        elif length < shortest:
+            findings.append(DRCFinding(
+                "violation", "wire-length", [o.Name],
+                f"{o.Name} is {length:.3f} mm long (minimum {shortest:g} mm)", None))
+    return findings
+
+
+def _die_outlines(doc):
+    """
+    (xmin, ymin, xmax, ymax, z_top, name) for every die: each chip proxy, and
+    each die body — its slabs grouped by footprint, topped by the highest GDS
+    layer standing on it, which is where its pads and its top edge are.
+    """
+    dies = []
+    for o in doc.Objects:
+        if getattr(o, "IsChipProxy", False) and _has_geometry(o):
+            bb = o.Shape.BoundBox
+            dies.append((bb.XMin, bb.YMin, bb.XMax, bb.YMax, bb.ZMax, o.Name))
+
+    bodies = {}
+    for o in doc.Objects:
+        if getattr(o, "IsDieBody", False) and _has_geometry(o):
+            bb = o.Shape.BoundBox
+            key = tuple(round(v, 6) for v in (bb.XMin, bb.YMin, bb.XMax, bb.YMax))
+            top, name = bodies.get(key, (bb.ZMax, o.Name))
+            bodies[key] = (max(top, bb.ZMax), name)
+    tol = 1e-6
+    for (x0, y0, x1, y1), (top, name) in bodies.items():
+        for o in doc.Objects:
+            if not hasattr(o, "GDSLayerID") or not _has_geometry(o):
+                continue
+            bb = o.Shape.BoundBox
+            if (bb.XMin >= x0 - tol and bb.XMax <= x1 + tol
+                    and bb.YMin >= y0 - tol and bb.YMax <= y1 + tol):
+                top = max(top, bb.ZMax)
+        dies.append((x0, y0, x1, y1, top, name))
+    return dies
+
+
+def _on_die(point, die):
+    x0, y0, x1, y1, top, _name = die
+    return (x0 <= point.x <= x1 and y0 <= point.y <= y1
+            and point.z >= top - _ON_DIE_Z_TOL_MM)
+
+
+def _leaving_die(doc, wire, dies):
+    """[(die, inside_point, outside_point)] for each die the wire leaves —
+    exactly one end on it. A wire between two pads of one die leaves none."""
+    pts = _wire_points(doc, wire)
+    if not pts:
+        return []
+    out = []
+    for die in dies:
+        on = [_on_die(p, die) for p in pts]
+        if on.count(True) == 1:
+            inside, outside = (pts[0], pts[1]) if on[0] else (pts[1], pts[0])
+            out.append((die, inside, outside))
+    return out
+
+
+@rule("bond-angle")
+def _check_bond_angle(ctx):
+    """
+    Plan-view angle between a wire leaving a die and the perpendicular to the
+    die edge it crosses. A warning: the limit is an assembly-house rule, and
+    a steep wire is sometimes the only way to reach a corner lead.
+    """
+    limit = ctx.params.get("max_bond_angle_deg", DEFAULT_MAX_BOND_ANGLE_DEG)
+    dies = _die_outlines(ctx.doc)
+    findings = []
+    if not dies:
+        return findings
+    for o in _bond_wires(ctx):
+        for die, inside, outside in _leaving_die(ctx.doc, o, dies):
+            x0, y0, x1, y1, _top, die_name = die
+            dx, dy = outside.x - inside.x, outside.y - inside.y
+            span = math.hypot(dx, dy)
+            if span < 1e-9:
+                continue
+            # Which edge the wire crosses: the one its direction reaches first.
+            tx = ((x1 - inside.x) / dx if dx > 0 else (x0 - inside.x) / dx) if dx else math.inf
+            ty = ((y1 - inside.y) / dy if dy > 0 else (y0 - inside.y) / dy) if dy else math.inf
+            along_normal = abs(dx) if tx <= ty else abs(dy)
+            angle = math.degrees(math.acos(max(-1.0, min(1.0, along_normal / span))))
+            if angle > limit:
+                findings.append(DRCFinding(
+                    "warning", "bond-angle", [o.Name, die_name],
+                    f"{o.Name} leaves {die_name} at {angle:.1f}° to the edge "
+                    f"normal (maximum {limit:g}°)", inside))
+    return findings
+
+
+@rule("die-edge-clearance")
+def _check_die_edge_clearance(ctx):
+    """Gap between a wire and the top edge of the die it leaves."""
+    minimum = ctx.params.get("min_die_edge_clearance_mm", DEFAULT_MIN_DIE_EDGE_CLEARANCE_MM)
+    dies = _die_outlines(ctx.doc)
+    findings = []
+    if not dies:
+        return findings
+    edges = {}
+    for o in _bond_wires(ctx):
+        for die, inside, _outside in _leaving_die(ctx.doc, o, dies):
+            x0, y0, x1, y1, top, die_name = die
+            if die not in edges:
+                V = FreeCAD.Vector
+                edges[die] = Part.makePolygon([V(x0, y0, top), V(x1, y0, top),
+                                               V(x1, y1, top), V(x0, y1, top),
+                                               V(x0, y0, top)])
+            try:
+                gap = o.Shape.distToShape(edges[die])[0]
+            except Exception as exc:
+                findings.append(DRCFinding(
+                    "violation", "eval-failed", [o.Name, die_name],
+                    f"Could not evaluate {o.Name} against the edge of {die_name}: {exc}",
+                    inside))
+                continue
+            if gap < minimum:
+                findings.append(DRCFinding(
+                    "violation", "die-edge-clearance", [o.Name, die_name],
+                    f"{o.Name} passes {gap:.4f} mm from the edge of {die_name} "
+                    f"(minimum {minimum:g} mm)", inside))
+    return findings
+
+
 # ── entry point ──────────────────────────────────────────────────────────────
 
 def run_drc(doc, min_clearance_mm: float = DEFAULT_MIN_CLEARANCE_MM,
            min_trace_width_mm: float = DEFAULT_MIN_TRACE_WIDTH_MM,
            min_wire_spacing_mm: float = DEFAULT_MIN_WIRE_SPACING_MM,
-           min_lid_clearance_mm: float = DEFAULT_MIN_LID_CLEARANCE_MM):
+           min_lid_clearance_mm: float = DEFAULT_MIN_LID_CLEARANCE_MM,
+           min_wire_length_mm: float = DEFAULT_MIN_WIRE_LENGTH_MM,
+           max_wire_length_mm: float = DEFAULT_MAX_WIRE_LENGTH_MM,
+           max_bond_angle_deg: float = DEFAULT_MAX_BOND_ANGLE_DEG,
+           min_die_edge_clearance_mm: float = DEFAULT_MIN_DIE_EDGE_CLEARANCE_MM):
     """
     Check every Trace_NNN / BondWire_NNN in *doc* for violations, by running
     every registered rule (see RULES) against a shared context. Returns
@@ -653,6 +838,10 @@ def run_drc(doc, min_clearance_mm: float = DEFAULT_MIN_CLEARANCE_MM,
         "min_trace_width_mm": min_trace_width_mm,
         "min_wire_spacing_mm": min_wire_spacing_mm,
         "min_lid_clearance_mm": min_lid_clearance_mm,
+        "min_wire_length_mm": min_wire_length_mm,
+        "max_wire_length_mm": max_wire_length_mm,
+        "max_bond_angle_deg": max_bond_angle_deg,
+        "min_die_edge_clearance_mm": min_die_edge_clearance_mm,
     }
     ctx = _DRCContext(doc, routed, params)
 

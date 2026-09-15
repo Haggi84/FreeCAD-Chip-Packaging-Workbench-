@@ -21,9 +21,9 @@ class ShowDRCPanelCommand:
     def GetResources(self):
         return {
             "MenuText": "Design Rule Check",
-            "ToolTip":  "Check routed traces and bond wires for clearance, "
-                        "trace width, wire spacing, wire crossings and lid "
-                        "clearance",
+            "ToolTip":  "Check routed traces and bond wires: clearance, trace "
+                        "width, wire spacing, crossings, length, bond angle, "
+                        "die-edge and lid clearance",
             "Pixmap":   get_icon("DRC_Check.svg"),
         }
 

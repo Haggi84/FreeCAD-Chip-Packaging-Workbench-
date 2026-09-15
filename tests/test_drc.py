@@ -182,6 +182,8 @@ def run():
     _check_wire_spacing(tc)
     _check_wire_crossing(tc)
     _check_lid_clearance(tc)
+    _check_wire_length(tc)
+    _check_die_rules(tc)
     return tc.results
 
 
@@ -324,5 +326,100 @@ def _check_lid_clearance(tc):
         doc.recompute()
         tc.check("lid-clearance: nothing to check without a lid or housing",
                   not any(f.rule == "lid-clearance" for f in drc.run_drc(doc)))
+    finally:
+        FreeCAD.closeDocument(doc.Name)
+
+
+def _check_wire_length(tc):
+    doc = new_document("TestDRCWireLength")
+    try:
+        looped = _add_wire(doc, "BondWire_001", V(0, 0, 0.3), V(2, 0, 0.3), start_cp="CP_A")
+        looped.addProperty("App::PropertyLength", "WireLength", "Wirebond", "")
+        looped.WireLength = 6.2          # along the loop — the span is only 2 mm
+        # No WireLength recorded: the straight distance, 0.3 mm, is what is known.
+        _add_wire(doc, "BondWire_002", V(0, 5, 0.3), V(0.3, 5, 0.3), start_cp="CP_B")
+        _add_wire(doc, "BondWire_003", V(0, 10, 0.3), V(2, 10, 0.3), start_cp="CP_C")
+        doc.recompute()
+
+        findings = drc.run_drc(doc, min_clearance_mm=0.0, min_trace_width_mm=0.0)
+        messages = {f.object_names[0]: f.message for f in findings if f.rule == "wire-length"}
+        tc.check("wire-length: a wire longer than the maximum is flagged, measured "
+                  "along its loop rather than its 2 mm span",
+                  "6.200 mm long (maximum" in messages.get("BondWire_001", ""), str(messages))
+        tc.check("wire-length: a wire with no recorded length falls back to the "
+                  "straight distance, and is flagged as too short",
+                  "0.300 mm long (minimum" in messages.get("BondWire_002", ""), str(messages))
+        tc.check("wire-length: a wire within bounds is not flagged",
+                  "BondWire_003" not in messages, str(messages))
+
+        relaxed = drc.run_drc(doc, min_clearance_mm=0.0, min_trace_width_mm=0.0,
+                              min_wire_length_mm=0.1, max_wire_length_mm=0.0)
+        tc.check("wire-length: a maximum of 0 means no limit",
+                  not any(f.rule == "wire-length" for f in relaxed), f"got {relaxed}")
+    finally:
+        FreeCAD.closeDocument(doc.Name)
+
+
+def _check_die_rules(tc):
+    doc = new_document("TestDRCDieRules")
+    try:
+        die = doc.addObject("Part::Feature", "Chip_Block")
+        die.Shape = Part.makeBox(1.0, 1.0, 0.2, V(0, 0, 0))
+        die.addProperty("App::PropertyBool", "IsChipProxy", "ChipProxy", "")
+        die.IsChipProxy = True
+        # Straight out through the +X edge, well above it.
+        _add_wire(doc, "BondWire_001", V(0.9, 0.5, 0.5), V(2.9, 0.5, 0.5), start_cp="CP_A")
+        # Out through the +X edge at atan(1.1 / 1.0) = 47.7° to its normal.
+        _add_wire(doc, "BondWire_002", V(0.9, 0.2, 0.8), V(1.9, 1.3, 0.8), start_cp="CP_B")
+        # A low loop: its underside passes 0.0075 mm above the top edge.
+        _add_wire(doc, "BondWire_003", V(0.9, 0.8, 0.22), V(2.0, 0.8, 0.22), start_cp="CP_C")
+        # Low too, but between two pads of the same die — it leaves no edge.
+        _add_wire(doc, "BondWire_004", V(0.2, 0.1, 0.21), V(0.8, 0.1, 0.21), start_cp="CP_D")
+        doc.recompute()
+
+        findings = drc.run_drc(doc, min_clearance_mm=0.0, min_trace_width_mm=0.0,
+                               min_wire_length_mm=0.0)
+        angles = {f.object_names[0]: f for f in findings if f.rule == "bond-angle"}
+        tc.check("bond-angle: a wire leaving at 47.7° to the edge normal is reported "
+                  "as a warning at a 45° limit",
+                  "BondWire_002" in angles and angles["BondWire_002"].severity == "warning"
+                  and "47.7°" in angles["BondWire_002"].message, str(angles))
+        tc.check("bond-angle: a wire leaving straight across the edge is not reported",
+                  "BondWire_001" not in angles, str(angles))
+
+        edges = {f.object_names[0]: f for f in findings if f.rule == "die-edge-clearance"}
+        tc.check("die-edge-clearance: a loop 0.0075 mm above the die edge is flagged",
+                  "BondWire_003" in edges, str(edges))
+        tc.check("die-edge-clearance: a high loop is not flagged",
+                  "BondWire_001" not in edges, str(edges))
+        tc.check("die-edge-clearance: a wire between two pads of one die is not "
+                  "checked against its edge",
+                  "BondWire_004" not in edges, str(edges))
+
+        relaxed = drc.run_drc(doc, min_clearance_mm=0.0, min_trace_width_mm=0.0,
+                              min_wire_length_mm=0.0, max_bond_angle_deg=50.0,
+                              min_die_edge_clearance_mm=0.005)
+        tc.check("bond-angle and die-edge-clearance: both pass with relaxed limits",
+                  not any(f.rule in ("bond-angle", "die-edge-clearance") for f in relaxed),
+                  f"got {relaxed}")
+    finally:
+        FreeCAD.closeDocument(doc.Name)
+
+    doc = new_document("TestDRCDieBody")
+    try:
+        slab = doc.addObject("Part::Feature", "GDS_Substrate")
+        slab.Shape = Part.makeBox(1.0, 1.0, 0.18, V(0, 0, -0.18))
+        slab.addProperty("App::PropertyBool", "IsDieBody", "Substrate", "")
+        slab.IsDieBody = True
+        layer = doc.addObject("Part::Feature", "Layer_TopMetal2_134")
+        layer.Shape = Part.makeBox(0.2, 0.2, 0.003, V(0.4, 0.4, 0.0112))
+        layer.addProperty("App::PropertyInteger", "GDSLayerID", "LOD", "")
+        layer.GDSLayerID = 134
+        doc.recompute()
+        outlines = drc._die_outlines(doc)
+        tc.check("a die body's top is the highest layer standing on it, where its "
+                  "pads and top edge are — not the top of the silicon",
+                  len(outlines) == 1 and abs(outlines[0][4] - 0.0142) < 1e-9,
+                  str(outlines))
     finally:
         FreeCAD.closeDocument(doc.Name)
