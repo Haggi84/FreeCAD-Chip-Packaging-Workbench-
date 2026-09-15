@@ -1,11 +1,11 @@
 # Chip-Packaging Workbench for FreeCAD
 
-![Version](https://img.shields.io/badge/version-0.20.1-green?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.30.1-green?style=flat-square)
 ![FreeCAD](https://img.shields.io/badge/FreeCAD-1.1-blue?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.11-yellow?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-lightgrey?style=flat-square)
 ![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-informational?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-703%20checks-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-1062%20checks-brightgreen?style=flat-square)
 
 **An open-source FreeCAD workbench for chip-packaging design, developed as part of the BMBF research project DI-PASSIONATE.**
 
@@ -91,7 +91,6 @@ caption (Tech, Import, Render, Package, Bonding, Routing, Workbench).
 
 | Tool | Description |
 |---|---|
-| **Toggle Performance Mode** | Swap GDS layers between full B-rep and a fast mesh representation. |
 | **Toggle VIA Detail** | Replace dense via arrays with clustered blocks to keep the viewport responsive. |
 | **Detail Layer Control** | Dock panel showing every layer's load state; promote routing layers to full geometry on demand. |
 | **Layer Slider** | Step through the layer stack from bottom to top for a quick review. |
@@ -159,10 +158,15 @@ caption (Tech, Import, Render, Package, Bonding, Routing, Workbench).
 
 ### Chip Theme
 
-The workbench ships its own dark skin — a silicon-slate base with a
-material-coloured accent — and applies it while the workbench is active. The
-3-D viewport background is matched to it, so the viewport does not read as a
-bright hole in a dark window.
+The workbench ships an optional dark skin — a silicon-slate base with a
+material-coloured accent — applied while the workbench is active. The 3-D viewport
+background is matched to it, so the viewport does not read as a bright hole in a dark window.
+
+**It is off by default.** It was briefly on unless switched off, which meant a workbench
+repainted the whole of FreeCAD before being asked to; worse, an absent preference resolved to
+the default flavour rather than to "off", so any loss of the setting — a reset config, a new
+profile — silently brought the skin back. A one-shot migration switches it off for anyone
+carrying a flavour from then and restores their viewport colours.
 
 Pick an accent from the **Chip Theme ▾** dropdown:
 
@@ -189,8 +193,11 @@ The skin is **scoped to this workbench and fully reversible**:
   stashed before they are replaced and restored when the theme is switched
   off — your own colours come back, not a guess at the defaults.
 
-Choose **Off** in the dropdown to keep FreeCAD's own theme permanently; the
-choice is remembered between sessions.
+Choose **Off** in the dropdown to go back to FreeCAD's native colours; the choice is
+remembered between sessions. Switching off restores the viewport colours that were stashed
+before the skin was applied — and if no stash survives (the preference file was reset), the
+keys are **deleted** so FreeCAD's own defaults return. Writing a guessed "default" instead
+would be wrong in exactly the situation that matters.
 
 ### Desktop Shortcut (Windows)
 
@@ -265,6 +272,94 @@ The layer selector exposes the import options that matter for large layouts:
 | Contacts-only 3-D | Full geometry for bond-pad layers only; everything else collapses to a bounding solid |
 | Auto PIN contact detection | Create ContactPoint markers on top PIN layers automatically |
 
+### Exactly as KLayout draws it
+
+**Exactly as KLayout draws it** in the import dialog builds every polygon as drawn, with the
+`.lyp`'s own colours. Off by default — see the cost below.
+
+The workbench has eight independent mechanisms that trade geometry for speed. Each is worth
+having, and **each on its own is enough to make the document disagree with KLayout**, so the
+option switches off all of them together rather than exposing eight checkboxes:
+
+| | Mechanism | What it does |
+|---|---|---|
+| 1 | Per-layer polygon threshold | layer → bounding box above 5,000 polygons |
+| 2 | Total polygon budget | heaviest layers → bounding box |
+| 3 | Micro-area pre-scan | layer → bounding box below 2 µm² median |
+| 4 | Dummy-fill collapsing | FILL layers → bounding box |
+| 5 | Area filter / decimation | drops or simplifies small outlines |
+| 6 | Level-of-detail loading | non-contact layers deferred, shown as one body box |
+| 7 | Via blocks | via arrays → clustered blocks |
+| 8 | Fast-mesh baking | B-rep → baked triangulation |
+
+Colours also come straight from the `.lyp` with **no bondable repaint** — the gold highlight
+on pad layers is useful for wire bonding but is the one thing that makes an otherwise
+faithful view disagree with KLayout on colour.
+
+Explicit per-layer **BBox** ticks in the layer list are still honoured: the option switches
+off the *automatic* rules, not your own choices.
+
+Verified against KLayout's own polygon counts on `IC_Pad_EdgeSeal.boundary.gds` — 1,056
+polygons across six layers, matching layer for layer:
+
+| Layer | Default | Exact | KLayout |
+|---|---|---|---|
+| TopVia1 (125/0) | 1 | **884** | 884 |
+| TopVia2 (133/0) | 1 | **154** | 154 |
+| Metal5, TopMetal1/2, EdgeSeal | ✓ | ✓ | ✓ |
+
+**The cost is the reason those mechanisms exist.** Every polygon becomes an OCCT solid, and a
+full chip carries millions — `6_final.gds` alone has 3.2 M. The dialog shows the polygon
+count for the file you are importing and an estimated build time before you commit, so the
+decision is made with the real number rather than a generic warning.
+
+### Boundary layers are drawn flat
+
+`.boundary` layers — `EdgeSeal.boundary`, `prBoundary.boundary`, `Metal1.boundary` — are
+**annotation, not material**. They mark an extent; they do not describe a film that exists
+at a height. They are now built as a **zero-thickness face at z = 0**, flat on the die
+surface directly above the epi, which is also how KLayout draws them.
+
+Previously they were extruded. None of them appears in the stackup XML, so each got a
+rank-based *fallback* Z and became a 0.2 µm slab floating at an arbitrary height — how
+arbitrary: the same `EdgeSeal.boundary` came out at 0.0–0.2 µm with one set of layers loaded
+and at **9.0–9.2 µm** with another, because the fallback simply ranks whatever it is given.
+
+Detected by the `.boundary` name suffix, so the drawing layers are untouched — `TopMetal2`
+keeps its 3 µm thickness at 11.2303 µm, and only the annotation went flat.
+
+### A layer showing as a plain rectangle
+
+If a layer looks like a featureless die-sized box, check its label: an unloaded layer is now
+labelled **`[not loaded]`** and ghosted to 80 % transparency.
+
+In level-of-detail mode only contact layers load at import; every other layer gets a
+*placeholder* box carrying that layer's own name and colour. That is indistinguishable in the
+tree from the layer loaded and collapsed to a bounding box, which made "why is this layer
+just a rectangle?" a recurring question. The label now says which it is, and the marker is
+stripped the moment real geometry replaces it.
+
+To get the real shape: tick the layer in the import dialog (**Select All** loads everything),
+promote it in **Detail Layer Control**, or use **Exactly as KLayout draws it**, which loads
+every layer in full.
+
+### Units
+
+Dimensions already match KLayout exactly and always did; no option is involved. Checked
+against KLayout's own status-bar reading for the seal ring of `GSGPad_simple` —
+`box(0,-150000 120000,150000)` at 1 nm per database unit:
+
+| | X | Y |
+|---|---|---|
+| KLayout | 0 → 120.000 µm | −150.000 → 150.000 µm |
+| FreeCAD | 0.000 → 120.000 µm | −150.000 → 150.000 µm |
+
+The only difference is the display unit: FreeCAD's document unit is the millimetre, so the
+same edge reads `0.12 mm` where KLayout shows `120 µm`. FreeCAD has no micrometre unit
+schema to switch to, so the numbers on screen differ by a factor of 1000 while the geometry
+is identical to the nanometre. Z heights come from the stackup XML and are converted from µm
+the same way.
+
 ### The die body (epi + substrate)
 
 **Add the die body below the layout** in the import dialog (on by default) builds the
@@ -300,9 +395,48 @@ warning says why: a body of the wrong depth would look plausible and be silently
 The result meets the die's own `z0` underneath and lands exactly on z = 0 on top, so the
 proxy and the full import describe the same physical part.
 
-### Closing the gap under a partial import
+**The body moves with the chip.** Move / Rotate Chip's "GDS Chip Objects" scope matches the
+slabs by their `IsDieBody` property rather than by name — `_GDS_PREFIXES` lists only the
+narrower `GDS_Pin_` / `GDS_PINs_`, so a prefix scan matched neither `GDS_Substrate` nor
+`GDS_EPI` and moving a chip left its own silicon behind. Property matching also survives the
+objects being relabelled, the same reasoning already used for chip proxies.
 
-**Drop the layer stack onto the die surface** in the import dialog (on by default).
+This also corrects **place chip on surface**: the chip's bottom is now the underside of the
+silicon (−183.75 µm on SG13G2) rather than the lowest drawn layer, so what lands on a carrier
+is the face that physically touches it.
+
+### Filling the gap under a partial import
+
+A PDK defines more levels than any one layout draws on. If the lowest layer a design uses is
+Metal5, nothing sits between the silicon and **5.09 µm** — but that volume is not empty in
+the real part: it is the oxide the unused metal levels are embedded in.
+
+**Fill the gap below the lowest used layer with dielectric** (on by default) builds a slab of
+the stackup's own inter-metal dielectric from the die surface up to the lowest used layer, so
+every layer keeps its true PDK height and the die is a solid column.
+
+Which dielectric is **derived, not named**: `<Dielectrics>` runs top-down and ends with the
+entries that make up the die body, so the one immediately above the body is the inter-metal
+oxide — SiO2 on both bundled PDKs. Everything above *that* is passivation and air, which sit
+over the top metal, not under the lowest one.
+
+Measured on `IC_Pad_EdgeSeal.boundary.gds`, the die is now contiguous from its underside to
+the lowest drawn layer:
+
+| Slab | Z range | Thickness |
+|---|---|---|
+| Substrate | −183.7500 → −3.7500 µm | 180 µm |
+| EPI | −3.7500 → 0.0000 µm | 3.75 µm |
+| **SiO2 fill** | **0.0000 → 5.0900 µm** | **5.09 µm** |
+| Metal5 (lowest used layer) | 5.0900 → 5.5800 µm | 0.49 µm |
+
+No seams and no overlaps between them. On a full import there is nothing to fill — Activ
+already sits at z = 0 — and the slab is not built at all.
+
+### Closing the gap by moving the stack instead
+
+**Drop the layer stack onto the die surface** in the import dialog — now **off** by default,
+since filling the gap is the physically correct answer and this one is not.
 
 Importing a subset of the layers leaves the loaded stack floating. Selecting only the top of
 an SG13G2 stack puts Metal5 at 5.09 µm with nothing beneath it, because Activ, the contacts
@@ -333,7 +467,10 @@ Measured on `IC_Pad_EdgeSeal.boundary.gds`, a top-of-stack selection:
 | Metal5 (lowest real layer) | 5.0900 µm | **0.0000 µm** |
 | TopMetal2 | 11.2303 µm | 6.1403 µm |
 
-Turn it off to keep every layer at its true PDK height and accept the gap.
+It slides the loaded layers down together so the lowest one starts at z = 0. That closes the
+same gap, but by **falsifying every Z height in the model** — Metal5 ends up at 0 instead of
+its real 5.09 µm. Kept because it gives a compact view when the true heights do not matter,
+but prefer the dielectric fill above.
 
 ### VIA layers
 
@@ -355,8 +492,40 @@ them together, with no error reported anywhere.
 The last one runs *after* the geometry is built and swaps the finished via arrays for
 clustered blocks, so on its own it undid every protection applied during the build — which is
 how an import could log `VIA detail protected` and still show blocks. It is now skipped when
-**Keep VIA layers in full detail** is on; **Toggle VIA Detail** still clusters them on
-demand.
+**Keep VIA layers in full detail** is on.
+
+### Turning the blocks on when you want them
+
+**Toggle VIA Detail** (Render toolbar) switches between the two at any time. The blocks are
+**built on demand** the first time you switch to them, so skipping them at import costs
+nothing later — there is no need to re-import to get them back.
+
+**What a block is:** one axis-aligned cube per proximity *cluster* of vias, spanning that
+cluster's X/Y outline and the vias' full Z range — so it still bridges the same two metals.
+Not one box per layer, which would fuse physically separate arrays together. Measured on
+`IC_Pad_EdgeSeal.boundary.gds`:
+
+| Layer | Real vias | As blocks | X/Y outline | Z range |
+|---|---|---|---|---|
+| TopVia1 (125/0) | 884 solids | **2 cubes** | 13.860 × 221.420 µm — unchanged | 5.5800–6.4303 µm — unchanged |
+| TopVia2 (133/0) | 154 solids | **2 cubes** | 12.660 × 220.500 µm — unchanged | 8.4303–11.2303 µm — unchanged |
+
+Three things had to be fixed for the switch to be dependable:
+
+- **The state is read from the document, not from a module global.** The global records what
+  was last *applied*, which is a different thing — an import can finish in either state, a
+  document can be reopened, a block can be deleted by hand. When the two disagreed the first
+  press computed the wrong direction, re-applied what was already showing, and appeared to do
+  nothing; the blocks only arrived on a second press. `document_shows_via_blocks()` now asks
+  the document, so the first press always does something visible.
+- **Which layers count as vias.** The toggle tested for the substring `"via"`, which misses
+  SG13G2's `Vmim` and *all* of SKY130's vertical connections — they are called `mcon` and
+  `licon1`. Those layers could never be simplified at all. It now shares the same token list
+  the import uses, so the layers protected at import are exactly the layers the toggle can
+  block.
+- **The import checkbox states both outcomes.** It read "Keep VIA layers in full detail
+  (never auto-simplify)", so the only way to ask for blocks at import was to reason backwards
+  and untick it. It now reads "*untick to show them as blocks*".
 
 The last is the one that survives the others and is the most visibly wrong: it does not
 collapse the layer to its own bounding box, it merges it into the single combined body
@@ -825,8 +994,8 @@ The IHP Open PDK, including sample technology files, is available at
 **Save Design Session** writes the active document as a native `.FCStd`, preserving the
 exact current state including manual edits — not a replay of recognised actions.
 
-Workbench-only display state that does not live on a document object (fast-mesh mode, VIA
-detail mode, lazy layer-loading state) is captured alongside the document and restored on
+Workbench-only display state that does not live on a document object (VIA detail mode,
+lazy layer-loading state) is captured alongside the document and restored on
 open, whether reopened via the Session menu or FreeCAD's own File → Open. The mechanism is
 an extensible provider registry in `session/WorkbenchState.py`.
 
@@ -887,7 +1056,7 @@ tests need a live FreeCAD and OCCT:
 & "C:\Program Files\FreeCAD 1.1\bin\freecadcmd.exe" tests\run_all.py
 ```
 
-986 checks across 30 modules covering geometry construction, GDS import, level-of-detail
+1062 checks across 29 modules covering geometry construction, GDS import, level-of-detail
 state, routing, obstacle handling, session state, theme generation and shortcut
 creation. Results are also written to `tests/results.log`. The runner exits non-zero on
 failure, so it is suitable for CI.
