@@ -16,7 +16,7 @@ try:
     from gds import ImportChipProxyCommand
     from gds import ChipTransformCommand
     from gds import ShowLayerSliderCommand
-    from gds import TogglePerformanceModeCommand
+    from gds import LayerDisplay   # noqa: F401  (per-layer display quality)
     from gds import ToggleViaDetailCommand
     from gds import ClearGDSCacheCommand   # noqa: F401
     from gds import ChipTextureCommand   # noqa: F401
@@ -189,7 +189,6 @@ class MyWorkbench(FreeCADGui.Workbench):
             self.appendToolbar(
                 "Rendering",
                 [
-                    "TogglePerformanceModeCommand",
                     "ToggleViaDetailCommand",
                     "ShowDetailLayerPanelCommand",
                     "ShowLayerSliderCommand",
@@ -625,8 +624,17 @@ class MyWorkbench(FreeCADGui.Workbench):
         """
         try:
             from ui import ChipTheme
+            # One-shot: the skin used to be on unless switched off. Anyone
+            # carrying a flavour from that era is switched back to FreeCAD's
+            # own colours here, once.
+            ChipTheme.migrate_to_opt_in()
             if ChipTheme.is_enabled():
                 ChipTheme.apply_theme()
+            else:
+                # Off, but a previous session may have left our viewport
+                # colours behind — the stylesheet goes with the window, the
+                # background does not.
+                ChipTheme.ensure_native_background()
         except Exception as exc:
             import FreeCAD as _FC
             _FC.Console.PrintWarning(f"Chip theme not applied: {exc}\n")

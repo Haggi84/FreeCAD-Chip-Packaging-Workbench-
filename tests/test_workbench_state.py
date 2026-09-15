@@ -5,8 +5,8 @@ Smoke test for session/WorkbenchState.py — the extensible document-level
 state registry that replaced the old .dipas action-replay system.
 
 WorkbenchState.py itself is imported normally (`import session.WorkbenchState`),
-not via load_module_from_file — this matters: gds/TogglePerformanceModeCommand.py
-and gds/ToggleViaDetailCommand.py also do a normal `from session.WorkbenchState
+not via load_module_from_file — this matters: gds/ToggleViaDetailCommand.py
+also does a normal `from session.WorkbenchState
 import register_state_provider`, so a normal import here shares the SAME
 module instance (and its module-level _PROVIDERS dict) that those real
 provider registrations land in — a load_module_from_file copy would be a
@@ -69,20 +69,35 @@ def run():
              blob.get("dummy_test_provider") == {"value": 42})
 
     # ── real subsystem providers actually self-register at module import ────
-    perf = load_module_from_file("gds_perf_wbstate_test", "gds/TogglePerformanceModeCommand.py")
-    via  = load_module_from_file("gds_via_wbstate_test",  "gds/ToggleViaDetailCommand.py")
-    tc.check("gds_fast_mode provider registered", "gds_fast_mode" in ws._PROVIDERS)
+    # The "gds_fast_mode" provider was registered here too, by the fast-mesh
+    # module; that feature was removed. Documents saved while it existed
+    # still carry the key, which is the case the tolerance check below pins.
+    via = load_module_from_file("gds_via_wbstate_test", "gds/ToggleViaDetailCommand.py")
     tc.check("gds_via_detail provider registered", "gds_via_detail" in ws._PROVIDERS)
+    tc.check("the removed fast-mesh provider no longer registers itself",
+             "gds_fast_mode" not in ws._PROVIDERS)
 
-    perf._fast_mode   = True
     via._via_detailed = True
     ws.collect_and_store(doc)
-    perf._fast_mode   = False
     via._via_detailed = False
     ws.restore_from_document(doc)
-    tc.check("fast_mode flag restored across a stash/restore cycle",
-             perf._fast_mode is True)
     tc.check("via_detailed flag restored across a stash/restore cycle",
+             via._via_detailed is True)
+
+    # A document saved by an older version carries state for a provider that
+    # no longer exists. Restoring must ignore it rather than raise — that is
+    # what makes removing a feature safe for files already on disk.
+    blob = json.loads(getattr(doc, ws._PROP_NAME))
+    blob["gds_fast_mode"] = {"fast_mode": True}
+    setattr(doc, ws._PROP_NAME, json.dumps(blob))
+
+    def _restore_stale():
+        ws.restore_from_document(doc)
+
+    tc.check_raises_nothing(
+        "restoring a document that stores state for a REMOVED provider is "
+        "ignored, not an error", _restore_stale)
+    tc.check("the surviving provider still restores alongside the stale key",
              via._via_detailed is True)
 
     FreeCAD.closeDocument(doc.Name)

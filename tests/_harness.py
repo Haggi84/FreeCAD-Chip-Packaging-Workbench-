@@ -17,7 +17,7 @@ freecadcmd has no GUI: ``FreeCAD.GuiUp`` is False, ``obj.ViewObject`` is
 always None, and ``FreeCADGui.addCommand`` does not exist at all.  Every
 command file in this plugin calls ``FreeCADGui.addCommand(...)`` at import
 time, and several packages' ``__init__.py`` transitively import command
-files — so plain ``import gds.TogglePerformanceModeCommand`` (etc.) fails
+files — so plain ``import gds.ToggleViaDetailCommand`` (etc.) fails
 before reaching the target code.  ``load_module_from_file()`` below loads a
 single .py file directly, bypassing its package's ``__init__.py`` and any
 sibling command-registration side effects.
