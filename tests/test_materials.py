@@ -55,7 +55,74 @@ def run():
     _check_library(tc)
     _check_assignment(tc)
     _check_lid_inherits(tc)
+    _check_layers(tc)
     return tc.results
+
+
+_SKY_XML = os.path.join(REPO_ROOT, "resources", "stack_info",
+                        "SkyWater-PDK_SKY130", "SKY130A_300um.xml")
+
+
+def _layer(doc, name, layer_id, datatype, z):
+    obj = _box(doc, name, (1, 1, 0.001), V(0, 0, z))
+    obj.addProperty("App::PropertyInteger", "GDSLayerID", "LOD", "")
+    obj.addProperty("App::PropertyInteger", "GDSDatatype", "LOD", "")
+    obj.GDSLayerID, obj.GDSDatatype = layer_id, datatype
+    return obj
+
+
+def _check_layers(tc):
+    """A GDS layer's metal comes from the ThermalMaterial its stackup
+    <Material> names — and from nowhere else."""
+    if not os.path.isfile(_IHP_XML):
+        tc.skip("GDS layer materials from the stackup", f"not present: {_IHP_XML}")
+        return
+    data = parse_stackup_xml(_IHP_XML)
+    doc = new_document("TestMaterialsLayers")
+    try:
+        metal1 = _layer(doc, "Layer_Metal1_8", 8, 0, 0.001)
+        top = _layer(doc, "Layer_TopMetal2_134", 134, 0, 0.011)
+        via = _layer(doc, "Layer_Via1_19", 19, 0, 0.0015)
+        stray = _layer(doc, "Layer_Stray_999", 999, 0, 0.02)
+        doc.recompute()
+
+        name, source = materials.classify(metal1, data)
+        tc.check("SG13G2 Metal1 is aluminium, from its stackup material",
+                  name == "Aluminium" and "Metal1" in source, f"{name} / {source}")
+        tc.check("SG13G2 TopMetal2 is aluminium",
+                  materials.classify(top, data)[0] == "Aluminium")
+        name, reason = materials.classify(via, data)
+        tc.check("a via, whose material names no ThermalMaterial, is not guessed",
+                  name is None and "Via1" in reason and "ThermalMaterial" in reason, reason)
+        name, reason = materials.classify(stray, data)
+        tc.check("a layer the stackup does not list is reported as such",
+                  name is None and "not in the stackup" in reason, reason)
+        name, reason = materials.classify(metal1, None)
+        tc.check("without a stackup a layer is not guessed either",
+                  name is None and "which metal" in reason, reason)
+
+        report = materials.assign_materials(doc, stackup_data=data)
+        assigned = {n for n, _m, _s in report["assigned"]}
+        tc.check("assign_materials passes the stackup through to the layers",
+                  {"Layer_Metal1_8", "Layer_TopMetal2_134"} <= assigned, str(assigned))
+    finally:
+        FreeCAD.closeDocument(doc.Name)
+
+    if os.path.isfile(_SKY_XML):
+        sky = parse_stackup_xml(_SKY_XML)
+        doc = new_document("TestMaterialsSky")
+        try:
+            met1 = _layer(doc, "Layer_met1_68", 68, 20, 0.0014)
+            via = _layer(doc, "Layer_via_68", 68, 44, 0.0017)
+            doc.recompute()
+            tc.check("SKY130 met1 (68/20) is aluminium",
+                      materials.classify(met1, sky)[0] == "Aluminium")
+            tc.check("SKY130's via on the same layer number (68/44) is told apart "
+                      "by its datatype and not given met1's metal",
+                      materials.classify(via, sky)[0] is None,
+                      materials.classify(via, sky)[1])
+        finally:
+            FreeCAD.closeDocument(doc.Name)
 
 
 def _check_library(tc):

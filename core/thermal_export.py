@@ -9,8 +9,10 @@ it into a model. Everything goes into one directory:
 
   <base>_<material>.step   every solid of that material
   <base>.geo               Gmsh script: imports the STEP files, glues shared
-                           faces so the mesh is conformal across parts, and
-                           names one physical volume per material
+                           faces so the mesh is conformal across parts, names
+                           one physical volume per material, and the two
+                           boundary surfaces "HeatSink" (the lowest plane)
+                           and "Convection" (the rest of the outside)
   <base>_materials.csv     the properties to enter into the solver
   <base>_manifest.json     which object went where, part volumes, overlaps,
                            and every part left out and why
@@ -47,6 +49,20 @@ from core import materials
 
 # Below this a boolean result is rounding, not an overlap.
 _VOLUME_TOL_MM3 = 1e-9
+
+# The boundary conditions written into the manifest when the caller gives
+# none. The heat sink is the assembly's underside; everything else loses heat
+# by convection; the power is dissipated uniformly in the silicon.
+DEFAULT_BOUNDARY = {
+    "die_power_W": 0.5,
+    "heat_sink_temperature_C": 25.0,
+    "convection_W_per_m2K": 10.0,
+    "ambient_temperature_C": 25.0,
+}
+
+# How far above the lowest point a face may lie and still count as part of
+# the heat-sink plane, in metres (1 µm): tolerance for OCCT's face bounds.
+_HEAT_SINK_SLACK_M = 1e-6
 
 
 def _slug(name):
@@ -205,13 +221,16 @@ def _merge_overlapping(shapes):
 
 # ── writing ──────────────────────────────────────────────────────────────────
 
-def gmsh_script(base, entries):
+def gmsh_script(base, entries, heat_sink_box_m=None):
     """
     The .geo text for *entries* [(material, step_file, physical_tag)].
 
     Physical volumes are defined after Coherence on purpose: the parts are
     disjoint by then, so gluing their shared faces leaves each volume whole
     and its tag unchanged.
+
+    *heat_sink_box_m* (xmin, ymin, zmin, xmax, ymax, zmax), in metres, selects
+    the faces of the "HeatSink" surface; without it only "Exterior" is named.
     """
     lines = [
         f"// Thermal model '{base}' — written by the DI-PASSIONATE Chip-Packaging Workbench.",
@@ -234,7 +253,22 @@ def gmsh_script(base, entries):
     ]
     for name, _step_file, tag in entries:
         lines.append(f'Physical Volume("{name}", {tag}) = {{v_{tag}()}};')
-    lines.append('Physical Surface("Exterior") = CombinedBoundary{ Volume{:}; };')
+    if heat_sink_box_m is None:
+        lines.append('Physical Surface("Exterior") = CombinedBoundary{ Volume{:}; };')
+        return "\n".join(lines) + "\n"
+    box = ", ".join(f"{v:.9g}" for v in heat_sink_box_m)
+    lines += [
+        "",
+        "// Boundary surfaces. HeatSink: every outside face in the lowest plane of",
+        "// the assembly. Convection: the rest of the outside. See the manifest for",
+        "// the temperatures and coefficient to apply to them.",
+        "exterior() = Abs(CombinedBoundary{ Volume{:}; });",
+        f"heat_sink() = Surface In BoundingBox{{{box}}};",
+        "convection() = exterior();",
+        "convection() -= heat_sink();",
+        'Physical Surface("HeatSink", 1) = {heat_sink()};',
+        'Physical Surface("Convection", 2) = {convection()};',
+    ]
     return "\n".join(lines) + "\n"
 
 
@@ -246,14 +280,47 @@ def _workbench_version():
         return "unknown"
 
 
-def export_thermal_model(doc, out_dir, basename=None, fix_overlaps=True):
+def _boundary_conditions(boundary, parts, zmin_mm):
+    silicon_mm3 = sum(p["shape"].Volume for p in parts if p["material"] == "Silicon")
+    power = float(boundary["die_power_W"])
+    if silicon_mm3 > 0.0:
+        source = {
+            "physical_volume": "Silicon",
+            "power_W": power,
+            "power_density_W_per_m3": power / (silicon_mm3 * 1e-9),
+        }
+    else:
+        source = {"physical_volume": None, "power_W": power,
+                  "note": "no silicon in the model — apply the power by hand"}
+    return {
+        "HeatSink": {
+            "physical_surface": "HeatSink",
+            "type": "fixed temperature",
+            "temperature_C": float(boundary["heat_sink_temperature_C"]),
+            "where": f"every outside face in the lowest plane, z = {zmin_mm:.6g} mm",
+        },
+        "Convection": {
+            "physical_surface": "Convection",
+            "type": "convection",
+            "heat_transfer_coefficient_W_per_m2K": float(boundary["convection_W_per_m2K"]),
+            "ambient_temperature_C": float(boundary["ambient_temperature_C"]),
+            "where": "every other outside face",
+        },
+        "HeatSource": source,
+    }
+
+
+def export_thermal_model(doc, out_dir, basename=None, fix_overlaps=True,
+                         boundary=None):
     """
     Write the thermal model of *doc* into *out_dir*. Returns a summary:
-        {"directory", "files", "materials", "parts",
-         "skipped", "overlaps_resolved", "overlaps_remaining"}
+        {"directory", "files", "materials", "parts", "skipped",
+         "overlaps_resolved", "overlaps_remaining", "boundary_conditions"}
 
-    Raises ValueError when there is nothing to export.
+    *boundary* overrides entries of DEFAULT_BOUNDARY. Raises ValueError when
+    there is nothing to export.
     """
+    boundary = dict(DEFAULT_BOUNDARY, **(boundary or {}))
     if doc is None:
         raise ValueError("No document to export.")
     base = _slug(basename or doc.Label or doc.Name)
@@ -303,9 +370,15 @@ def export_thermal_model(doc, out_dir, basename=None, fix_overlaps=True):
                        "volume_mm3": round(p["shape"].Volume, 12)} for p in group],
         })
 
+    bb = Part.makeCompound([p["shape"] for p in parts]).BoundBox
+    slack = _HEAT_SINK_SLACK_M
+    heat_sink_box_m = (bb.XMin * 1e-3 - slack, bb.YMin * 1e-3 - slack, bb.ZMin * 1e-3 - slack,
+                       bb.XMax * 1e-3 + slack, bb.YMax * 1e-3 + slack, bb.ZMin * 1e-3 + slack)
+    conditions = _boundary_conditions(boundary, parts, bb.ZMin)
+
     geo_file = f"{base}.geo"
     with open(os.path.join(out_dir, geo_file), "w", encoding="utf-8") as fh:
-        fh.write(gmsh_script(base, entries))
+        fh.write(gmsh_script(base, entries, heat_sink_box_m))
     files.append(geo_file)
 
     csv_file = f"{base}_materials.csv"
@@ -330,6 +403,7 @@ def export_thermal_model(doc, out_dir, basename=None, fix_overlaps=True):
         "property_note": ("Nominal bulk values at about 25 °C — a starting "
                           "point, not a datasheet."),
         "gmsh_script": geo_file,
+        "boundary_conditions": conditions,
         "materials": records,
         "overlaps_resolved": resolved,
         "overlaps_remaining": remaining,
@@ -352,4 +426,5 @@ def export_thermal_model(doc, out_dir, basename=None, fix_overlaps=True):
         "skipped": skipped,
         "overlaps_resolved": resolved,
         "overlaps_remaining": remaining,
+        "boundary_conditions": conditions,
     }

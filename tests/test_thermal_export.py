@@ -6,13 +6,14 @@ Headless tests for core.thermal_export.
 A thermal model can be wrong without looking wrong, so the checks here are
 on the numbers that decide the physics: each material's exported VOLUME
 (re-read from the STEP file, not from the shapes that were written), that an
-overlap is resolved in favour of the part the filler surrounds, and that
-nothing without a material slips in.
+overlap is resolved in favour of the part the filler surrounds, that nothing
+without a material slips in, and the boundary conditions.
 
 When FreeCAD's bundled Gmsh is available the generated .geo is also meshed,
 and the mesh is checked for what the script promises: one physical volume
-per material, coordinates in metres, and parts that share nodes across their
-interfaces — without that, heat could not cross from one part to the next.
+per material, coordinates in metres, parts that share nodes across their
+interfaces — without that, heat could not cross from one part to the next —
+and a heat-sink surface that is exactly the underside.
 """
 
 import csv
@@ -32,6 +33,9 @@ import core.materials as materials
 import core.thermal_export as thermal_export
 
 V = FreeCAD.Vector
+
+_BOUNDARY = {"die_power_W": 1.0, "heat_sink_temperature_C": 30.0,
+             "convection_W_per_m2K": 15.0, "ambient_temperature_C": 20.0}
 
 
 def run():
@@ -84,7 +88,8 @@ def _check_export(tc):
         _build_package(doc)
         materials.assign_materials(doc)
 
-        summary = thermal_export.export_thermal_model(doc, out_dir, basename="pkg")
+        summary = thermal_export.export_thermal_model(
+            doc, out_dir, basename="pkg", boundary=_BOUNDARY)
         tc.check("exports the four materials present, in library order",
                   summary["materials"] == ["Silicon", "Copper", "Gold",
                                            "Epoxy mould compound"],
@@ -134,6 +139,20 @@ def _check_export(tc):
                   ["thermal_conductivity_W_per_mK"]
                   == materials.LIBRARY["Copper"].thermal_conductivity)
 
+        bc = manifest["boundary_conditions"]
+        tc.check("boundary: the heat sink carries the requested temperature",
+                  bc["HeatSink"]["temperature_C"] == 30.0
+                  and bc["HeatSink"]["physical_surface"] == "HeatSink", str(bc["HeatSink"]))
+        tc.check("boundary: convection carries the coefficient and ambient temperature",
+                  bc["Convection"]["heat_transfer_coefficient_W_per_m2K"] == 15.0
+                  and bc["Convection"]["ambient_temperature_C"] == 20.0, str(bc["Convection"]))
+        # 1 W in 0.2 mm³ = 0.2e-9 m³ of silicon.
+        tc.check("boundary: the die power becomes a power density over the silicon — "
+                  "1 W / 0.2e-9 m³ = 5e9 W/m³",
+                  bc["HeatSource"]["physical_volume"] == "Silicon"
+                  and abs(bc["HeatSource"]["power_density_W_per_m3"] / 5e9 - 1.0) < 1e-9,
+                  str(bc["HeatSource"]))
+
         with open(os.path.join(out_dir, "pkg_materials.csv"), encoding="utf-8") as fh:
             rows = list(csv.DictReader(fh))
         tc.check("CSV: one row per material, with its physical volume tag",
@@ -153,6 +172,9 @@ def _check_export(tc):
                   all(f'Physical Volume("{name}", {tag})' in geo
                       for name, tag in (("Silicon", 1), ("Copper", 2), ("Gold", 3),
                                         ("Epoxy mould compound", 4))))
+        tc.check(".geo: names the heat-sink and convection surfaces",
+                  'Physical Surface("HeatSink", 1)' in geo
+                  and 'Physical Surface("Convection", 2)' in geo)
 
         _check_gmsh(tc, out_dir)
     finally:
@@ -170,12 +192,15 @@ def _gmsh_executable():
 
 
 def _read_msh2(path):
-    """(physical volume names by tag, tet count by tag, node ids by tag,
-    largest absolute coordinate) from a Gmsh 2.2 ASCII mesh."""
+    """Physical names by (dim, tag), and per physical tag the element count
+    and node ids of tetrahedra and triangles, plus every node's coordinates,
+    from a Gmsh 2.2 ASCII mesh."""
     with open(path, encoding="utf-8", errors="replace") as fh:
         lines = fh.read().splitlines()
-    names, tets, nodes = {}, defaultdict(int), defaultdict(set)
-    max_coord = 0.0
+    names = {}
+    tets, tris = defaultdict(int), defaultdict(int)
+    tet_nodes, tri_nodes = defaultdict(set), defaultdict(set)
+    coords = {}
     i = 0
     while i < len(lines):
         section = lines[i].strip()
@@ -184,24 +209,29 @@ def _read_msh2(path):
             for row in lines[i + 2:i + 2 + count]:
                 fields = row.split()
                 if section == "$PhysicalNames":
-                    if fields[0] == "3":
-                        names[int(fields[1])] = row.split('"')[1]
+                    names[(int(fields[0]), int(fields[1]))] = row.split('"')[1]
                 elif section == "$Nodes":
-                    max_coord = max(max_coord, *(abs(float(v)) for v in fields[1:4]))
-                elif int(fields[1]) == 4:                   # 4-node tetrahedron
-                    n_tags = int(fields[2])
+                    coords[fields[0]] = tuple(float(v) for v in fields[1:4])
+                else:
+                    element_type, n_tags = int(fields[1]), int(fields[2])
                     tag = int(fields[3])
-                    tets[tag] += 1
-                    nodes[tag].update(fields[3 + n_tags:])
+                    element_nodes = fields[3 + n_tags:]
+                    if element_type == 4:          # 4-node tetrahedron
+                        tets[tag] += 1
+                        tet_nodes[tag].update(element_nodes)
+                    elif element_type == 2:        # 3-node triangle
+                        tris[tag] += 1
+                        tri_nodes[tag].update(element_nodes)
             i += count + 2
         else:
             i += 1
-    return names, tets, nodes, max_coord
+    return names, tets, tet_nodes, tris, tri_nodes, coords
 
 
 def _check_gmsh(tc, out_dir):
     exe = _gmsh_executable()
     if exe is None:
+        tc.skip("gmsh: meshes the generated .geo", "Gmsh is not installed here")
         return
     msh = os.path.join(out_dir, "pkg.msh")
     try:
@@ -217,19 +247,33 @@ def _check_gmsh(tc, out_dir):
                      (proc.stdout or "")[-2000:] + (proc.stderr or "")[-2000:]):
         return
 
-    names, tets, nodes, max_coord = _read_msh2(msh)
+    names, tets, tet_nodes, tris, tri_nodes, coords = _read_msh2(msh)
+    volumes = {tag: name for (dim, tag), name in names.items() if dim == 3}
+    surfaces = {tag: name for (dim, tag), name in names.items() if dim == 2}
     tc.check("gmsh: the physical volumes are the four materials",
-              names == {1: "Silicon", 2: "Copper", 3: "Gold", 4: "Epoxy mould compound"},
-              str(names))
+              volumes == {1: "Silicon", 2: "Copper", 3: "Gold", 4: "Epoxy mould compound"},
+              str(volumes))
     tc.check("gmsh: every material volume has elements",
               all(tets.get(tag, 0) > 0 for tag in (1, 2, 3, 4)), str(dict(tets)))
+    max_coord = max(abs(c) for xyz in coords.values() for c in xyz)
     tc.check("gmsh: coordinates are in metres (the package is 4 mm = 0.004 m wide)",
               0.0015 < max_coord < 0.0025, str(max_coord))
     for a, b, what in ((1, 2, "die and paddle"), (2, 4, "paddle and mould compound"),
                        (3, 2, "wire and paddle")):
         tc.check(f"gmsh: {what} share nodes across their interface, so heat can cross it",
-                  bool(nodes[a] & nodes[b]),
-                  f"{names.get(a)} / {names.get(b)}")
+                  bool(tet_nodes[a] & tet_nodes[b]),
+                  f"{volumes.get(a)} / {volumes.get(b)}")
+
+    tc.check("gmsh: the boundary surfaces are HeatSink and Convection",
+              surfaces == {1: "HeatSink", 2: "Convection"}, str(surfaces))
+    sink_z = [coords[n][2] for n in tri_nodes[1]]
+    tc.check("gmsh: the heat sink is meshed, and is exactly the underside (z = 0)",
+              tris.get(1, 0) > 0 and all(abs(z) < 1e-9 for z in sink_z),
+              f"{tris.get(1, 0)} triangles, z range {min(sink_z, default=None)}..{max(sink_z, default=None)}")
+    conv_z = [coords[n][2] for n in tri_nodes[2]]
+    tc.check("gmsh: convection covers the rest of the outside, including the top",
+              tris.get(2, 0) > 0 and max(conv_z, default=0.0) > 0.00039,
+              f"{tris.get(2, 0)} triangles, top at {max(conv_z, default=None)}")
 
 
 def _check_unresolvable_overlap(tc):
@@ -250,6 +294,9 @@ def _check_unresolvable_overlap(tc):
                   str(remaining))
         tc.check("...and neither part is changed",
                   abs(_step_volume(os.path.join(out_dir, "overlap_silicon.step"))[0] - 0.2) < 1e-9)
+        tc.check("without explicit boundary conditions the defaults are written",
+                  summary["boundary_conditions"]["HeatSource"]["power_W"]
+                  == thermal_export.DEFAULT_BOUNDARY["die_power_W"])
     finally:
         FreeCAD.closeDocument(doc.Name)
         shutil.rmtree(out_dir, ignore_errors=True)

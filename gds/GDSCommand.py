@@ -313,6 +313,7 @@ def _post_import(doc, gds_path, ihp_map, selected_layers,
         cp_count = Core_Functionality.import_pin_pads_as_contacts(
             gds_path, ihp_map, doc,
             selected_layers=selected_layers, top_n=3,
+            stack_mm=stack_mm,
         )
 
     # Die body — built before the group is formed, so the slabs are swept

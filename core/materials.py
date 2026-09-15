@@ -176,10 +176,37 @@ def physical_parts(doc):
 
 # ── classification ───────────────────────────────────────────────────────────
 
-def classify(obj):
+def _classify_layer(obj, stackup_data):
+    """
+    A GDS layer takes the bulk material its stackup <Material> names in a
+    ThermalMaterial attribute. The stackup's own Type="Conductor" does not say
+    which metal, so without that attribute the layer stays unassigned.
+    """
+    key = (int(obj.GDSLayerID), int(getattr(obj, "GDSDatatype", 0)))
+    if not stackup_data:
+        return None, ("interconnect layer: no stackup given, so which metal it "
+                      "is made of is unknown — set by hand")
+    entry = stackup_data.get(key) or stackup_data.get(key[0])
+    if not isinstance(entry, dict):
+        return None, f"layer {key[0]}/{key[1]} is not in the stackup — set by hand"
+    stack_material = entry.get("material") or ""
+    described = (stackup_data.get("_materials") or {}).get(stack_material.upper()) or {}
+    thermal = described.get("thermal_material") or ""
+    mat = resolve(thermal)
+    if mat:
+        return mat.name, f"stackup: {stack_material} → {thermal}"
+    if thermal:
+        return None, (f"stackup material '{stack_material}' names ThermalMaterial "
+                      f"'{thermal}', which is not in the library")
+    return None, (f"stackup material '{stack_material}' does not say which metal — "
+                  f"add ThermalMaterial=\"…\" to its <Material>, or set by hand")
+
+
+def classify(obj, stackup_data=None):
     """
     (material_name, source) for an object this module knows how to assign,
-    or (None, reason) when it does not.
+    or (None, reason) when it does not. *stackup_data* (parse_stackup_xml)
+    is needed only for GDS layers.
     """
     if getattr(obj, "IsDieBody", False):
         stack = getattr(obj, "StackMaterial", "")
@@ -222,6 +249,9 @@ def classify(obj):
             return mat.name, f"housing: {chosen}"
         return None, f"housing material '{chosen}' is not in the library"
 
+    if hasattr(obj, "GDSLayerID"):
+        return _classify_layer(obj, stackup_data)
+
     if obj.Name.startswith("Layer_"):
         return None, ("interconnect layer: the stackup says 'conductor', not "
                       "which metal — set by hand")
@@ -259,9 +289,10 @@ def set_material(obj, name, source=SOURCE_USER):
     setattr(obj, SOURCE_PROPERTY, source)
 
 
-def assign_materials(doc, overwrite=False):
+def assign_materials(doc, overwrite=False, stackup_data=None):
     """
-    Tag every physical part in *doc* with a material.
+    Tag every physical part in *doc* with a material. *stackup_data* is the
+    parsed stackup of the layout, used for GDS layers.
 
     A material that is already set is kept unless *overwrite* — that is what
     makes a choice made by hand survive re-running this. Parts it cannot
@@ -281,7 +312,7 @@ def assign_materials(doc, overwrite=False):
             report["kept"].append((obj.Name, existing.name, source))
             continue
 
-        name, detail = classify(obj)
+        name, detail = classify(obj, stackup_data)
         if name is None:
             _ensure_properties(obj)
             setattr(obj, PROPERTY, UNASSIGNED)

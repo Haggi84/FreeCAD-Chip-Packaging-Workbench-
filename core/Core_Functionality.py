@@ -421,6 +421,9 @@ def parse_stackup_xml(xml_path):
                 "gds_layer":    gds_layer,
                 "gds_datatype": gds_dt,
                 "type":         ltype,
+                # The <Material> this layer is made of — its name only; the
+                # material's own attributes are in result["_materials"].
+                "material":     (layer.get("Material") or "").strip(),
             }
             if name:
                 result[name.upper()] = entry
@@ -453,6 +456,10 @@ def parse_stackup_xml(xml_path):
                 "name": name,
                 "type": (mat.get("Type") or "").strip().lower(),
                 "color": (mat.get("Color") or "").strip(),
+                # Not part of the KLayout/openEMS format: which bulk material
+                # a thermal model should use (see core.materials). Type says
+                # only "Conductor", which does not say which metal.
+                "thermal_material": (mat.get("ThermalMaterial") or "").strip(),
             }
         if materials:
             result["_materials"] = materials
@@ -2049,7 +2056,8 @@ def _find_pin_layer_keys(gds_path: str, ihp_map: dict,
 
 
 def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
-                                selected_layers=None, top_n: int = 3) -> int:
+                                selected_layers=None, top_n: int = 3,
+                                stack_mm=None) -> int:
     """
     Detect the top-N PIN/bond-pad layers, extrude the actual pad metal geometry
     to PDK thickness, and place a ContactPoint marker at every pin location.
@@ -2098,6 +2106,10 @@ def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
     scale     = (lib.unit * 1000.0) if getattr(lib, "unit", None) else 0.001
     top_cells = lib.top_level() or lib.cells
 
+    # Text labels name the pads a netlist refers to (see core.pad_names).
+    from core.pad_names import read_labels_mm, label_in_box
+    labels = read_labels_mm(lib, top_cells)
+
     # ── ray-casting point-in-polygon (GDS units, avoids mm conversion) ───────
     def _contains(poly_pts, px, py):
         n       = len(poly_pts)
@@ -2115,10 +2127,16 @@ def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
     _MIN_PAD_MM = 0.010   # 10 µm
 
     # ── stack info for Z position / thickness ─────────────────────────────────
-    stack_mm = build_stack_mm(
+    # *stack_mm* is the stacking the import itself used (from the stackup XML
+    # when there is one). The rank-based heuristic only fills in a layer it
+    # does not cover — used alone, it put the pads, and every contact point
+    # on them, at heights the PDK never stated.
+    heuristic_mm = build_stack_mm(
         [{"layer_id": lid, "datatype": dt, "name": name} for lid, dt, name in candidates],
         ihp_map,
     )
+    stack_mm = {key: (stack_mm or {}).get(key) or value
+                for key, value in heuristic_mm.items()}
 
     # ── helper: top-face centre ────────────────────────────────────────────────
     def _top_face_center(shape):
@@ -2230,6 +2248,7 @@ def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
             # ── extrude pad polygons → solids ─────────────────────────────────
             solids   = []
             contacts = []   # Base.Vector snap points (one per pad)
+            pad_names = []  # the label inside each pad, "" when unlabelled
 
             for pts_raw, (cx_mm, cy_mm) in pad_pairs:
                 pts2d = [(float(p[0]) * scale, float(p[1]) * scale) for p in pts_raw]
@@ -2243,6 +2262,9 @@ def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
                     solid = face.extrude(FreeCAD.Vector(0, 0, t_mm))
                     solids.append(solid)
                     contacts.append(Base.Vector(cx_mm, cy_mm, z0_mm + t_mm))
+                    xs = [x for x, _y in pts2d]
+                    ys = [y for _x, y in pts2d]
+                    pad_names.append(label_in_box(labels, min(xs), min(ys), max(xs), max(ys)))
                 except Exception:
                     continue
 
@@ -2257,8 +2279,9 @@ def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
             # one display object for the whole PIN layer
             pad_grp = doc.addObject("Part::Feature", f"GDS_PINs_{edi_name}")
             pad_grp.Shape = compound
-            pad_grp.ViewObject.ShapeColor   = _ORANGE
-            pad_grp.ViewObject.Transparency = 0
+            if FreeCAD.GuiUp:
+                pad_grp.ViewObject.ShapeColor   = _ORANGE
+                pad_grp.ViewObject.Transparency = 0
             pad_grp.addProperty("App::PropertyBool",   "IsGDSPin", "GDS",
                                  "Auto-detected PIN pad layer")
             pad_grp.addProperty("App::PropertyString", "EDIName",  "GDS",
@@ -2267,7 +2290,7 @@ def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
             pad_grp.EDIName  = edi_name
 
             # one ContactPoint marker per pad (at DT=2 centroid or poly centroid)
-            for snap_pt in contacts:
+            for snap_pt, pad_name in zip(contacts, pad_names):
                 marker = doc.addObject("Part::Feature", f"ContactPoint_{cp_idx:03d}")
                 marker.Shape = Part.Vertex(snap_pt.x, snap_pt.y, snap_pt.z)
 
@@ -2281,10 +2304,16 @@ def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
                 marker.ContactPoint   = snap_pt
                 marker.SourceObject   = pad_grp.Name
                 marker.IsContactPoint = True
+                marker.addProperty("App::PropertyString", "PadName", "Wirebond",
+                                    "Pad name from the layout's text label")
+                marker.PadName = pad_name
+                if pad_name:
+                    marker.Label = f"ContactPoint {pad_name}"
 
-                marker.ViewObject.PointSize   = 8
-                marker.ViewObject.PointColor  = _ORANGE
-                marker.ViewObject.DisplayMode = "Points"
+                if FreeCAD.GuiUp:
+                    marker.ViewObject.PointSize   = 8
+                    marker.ViewObject.PointColor  = _ORANGE
+                    marker.ViewObject.DisplayMode = "Points"
 
                 cp_idx  += 1
                 cp_count += 1

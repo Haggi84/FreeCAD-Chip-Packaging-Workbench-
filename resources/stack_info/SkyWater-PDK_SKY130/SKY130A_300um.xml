@@ -27,15 +27,17 @@
       <Material Name="licon1" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="dc322f"/>
       <Material Name="li1" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="6c71c4"/>
       <Material Name="mcon" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="cb4b16"/>
-      <Material Name="met1" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="4d4dff"/>
+      <!-- ThermalMaterial: see the note in SG13G2_200um.xml. Only the aluminium
+           metals met1-met5 carry one; li1, the contacts and the vias do not. -->
+      <Material Name="met1" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="4d4dff" ThermalMaterial="Aluminium"/>
       <Material Name="via" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="ff5555"/>
-      <Material Name="met2" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="ff4dff"/>
+      <Material Name="met2" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="ff4dff" ThermalMaterial="Aluminium"/>
       <Material Name="via2" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="ff8c42"/>
-      <Material Name="met3" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="3fd1c8"/>
+      <Material Name="met3" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="3fd1c8" ThermalMaterial="Aluminium"/>
       <Material Name="via3" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="ffb000"/>
-      <Material Name="met4" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="d1c73f"/>
+      <Material Name="met4" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="d1c73f" ThermalMaterial="Aluminium"/>
       <Material Name="via4" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="ff6f91"/>
-      <Material Name="met5" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="c87137"/>
+      <Material Name="met5" Type="Conductor" Permittivity="1" DielectricLossTangent="0" Conductivity="59600000.0" Color="c87137" ThermalMaterial="Aluminium"/>
       <Material Name="SiO2" Type="Dielectric" Permittivity="4.1" DielectricLossTangent="0.0" Conductivity="0" Color="fffcad"/>
       <Material Name="EPI" Type="Semiconductor" Permittivity="11.9" DielectricLossTangent="0" Conductivity="5.0" Color="294fff"/>
       <Material Name="Substrate" Type="Semiconductor" Permittivity="11.9" DielectricLossTangent="0" Conductivity="2.0" Color="01e0ff"/>

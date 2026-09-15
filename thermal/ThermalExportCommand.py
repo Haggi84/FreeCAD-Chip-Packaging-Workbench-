@@ -2,8 +2,8 @@
 # Copyright (C) 2025-2026  <Jochen Zeitler>
 """
 Export for Thermal Simulation — write the assembly as per-material STEP
-files, a Gmsh script, a material table and a manifest (see
-core.thermal_export).
+files, a Gmsh script with named volumes and boundary surfaces, a material
+table and a manifest (see core.thermal_export).
 
 If no part has a material yet, Assign Materials runs first. Parts that still
 have none are listed before anything is written, because the export leaves
@@ -28,6 +28,42 @@ def _preview(names):
     return shown
 
 
+def _ask_boundary(parent, defaults):
+    """The boundary conditions to write, or None when cancelled."""
+    from compat import QtWidgets
+
+    dialog = QtWidgets.QDialog(parent)
+    dialog.setWindowTitle("Thermal boundary conditions")
+    form = QtWidgets.QFormLayout(dialog)
+    spins = {}
+    for key, label, suffix, low, high, decimals in (
+        ("die_power_W", "Power dissipated in the die", " W", 0.0, 1.0e4, 3),
+        ("heat_sink_temperature_C", "Heat-sink temperature (underside)", " °C", -273.0, 1000.0, 1),
+        ("convection_W_per_m2K", "Convection coefficient (other faces)", " W/m²K", 0.0, 1.0e6, 1),
+        ("ambient_temperature_C", "Ambient temperature", " °C", -273.0, 1000.0, 1),
+    ):
+        spin = QtWidgets.QDoubleSpinBox()
+        spin.setRange(low, high)
+        spin.setDecimals(decimals)
+        spin.setSuffix(suffix)
+        spin.setValue(defaults[key])
+        form.addRow(f"{label}:", spin)
+        spins[key] = spin
+    note = QtWidgets.QLabel(
+        "Named as surfaces and a volume in the Gmsh script, with these values "
+        "in the manifest. The solver applies them.")
+    note.setWordWrap(True)
+    form.addRow(note)
+    buttons = QtWidgets.QDialogButtonBox(
+        QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+    buttons.accepted.connect(dialog.accept)
+    buttons.rejected.connect(dialog.reject)
+    form.addRow(buttons)
+    if not dialog.exec_():
+        return None
+    return {key: spin.value() for key, spin in spins.items()}
+
+
 class ThermalExportCommand:
     """Export the active document as a thermal simulation model."""
 
@@ -35,14 +71,15 @@ class ThermalExportCommand:
         return {
             "MenuText": "Export for Thermal Simulation",
             "ToolTip":  "Write every part with a material as per-material STEP "
-                        "files, plus a Gmsh script, a material table and a "
-                        "manifest",
+                        "files, plus a Gmsh script with boundary surfaces, a "
+                        "material table and a manifest",
             "Pixmap":   get_icon("Thermal_Export.svg"),
         }
 
     def Activated(self):
         from compat import QtWidgets, QtCore
         from core import materials, thermal_export
+        from thermal.MaterialsCommand import active_stackup
 
         doc = FreeCAD.activeDocument()
         if doc is None:
@@ -58,7 +95,7 @@ class ThermalExportCommand:
 
         if not any(hasattr(o, materials.PROPERTY) for o in parts):
             doc.openTransaction("Assign Materials")
-            materials.assign_materials(doc)
+            materials.assign_materials(doc, stackup_data=active_stackup())
             doc.commitTransaction()
 
         missing = [o.Name for o in parts if materials.material_of(o) is None]
@@ -80,6 +117,10 @@ class ThermalExportCommand:
             if answer != QtWidgets.QMessageBox.Yes:
                 return
 
+        boundary = _ask_boundary(parent, thermal_export.DEFAULT_BOUNDARY)
+        if boundary is None:
+            return
+
         start_dir = (os.path.dirname(doc.FileName) if doc.FileName
                      else os.path.expanduser("~"))
         out_dir = QtWidgets.QFileDialog.getExistingDirectory(
@@ -90,7 +131,7 @@ class ThermalExportCommand:
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         try:
             summary = thermal_export.export_thermal_model(
-                doc, out_dir, basename=doc.Label)
+                doc, out_dir, basename=doc.Label, boundary=boundary)
         except ValueError as exc:
             QtWidgets.QApplication.restoreOverrideCursor()
             QtWidgets.QMessageBox.warning(parent, title, str(exc))
@@ -106,6 +147,9 @@ class ThermalExportCommand:
         msg = (f"{summary['parts']} part(s) in {len(summary['materials'])} "
                f"material(s) written to\n{summary['directory']}\n\n"
                + "\n".join(summary["files"]))
+        source = summary["boundary_conditions"]["HeatSource"]
+        if source.get("physical_volume") is None:
+            msg += "\n\nThere is no silicon in the model — apply the die power by hand."
         if summary["overlaps_resolved"]:
             msg += (f"\n\n{len(summary['overlaps_resolved'])} filler part(s) "
                     "were cut where they overlapped other parts.")

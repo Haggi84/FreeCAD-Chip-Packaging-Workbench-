@@ -17,6 +17,22 @@ from Get_Path import get_icon
 _DETAIL_LIMIT = 200
 
 
+def active_stackup():
+    """
+    The stackup of the active Technology Configuration profile, or None —
+    it is what says which metal each GDS layer is made of.
+    """
+    try:
+        from core.TechConfig import tech_config
+        if not tech_config.has_xml():
+            return None
+        from core.Core_Functionality import parse_stackup_xml
+        return parse_stackup_xml(tech_config.get_xml()) or None
+    except Exception as exc:
+        FreeCAD.Console.PrintWarning(f"[Materials] could not read the active stackup: {exc}\n")
+        return None
+
+
 def _details(report):
     lines = []
     for title, rows in (("Assigned", report["assigned"]), ("Kept", report["kept"])):
@@ -52,7 +68,7 @@ class AssignMaterialsCommand:
 
         doc.openTransaction("Assign Materials")
         try:
-            report = materials.assign_materials(doc)
+            report = materials.assign_materials(doc, stackup_data=active_stackup())
             doc.commitTransaction()
         except Exception as exc:
             doc.abortTransaction()

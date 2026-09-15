@@ -618,6 +618,10 @@ def extract_chip_proxy(gds_path, lyp_path=None, map_path=None, xml_path=None,
         stackup_data, substrate_thickness_um
     )
     pads = get_bond_pad_positions_mm(gds_path, ihp_map, selected_layers, top_n_pad_layers)
+    from core.pad_names import read_labels_from_file, label_for_pad
+    labels = read_labels_from_file(gds_path)
+    for pad in pads:
+        pad["label"] = label_for_pad(labels, pad)
 
     return {
         "source_gds": str(gds_path),
@@ -632,6 +636,7 @@ def extract_chip_proxy(gds_path, lyp_path=None, map_path=None, xml_path=None,
         "z0_mm": z0_mm,
         "thickness_source": thickness_source,
         "pads": pads,
+        "labels_found": len(labels),
     }
 
 
@@ -790,7 +795,7 @@ def build_chip_proxy_object(doc, proxy_data: dict, name: str = "Chip"):
             pad_w, pad_h, pad_t,
             Base.Vector(pad["x_mm"] - pad_w / 2.0, pad["y_mm"] - pad_h / 2.0, z0 + t),
         )
-        marker.Label = f"{display_name} {pad.get('name', 'Pad')} {i}"
+        marker.Label = f"{display_name} {pad.get('label') or pad.get('name', 'Pad')} {i}"
 
         # Wire-bond snap point: the top face centre of the pad marker —
         # same "top of the visible pad surface" convention ContactPointTool
@@ -806,6 +811,9 @@ def build_chip_proxy_object(doc, proxy_data: dict, name: str = "Chip"):
         marker.ContactPoint   = pt
         marker.SourceObject   = block.Name
         marker.IsContactPoint = True
+        marker.addProperty("App::PropertyString", "PadName", "Wirebond",
+                            "Pad name from the layout's text label")
+        marker.PadName = pad.get("label") or ""
 
         if FreeCAD.GuiUp:
             marker.ViewObject.ShapeColor   = (0.90, 0.30, 0.10)   # orange — die-side
