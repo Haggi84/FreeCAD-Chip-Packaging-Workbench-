@@ -126,6 +126,22 @@ def build_stack_mm_from_xml(selected_layers, ihp_map, stackup_data) -> dict:
     return out
 
 
+def lowest_real_layer_z0(stack_mm):
+    """
+    The z0 of the lowest layer whose height the stackup XML actually states,
+    or None if there is no such layer.
+
+    Marker layers are excluded deliberately: they are absent from the stackup
+    and carry rank-based fallback heights that mean nothing, so measuring
+    against one would measure against a number the PDK never supplied.
+    """
+    if not stack_mm:
+        return None
+    real = [v["z0_mm"] for v in stack_mm.values()
+            if isinstance(v, dict) and v.get("from_xml")]
+    return min(real) if real else None
+
+
 def drop_stack_to_die_surface(stack_mm):
     """
     Slide the loaded layer stack down so its lowest real layer starts at z=0 —
@@ -155,12 +171,9 @@ def drop_stack_to_die_surface(stack_mm):
     if not stack_mm:
         return dict(stack_mm or {}), 0.0
 
-    real = [v["z0_mm"] for v in stack_mm.values()
-            if isinstance(v, dict) and v.get("from_xml")]
-    if not real:
+    shift = lowest_real_layer_z0(stack_mm)
+    if shift is None:
         return dict(stack_mm), 0.0
-
-    shift = min(real)
     if abs(shift) < 1e-12:
         return dict(stack_mm), 0.0
 

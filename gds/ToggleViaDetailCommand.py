@@ -15,23 +15,27 @@ tightly packed via array reads as one filled block while physically separate
 arrays/pads stay visually separate.
 
 State per VIA layer:
-  Simplified (default) — show <Layer>_ViaBlock, hide the detailed B-rep.
-  Detail               — hide the block, show the detailed B-rep.
+  Simplified — show <Layer>_ViaBlock, hide the detailed B-rep.
+  Detail     — hide the block, show the detailed B-rep.
 
-VIA layers are detected by name/label containing "via".  They are managed
-here independently of the fast-mesh render toggle, which skips them in its
-own bulk baking pass and instead dispatches any newly-loaded via layer to
-sync_new_via_layer() below.
+VIA layers are detected with core.lod_import's token list, so the layers the
+import protects are exactly the layers this can block — that covers SG13G2's
+Vmim and SKY130's mcon/licon1, which a bare "via" substring test misses.
 
-Relationship to the other GDS performance mechanisms
+Whether an import STARTS in blocks or in detail follows the "Keep VIA layers
+in full detail" option in the import dialog. Either way the blocks are built
+on demand the first time they are switched on, so starting in detail costs
+nothing later.
+
+Relationship to the other GDS display mechanisms
 ------------------------------------------------------
-One of four independent, cooperating mechanisms — see ui/LODManager.py's
+One of three independent, cooperating mechanisms — see ui/LODManager.py's
 module docstring for the full picture. In short: this module only decides
-how VIA layers specifically are simplified; gds.TogglePerformanceModeCommand
-owns non-via layers and calls into sync_new_via_layer() here for via layers
-it encounters; ui.DetailLayerPanel's bbox-simplify toggle is a separate,
-independent per-layer Shape swap that must call invalidate_via_block() to
-avoid leaving a stale block cached under the old geometry.
+how VIA layers specifically are simplified; gds.LayerDisplay dispatches a
+newly-loaded layer here when it is a via layer; ui.DetailLayerPanel's
+bbox-simplify toggle is a separate, independent per-layer Shape swap that
+must call invalidate_via_block() to avoid leaving a stale block cached under
+the old geometry.
 """
 
 import FreeCAD
@@ -43,7 +47,6 @@ from session.WorkbenchState import register_state_provider
 
 _VIA_BLOCK_SUFFIX = "_ViaBlock"
 _VIA_BLOCK_GROUP  = "GDS_ViaBlocks"
-_PERF_MESH_SUFFIX = "_PerfMesh"
 
 # Module state: False = simplified blocks (default), True = full detail.
 _via_detailed = False
@@ -57,9 +60,15 @@ def _is_via_layer(obj) -> bool:
     if not name.startswith("layer_"):
         return False
     # Never treat our own generated proxies as via source layers.
-    if name.endswith(_VIA_BLOCK_SUFFIX.lower()) or name.endswith(_PERF_MESH_SUFFIX.lower()):
+    if name.endswith(_VIA_BLOCK_SUFFIX.lower()):
         return False
-    return "via" in name or "via" in label
+    # Shares core.lod_import's token list rather than testing for "via"
+    # alone, so the same layers that the import protects are the ones this
+    # can block. A bare "via" test misses SG13G2's Vmim and all of SKY130's
+    # vertical connections, which are called mcon and licon1 — those layers
+    # could never be simplified at all.
+    from core.lod_import import _name_says_via
+    return _name_says_via(name) or _name_says_via(label)
 
 
 def _via_layer_objects(doc):
@@ -94,9 +103,9 @@ def invalidate_via_block(doc, obj_name: str):
     """
     Delete the cached via-simplification block for *obj_name*, if any,
     forcing a fresh build next time via-simplified mode is (re)applied.
-    Companion to TogglePerformanceModeCommand.invalidate_layer_mesh — call
-    whenever a via layer's underlying Shape is replaced/mutated in place, or
-    the block keeps showing clusters computed from stale geometry.
+
+    Call whenever a via layer's underlying Shape is replaced or mutated in
+    place, or the block keeps showing clusters computed from stale geometry.
     """
     if doc is None:
         return
@@ -154,9 +163,56 @@ def _build_via_block(doc, obj, grp):
 
 # ── public API ─────────────────────────────────────────────────────────────────
 
-def is_via_detailed() -> bool:
-    """True when via layers are currently showing full detail (not blocks)."""
+def document_shows_via_blocks(doc) -> bool:
+    """
+    Whether *doc* is currently displaying via blocks, read from the document.
+
+    The module global below records what was last APPLIED, which is not the
+    same thing: an import can finish in either state, a document can be
+    reopened, and a block can be deleted by hand. When the two disagree the
+    toggle computes the wrong direction and the first press appears to do
+    nothing — the same class of bug as tracking texture state on an object
+    instead of reading the scene graph.
+    """
+    if doc is None:
+        return False
+    for obj, _vobj in _via_layer_objects(doc):
+        block = doc.getObject(obj.Name + _VIA_BLOCK_SUFFIX)
+        if block is None:
+            continue
+        try:
+            if block.ViewObject.Visibility:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def is_via_detailed(doc=None) -> bool:
+    """
+    True when via layers are showing full detail rather than blocks.
+
+    Prefers the document's own state; falls back to the recorded global when
+    there is no document to look at (headless, or before anything loaded).
+    """
+    if doc is not None and any(True for _ in _via_layer_objects(doc)):
+        return not document_shows_via_blocks(doc)
     return _via_detailed
+
+
+def set_via_detailed(flag: bool) -> None:
+    """
+    Record the current via display state WITHOUT touching any geometry.
+
+    An import can now legitimately finish in Detail: with "Keep VIA layers in
+    full detail" on, gds.GDSCommand skips apply_via_simplified entirely. The
+    module default is False — "showing blocks" — so without this the state
+    and the document disagree, and the first press of Toggle VIA Detail
+    computes the wrong direction: it re-applies detail that is already there
+    and appears to do nothing, the blocks only arriving on a second press.
+    """
+    global _via_detailed
+    _via_detailed = bool(flag)
 
 
 def _save_via_state(doc):
@@ -166,7 +222,7 @@ def _save_via_state(doc):
 def _restore_via_state(doc, data):
     global _via_detailed
     _via_detailed = bool(data.get("via_detailed", False))
-    # See TogglePerformanceModeCommand._restore_perf_state: no re-baking
+    # No re-baking
     # needed, ViewObject.Visibility already round-trips natively.
 
 
@@ -182,8 +238,8 @@ def sync_new_via_layer(doc, obj):
     Without this, a via layer loaded after the initial import never gets
     simplified at all — it would just sit in full B-rep detail regardless of
     whether every other via layer in the document is currently collapsed to
-    blocks. Companion to gds.TogglePerformanceModeCommand.sync_new_layer_display,
-    which calls into this for any newly-loaded layer that is a via layer.
+    blocks. Companion to gds.LayerDisplay.sync_new_layer_display, which calls
+    into this for any newly-loaded layer that is a via layer.
 
     Deliberately does not bail out early when obj.ViewObject is None (e.g. no
     GUI session) — _build_via_block() still creates the block object itself
@@ -230,9 +286,6 @@ def apply_via_simplified(doc):
         block = _build_via_block(doc, obj, grp)
         try:
             vobj.Visibility = False
-            mesh = doc.getObject(obj.Name + _PERF_MESH_SUFFIX)
-            if mesh is not None:
-                mesh.ViewObject.Visibility = False
             if block is not None:
                 block.ViewObject.Visibility = True
                 n += 1
@@ -273,18 +326,22 @@ def apply_via_detail(doc):
 class ToggleViaDetailCommand:
 
     def GetResources(self):
-        mode = "Detail" if _via_detailed else "Blocks"
         return {
-            "MenuText": f"Toggle VIA Detail  [{mode}]",
+            "MenuText": "Toggle VIA Detail",
             "ToolTip": (
-                "Switch VIA layers between simple outlined blocks and full detail.\n"
+                "Switch VIA layers between clustered blocks and full detail.\n"
                 "\n"
-                "Blocks → each VIA layer shown as one outlined bounding block\n"
-                "         (fast; the default).\n"
-                "Detail → full VIA cut geometry (slower).\n"
+                "Blocks — one outlined block per proximity cluster of vias, so\n"
+                "         a dense array reads as one filled shape while\n"
+                "         separate arrays stay separate. Fast to render.\n"
+                "Detail — the real via geometry.\n"
                 "\n"
-                "To force a rebuild: delete the 'GDS_ViaBlocks' group and toggle.\n"
-                f"Current: {mode}"
+                "Which one an import starts in follows the 'Keep VIA layers in\n"
+                "full detail' option in the import dialog. The blocks are\n"
+                "built on demand the first time you switch to them, so they\n"
+                "cost nothing until asked for.\n"
+                "\n"
+                "To force a rebuild: delete the 'GDS_ViaBlocks' group and toggle."
             ),
             "Pixmap": get_icon("Via_Detail.svg"),
         }
@@ -299,10 +356,12 @@ class ToggleViaDetailCommand:
         doc = FreeCAD.activeDocument()
         if doc is None:
             return
-        if _via_detailed:
-            apply_via_simplified(doc)
-        else:
+        # Ask the DOCUMENT what it is showing, so the first press always
+        # does something visible even if the recorded state drifted.
+        if document_shows_via_blocks(doc):
             apply_via_detail(doc)
+        else:
+            apply_via_simplified(doc)
         FreeCADGui.updateGui()
 
 

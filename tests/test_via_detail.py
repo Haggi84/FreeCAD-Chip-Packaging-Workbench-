@@ -36,7 +36,92 @@ def run():
     _check_sg13g2(tc)
     _check_sky130(tc)
     _check_threading(tc)
+    _check_toggle(tc)
+    _check_block_shape(tc)
     return tc.results
+
+
+def _check_toggle(tc):
+    """
+    Turning the blocks back on has to work from the state the import leaves.
+
+    Building the blocks needs a ViewObject and cannot run headlessly — the
+    generator that finds via layers requires one — so what is covered here is
+    the part that was actually broken: which layers the toggle recognises,
+    and whether its recorded state matches the document.
+    """
+    from _harness import load_module_from_file
+    tv = load_module_from_file("via_toggle_test",
+                               "gds/ToggleViaDetailCommand.py")
+
+    class _Fake:
+        def __init__(self, name):
+            self.Name = name
+            self.Label = name
+
+    # Vmim is a real SG13G2 via and mcon/licon1 are SKY130's only vertical
+    # connections; a bare "via" substring test matched none of them, so those
+    # layers could never be simplified at all.
+    for name in ("Layer_TopVia1_drawing_125", "Layer_TopVia2_drawing_133",
+                 "Layer_Via1_drawing_19", "Layer_Vmim_drawing_129",
+                 "Layer_mcon_drawing_67", "Layer_licon1_drawing_66"):
+        tc.check(f"toggle recognises {name} as a via layer",
+                  tv._is_via_layer(_Fake(name)))
+
+    for name in ("Layer_Metal1_drawing_8", "Layer_Activ_drawing_1",
+                 "Layer_TopMetal2_drawing_134",
+                 "Layer_EdgeSeal_boundary_39", "GDS_Substrate", "GDS_EPI"):
+        tc.check(f"toggle does NOT treat {name} as a via layer",
+                  not tv._is_via_layer(_Fake(name)))
+
+    # Its own generated blocks must never be mistaken for source layers, or
+    # a second toggle would build blocks out of blocks.
+    tc.check("toggle ignores its own _ViaBlock proxies",
+              not tv._is_via_layer(_Fake("Layer_TopVia1_drawing_125_ViaBlock")))
+
+    # The toggle must decide from the DOCUMENT, not a module global. The two
+    # drift apart routinely — an import can finish in either state, a document
+    # can be reopened, a block can be deleted by hand — and when they disagree
+    # the first press computes the wrong direction and appears to do nothing.
+    tc.check("document_shows_via_blocks: no document means no blocks",
+              tv.document_shows_via_blocks(None) is False)
+    tc.check("is_via_detailed falls back to the recorded state with no "
+              "document to inspect",
+              isinstance(tv.is_via_detailed(None), bool))
+
+    import inspect
+    act = inspect.getsource(tv.ToggleViaDetailCommand.Activated)
+    tc.check("the toggle asks the document which way to go, rather than "
+              "trusting the module global",
+              "document_shows_via_blocks" in act)
+    tc.check("the toggle can still build blocks on demand",
+              "apply_via_simplified" in act)
+
+    before = tv.is_via_detailed()
+    try:
+        tv.set_via_detailed(True)
+        tc.check("set_via_detailed(True) is reflected by is_via_detailed()",
+                  tv.is_via_detailed() is True)
+        tv.set_via_detailed(False)
+        tc.check("set_via_detailed(False) is reflected too",
+                  tv.is_via_detailed() is False)
+    finally:
+        tv.set_via_detailed(before)
+
+    # The import must announce the state it leaves behind, or the first press
+    # of the toggle computes the wrong direction and appears to do nothing.
+    #
+    # Read as source rather than imported: "from gds import GDSCommand" binds
+    # the CLASS of that name, not the module, and importing the module for
+    # real drags in the whole GUI command stack for one string check.
+    path = os.path.join(REPO_ROOT, "gds", "GDSCommand.py")
+    with open(path, encoding="utf-8") as fh:
+        src = fh.read()
+    tc.check("the import records the via state when it skips simplification, "
+              "so the first toggle press goes the right way",
+              "set_via_detailed" in src)
+    tc.check("the import still simplifies vias when the option is off",
+              "apply_via_simplified" in src)
 
 
 def _check_names(tc):
@@ -265,3 +350,77 @@ def _check_cache_key(tc):
     ):
         tc.check(f"cache key changes when {label} changes",
                   CF._cache_key(gds, layers, changed) != k0)
+
+
+def _check_block_shape(tc):
+    """
+    A via block is one cube per cluster, spanning that cluster's X/Y outline.
+
+    That is the whole contract: replacing 884 individual via solids with a
+    handful of boxes is only acceptable if the boxes still occupy the area
+    the vias did. A block that shrank, or that fused two physically separate
+    arrays into one, would misrepresent where the connections are.
+    """
+    from core.via_clustering import cluster_boxes, DEFAULT_CLUSTER_GAP_MM
+    from core import Core_Functionality as CF
+    from core.lod_import import categorize_layers
+    import gdstk
+
+    gds = os.path.join(REPO_ROOT, "samples", "IC_Pad_EdgeSeal.boundary.gds")
+    lyp = os.path.join(_IHP, "sg13g2.lyp")
+    if not (os.path.isfile(gds) and os.path.isfile(lyp)):
+        return
+
+    all_layers, _ = parse_lyp(lyp)
+    mapping = parse_map(os.path.join(_IHP, "sg13g2.map"))
+    stack = parse_stackup_xml(os.path.join(_IHP, "SG13G2_200um.xml"))
+    lib = gdstk.read_gds(gds)
+    used = set()
+    for cell in lib.top_level():
+        for poly in cell.get_polygons(depth=None):
+            used.add((poly.layer, poly.datatype))
+    present = [L for L in all_layers if (L["layer_id"], L["datatype"]) in used]
+
+    built = {}
+    for entry in CF.load_gds(
+            gds, present, transform=None, preview_2d=False,
+            compound_per_layer=True, min_area_mm2=0.0, decimate_tol_mm=0.0,
+            skip_fill_datatype=False, fill_as_bbox=True, fill_layer_keys=set(),
+            flat_layer_keys=set(), force_bbox_keys=set(),
+            exclude_auto_bbox_keys=set(), protect_via_keys=set(),
+            ihp_map=mapping,
+            stack_mm=CF.build_stack_mm_from_xml(all_layers, mapping, stack),
+            contacts_only_3d=False, mesh_3d=False, use_cache=False,
+            auto_bbox_threshold=0, exact_geometry=True):
+        built[(entry.get("layer_id"), entry.get("datatype"))] = entry.get("shape")
+
+    for key, n_vias in (((125, 0), 884), ((133, 0), 154)):
+        shape = built.get(key)
+        if shape is None:
+            continue
+        tc.check(f"fixture: {key[0]}/{key[1]} has its {n_vias} real vias",
+                  len(shape.Solids) == n_vias, f"got {len(shape.Solids)}")
+
+        blocks = cluster_boxes(shape, DEFAULT_CLUSTER_GAP_MM)
+        tc.check(f"{key[0]}/{key[1]}: many vias collapse to a few blocks",
+                  0 < len(blocks.Solids) < len(shape.Solids),
+                  f"{len(shape.Solids)} vias -> {len(blocks.Solids)} blocks")
+        tc.check(f"{key[0]}/{key[1]}: every block is a six-faced cube",
+                  all(len(s.Faces) == 6 for s in blocks.Solids))
+
+        a, b = shape.BoundBox, blocks.BoundBox
+        tc.check(f"{key[0]}/{key[1]}: the blocks keep the vias' X/Y outline",
+                  abs(a.XLength - b.XLength) < 1e-9
+                  and abs(a.YLength - b.YLength) < 1e-9
+                  and abs(a.XMin - b.XMin) < 1e-9
+                  and abs(a.YMin - b.YMin) < 1e-9,
+                  f"vias {a.XLength}x{a.YLength} vs blocks {b.XLength}x{b.YLength}")
+        tc.check(f"{key[0]}/{key[1]}: the blocks span the vias' Z range, so "
+                  f"they still bridge the same two metals",
+                  abs(a.ZMin - b.ZMin) < 1e-9 and abs(a.ZMax - b.ZMax) < 1e-9,
+                  f"vias {a.ZMin}..{a.ZMax} vs blocks {b.ZMin}..{b.ZMax}")
+
+        # Physically separate arrays must NOT fuse — that is the reason this
+        # clusters rather than taking one box for the whole layer.
+        tc.check(f"{key[0]}/{key[1]}: separate arrays stay separate blocks",
+                  len(blocks.Solids) > 1, f"got {len(blocks.Solids)}")

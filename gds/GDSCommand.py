@@ -30,12 +30,22 @@ from Get_Path import get_icon
 # ── Colour resolution ─────────────────────────────────────────────────────────
 
 def _layer_colors(layer: dict, ihp_map: dict,
-                  match_klayout: bool, highlight_bondable: bool):
+                  match_klayout: bool, highlight_bondable: bool,
+                  exact_geometry: bool = False):
     """Returns (shape_rgb, line_rgb, transparency) for a layer."""
     lid = layer.get("layer_id", 0)
     dt  = layer.get("datatype",  0)
     m   = ihp_map.get((lid, dt))
     types = m["edi_types"] if m else set()
+
+    if exact_geometry:
+        # Straight from the .lyp, with no workbench opinion applied. The
+        # bondable highlight below repaints pad layers gold, which is useful
+        # for wire bonding and is the one thing that makes an otherwise
+        # KLayout-faithful view disagree with KLayout on colour.
+        return (hex_to_rgb(layer.get("fill-color",  "#FFFFFF")),
+                hex_to_rgb(layer.get("frame-color", "#000000")),
+                0)
 
     if match_klayout:
         sr = hex_to_rgb(layer.get("fill-color",  "#FFFFFF"))
@@ -56,7 +66,8 @@ def _layer_colors(layer: dict, ihp_map: dict,
 # ── Document construction ─────────────────────────────────────────────────────
 
 def _populate_document(doc, shapes, filtered_layers, ihp_map,
-                       match_klayout, highlight_bondable, mesh_3d):
+                       match_klayout, highlight_bondable, mesh_3d,
+                       exact_geometry=False):
     """
     Creates FreeCAD objects for all shapes.
     Returns (layer_objects, pending_colors).
@@ -77,7 +88,8 @@ def _populate_document(doc, shapes, filtered_layers, ihp_map,
         if not shp:
             continue
 
-        sr, lr, tr = _layer_colors(layer, ihp_map, match_klayout, highlight_bondable)
+        sr, lr, tr = _layer_colors(layer, ihp_map, match_klayout,
+                                    highlight_bondable, exact_geometry)
 
         if shp.get("is_mesh"):
             obj = doc.addObject("Mesh::Feature", f"Layer_{name}_{lid}")
@@ -234,7 +246,7 @@ def _run_render(doc, layer_objects, pending_colors):
 
 # ── Post-import: PIN instances, group ────────────────────────────────────────
 
-def _add_die_body(doc, gds_path, stackup_data, options):
+def _add_die_body(doc, gds_path, stackup_data, options, stack_mm=None):
     """
     Build the epi + silicon slabs under the lowest drawn layer.
 
@@ -256,8 +268,20 @@ def _add_die_body(doc, gds_path, stackup_data, options):
         if not substrate.substrate_layers_mm(stackup_data):
             return []          # stackup declares no body; nothing to build
         outline = describe_die_footprint(gds_path)
-        return substrate.build_substrate_objects(
+        made = substrate.build_substrate_objects(
             doc, outline["footprint_mm"], stackup_data)
+
+        # Fill the space between the die surface and the lowest layer this
+        # layout actually uses. A PDK defines more levels than any one design
+        # draws on, and that volume is oxide in the real part, not air.
+        if bool(options.get("fill_dielectric_gap", True)):
+            from core.tech.stackup import lowest_real_layer_z0
+            lowest = lowest_real_layer_z0(stack_mm or {})
+            fill = substrate.build_dielectric_fill(
+                doc, outline["footprint_mm"], stackup_data, lowest)
+            if fill is not None:
+                made.append(fill)
+        return made
     except Exception as exc:
         FreeCAD.Console.PrintWarning(f"[Substrate] not built: {exc}\n")
         return []
@@ -265,7 +289,7 @@ def _add_die_body(doc, gds_path, stackup_data, options):
 
 def _post_import(doc, gds_path, ihp_map, selected_layers,
                  auto_pin_contacts, before_objs,
-                 stackup_data=None, options=None):
+                 stackup_data=None, options=None, stack_mm=None):
     """
     After the actual import:
     - Display GDS cells named "pin" as flat 2D shapes
@@ -293,7 +317,7 @@ def _post_import(doc, gds_path, ihp_map, selected_layers,
 
     # Die body — built before the group is formed, so the slabs are swept
     # into GDS_Die with everything else the import produced.
-    _add_die_body(doc, gds_path, stackup_data, options or {})
+    _add_die_body(doc, gds_path, stackup_data, options or {}, stack_mm)
 
     # GDS_Die group
     grp = doc.addObject("App::DocumentObjectGroup", "GDS_Die")
@@ -305,22 +329,42 @@ def _post_import(doc, gds_path, ihp_map, selected_layers,
     return cp_count
 
 
-def _apply_performance_mode(doc, pending_colors, keep_via_detail=True):
-    """Performance mode after import; reapply colours afterwards."""
-    try:
-        from gds.TogglePerformanceModeCommand import apply_performance_mode
-        apply_performance_mode(doc)
-    except Exception as e:
-        FreeCAD.Console.PrintWarning(f"[GDS] Performance mode: {e}\n")
+def _apply_display_mode(doc, pending_colors, keep_via_detail=True,
+                            exact_geometry=False):
+    """
+    Post-import display setup.
+
+    Used to bake every layer into a fast triangulated mesh first; that
+    feature was removed, so the only remaining step is whether via layers
+    start as clustered blocks.
+    """
+    if exact_geometry:
+        try:
+            from gds.ToggleViaDetailCommand import set_via_detailed
+            set_via_detailed(True)
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(f"[GDS] Via state: {e}\n")
+        FreeCAD.Console.PrintMessage(
+            "[GDS] Exact KLayout geometry — via blocks skipped. Still "
+            "available from the Render toolbar.\n")
+        return
     # VIA layers → simple outlined blocks, unless the user asked to keep via
     # detail. This step runs AFTER the geometry is built and swaps the real
     # via arrays for clustered blocks, so on its own it undoes every
     # protection applied during the build — which is exactly how an import
     # could report "VIA detail protected" and still show blocks.
     if keep_via_detail:
+        # Tell the toggle where the document actually stands, or its first
+        # press would compute the wrong direction and appear to do nothing.
+        try:
+            from gds.ToggleViaDetailCommand import set_via_detailed
+            set_via_detailed(True)
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(f"[GDS] Via state: {e}\n")
         FreeCAD.Console.PrintMessage(
             "[GDS] Via simplify skipped — 'Keep VIA layers in full detail' is "
-            "on. Use Toggle VIA Detail to cluster them into blocks.\n")
+            "on. Press Toggle VIA Detail (Render toolbar) to cluster them "
+            "into blocks; the blocks are built on demand.\n")
         return
     try:
         from gds.ToggleViaDetailCommand import apply_via_simplified
@@ -470,6 +514,7 @@ def load_gds_layers():
         layer_objects, pending_colors = _populate_document(
             doc, shapes, layers_to_load, ihp_map,
             aux["match_klayout"], aux["highlight_bondable"], aux["mesh_3d"],
+            aux.get("exact_geometry", False),
         )
 
         try:
@@ -482,7 +527,8 @@ def load_gds_layers():
 
         cp_count = _post_import(doc, gds_path, ihp_map, layers_to_load,
                                 aux["auto_pin_contacts"], before_objs,
-                                stackup_data=stackup_data, options=options)
+                                stackup_data=stackup_data, options=options,
+                                stack_mm=aux.get("stack_mm"))
 
         if aux["auto_pin_contacts"]:
             if cp_count:
@@ -509,9 +555,10 @@ def load_gds_layers():
         # promote requests from the DetailLayerPanel.
         _start_lod_manager(doc, gds_path, aux)
 
-        _apply_performance_mode(
+        _apply_display_mode(
             doc, pending_colors,
-            keep_via_detail=bool(options.get("keep_via_detail", True)))
+            keep_via_detail=bool(options.get("keep_via_detail", True)),
+            exact_geometry=aux.get("exact_geometry", False))
 
         return (doc, layer_objects, all_avail_layers, unique_colors,
                 gds_path, lyp_path, options, map_path)

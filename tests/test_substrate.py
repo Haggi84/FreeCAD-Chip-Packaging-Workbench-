@@ -37,6 +37,7 @@ def run():
     _check_refusals(tc)
     _check_geometry(tc)
     _check_drop_to_surface(tc)
+    _check_dielectric_fill(tc)
     return tc.results
 
 
@@ -270,5 +271,99 @@ def _check_geometry(tc):
             degenerate_raised = True
         tc.check("a degenerate footprint is refused rather than producing a "
                   "zero-width slab", degenerate_raised)
+    finally:
+        FreeCAD.closeDocument(doc.Name)
+
+
+def _check_dielectric_fill(tc):
+    """
+    The space between the die surface and the lowest layer a layout actually
+    uses is oxide, not air.
+
+    A PDK defines more levels than any one design draws on. With only the top
+    of an SG13G2 stack present, nothing sits between the silicon and Metal5 at
+    5.09 um — but in the real part that volume is the inter-metal dielectric
+    the unused levels are embedded in. Filling it is the honest fix; the
+    earlier approach of sliding the whole stack down closed the same gap by
+    falsifying every Z height in the model.
+    """
+    if not os.path.isfile(_IHP_XML):
+        return
+    data = parse_stackup_xml(_IHP_XML)
+
+    entry = substrate.interconnect_dielectric(data)
+    tc.check("interconnect_dielectric: SG13G2's is SiO2 — derived from the "
+              "stackup order, not looked up by name",
+              entry is not None and entry.get("name") == "SiO2",
+              str(entry))
+    # It must not pick the passivation or the air above the top metal, nor
+    # any part of the die body below.
+    tc.check("interconnect_dielectric: not the passivation or air, which sit "
+              "ABOVE the top metal",
+              (entry or {}).get("name") not in ("AIR", "Passive"))
+    tc.check("interconnect_dielectric: not part of the die body",
+              (entry or {}).get("name")
+              not in {e["name"] for e in substrate.substrate_layers_mm(data)})
+
+    fill = substrate.dielectric_fill_mm(data, 0.00509)   # Metal5's own z0
+    tc.check("dielectric_fill_mm: spans the die surface up to the lowest "
+              "used layer",
+              fill is not None
+              and abs(fill["z0_mm"]) < 1e-12
+              and abs(fill["t_mm"] - 0.00509) < 1e-12,
+              str(fill))
+    tc.check("dielectric_fill_mm: made of the stackup's own dielectric",
+              (fill or {}).get("material") == "SiO2")
+
+    # A full import already reaches the surface: filling then would put a
+    # slab through the middle of Activ.
+    for no_gap in (0.0, -0.001, None, "nonsense"):
+        tc.check(f"dielectric_fill_mm: no fill for a lowest layer at "
+                  f"{no_gap!r} — there is no gap",
+                  substrate.dielectric_fill_mm(data, no_gap) is None)
+
+    doc = new_document("DielectricFill")
+    try:
+        body = substrate.build_substrate_objects(
+            doc, (0.0, 0.0, 1.05, 1.05), data)
+        obj = substrate.build_dielectric_fill(
+            doc, (0.0, 0.0, 1.05, 1.05), data, 0.00509)
+        doc.recompute()
+        if not tc.check("build_dielectric_fill: creates the slab",
+                         obj is not None):
+            return
+
+        bb = obj.Shape.BoundBox
+        tc.check("the fill starts exactly on the epi top (z=0)",
+                  abs(bb.ZMin) < 1e-12, str(bb.ZMin))
+        tc.check("the fill stops exactly at the lowest used layer",
+                  abs(bb.ZMax - 0.00509) < 1e-12, str(bb.ZMax))
+        tc.check("the fill spans the die footprint",
+                  abs(bb.XLength - 1.05) < 1e-9
+                  and abs(bb.YLength - 1.05) < 1e-9)
+        tc.check("the fill is tagged as die body, so it moves with the chip",
+                  getattr(obj, "IsDieBody", False) is True)
+        tc.check("the fill records the material it came from",
+                  obj.StackMaterial == "SiO2", obj.StackMaterial)
+
+        # Substrate, epi and fill must form one solid column with no seams.
+        boxes = sorted([o.Shape.BoundBox for o in body + [obj]],
+                       key=lambda b: b.ZMin)
+        gaps = [round(b.ZMin - a.ZMax, 12) for a, b in zip(boxes, boxes[1:])]
+        tc.check("substrate, epi and fill stack contiguously — no seam and "
+                  "no overlap", all(g == 0.0 for g in gaps), str(gaps))
+        tc.check("the column runs from the die underside to the lowest used "
+                  "layer",
+                  abs(boxes[0].ZMin + 0.18375) < 1e-9
+                  and abs(boxes[-1].ZMax - 0.00509) < 1e-12,
+                  f"{boxes[0].ZMin} .. {boxes[-1].ZMax}")
+
+        try:
+            substrate.build_dielectric_fill(doc, (0.0, 0.0, 0.0, 1.0),
+                                             data, 0.00509)
+            degenerate_raised = False
+        except ValueError:
+            degenerate_raised = True
+        tc.check("a degenerate footprint is refused", degenerate_raised)
     finally:
         FreeCAD.closeDocument(doc.Name)

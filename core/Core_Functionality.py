@@ -971,6 +971,7 @@ def load_gds(gds_path,
              force_bbox_keys=None,    # user-selected (layer_id, datatype) pairs to always render as bounding box
              exclude_auto_bbox_keys=None, # user-selected keys that must never be auto-collapsed to bbox
              protect_via_keys=None,   # VIA layers that must never be auto-collapsed — see below
+             exact_geometry=False,    # build every polygon as drawn — see below
              use_gdstk_union=False,   # merge overlapping polygons per layer in C++ before building shapes
              use_cache=True,          # serialise result to disk; second import is near-instant
              parallel_workers=0,      # number of threads for data-prep phase (0 = serial)
@@ -1024,6 +1025,7 @@ def load_gds(gds_path,
         "force_bbox": tuple(sorted(force_bbox_keys or [])),
         "excl_bbox":  tuple(sorted(exclude_auto_bbox_keys or [])),
         "protect_via": tuple(sorted(protect_via_keys or [])),
+        "exact_geometry": bool(exact_geometry),
         "fill_keys":  tuple(sorted(fill_layer_keys or [])),
         "flat_keys":  tuple(sorted(flat_layer_keys or [])),
         "contacts_only": bool(contacts_only_3d),
@@ -1069,11 +1071,25 @@ def load_gds(gds_path,
         # Filler detection: DT=22 convention + any explicitly declared fill keys
         # + any key whose EDI type set contains "FILL" (catches Drawing layers like
         # 29/0 that carry millions of dummy-metal polygons but use DT=0, not DT=22)
-        _fill_keys = set(fill_layer_keys or [])
+        # exact_geometry: build the layout as drawn, matching KLayout.
+        #
+        # Every automatic simplification is switched off together rather than
+        # by six separate arguments, because they can only be trusted as a set
+        # — each one alone still leaves a layer collapsed and the result still
+        # does not match KLayout. force_bbox_keys is deliberately still
+        # honoured: that is an explicit per-layer request from the user, not
+        # an automatic decision.
+        _exact = bool(exact_geometry)
+
+        _fill_keys = set() if _exact else set(fill_layer_keys or [])
         _fill_keys.update(force_bbox_keys or [])   # user-selected bbox layers
         _flat_keys = set(flat_layer_keys or [])
 
         def _is_filler(lyr, dt):
+            # In exact mode nothing is "filler": dummy-metal fill is real
+            # geometry in the layout and KLayout draws every rectangle of it.
+            if _exact:
+                return (lyr, dt) in _fill_keys      # only explicit requests
             if dt == 22 or (lyr, dt) in _fill_keys:
                 return True
             # If the EDI map explicitly tags this key as FILL, collapse it to a
@@ -1237,7 +1253,7 @@ def load_gds(gds_path,
         # per layer) and gds.ToggleViaDetailCommand (proximity clustering).
         _protect_via = set(protect_via_keys or [])
 
-        if _bbox_threshold > 0:
+        if _bbox_threshold > 0 and not _exact:
             _key_counts: dict = {}
             for lyr, dt, _ in polygons:
                 k = (lyr, dt)
@@ -1278,7 +1294,7 @@ def load_gds(gds_path,
         # everything" — core.lod_import uses it when the user promotes a layer
         # to full detail on purpose. Applying a budget there would quietly
         # collapse the very layer that was just asked for.
-        if _poly_budget and _poly_budget > 0 and _bbox_threshold > 0:
+        if _poly_budget and _poly_budget > 0 and _bbox_threshold > 0 and not _exact:
             _survivor_counts = {}
             for lyr, dt, _ in polygons:
                 k = (lyr, dt)
@@ -1321,7 +1337,7 @@ def load_gds(gds_path,
         # Strategy: sample up to MICRO_AREA_SAMPLE_SIZE polygons per layer,
         # compute the median area in µm², and collapse any layer below
         # MICRO_AREA_BBOX_THRESHOLD_UM2 to a single bounding-box solid.
-        if MICRO_AREA_BBOX_THRESHOLD_UM2 > 0.0 and _HAS_NP:
+        if MICRO_AREA_BBOX_THRESHOLD_UM2 > 0.0 and _HAS_NP and not _exact:
             # Group raw polygon point arrays by key for sampling
             _key_sample: dict = {}
             for lyr, dt, poly_pts_raw in polygons:

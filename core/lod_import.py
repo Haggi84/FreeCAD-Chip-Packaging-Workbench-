@@ -111,6 +111,29 @@ def _name_says_via(name: str) -> bool:
     return any(token in base for token in _VIA_NAME_TOKENS)
 
 
+def boundary_layer_keys(all_layers: list) -> set:
+    """
+    Layers that are ANNOTATION, not material — the ".boundary" purpose.
+
+    EdgeSeal.boundary, prBoundary.boundary, Metal1.boundary and the rest mark
+    an extent; they describe where something is, not a film that exists at a
+    height. None of them appear in the stackup XML, so they were being given
+    a rank-based fallback Z and extruded into a 0.2 um slab floating at some
+    arbitrary height — 0.0-0.2 um in one file and 1.6-1.8 um in another,
+    interleaved among real metals.
+
+    Returning them here makes the loader build a zero-thickness face at
+    z = 0 instead: flat, on the die surface, directly above the epi. That is
+    also how KLayout draws them, since they are 2-D annotation there too.
+    """
+    out = set()
+    for layer in all_layers or []:
+        name = str(layer.get("name") or "").strip().lower()
+        if name.endswith(".boundary"):
+            out.add((layer.get("layer_id", 0), layer.get("datatype", 0)))
+    return out
+
+
 def via_layer_keys(all_layers: list, ihp_map: dict, stackup_data: dict) -> set:
     """
     The (layer, datatype) keys that are VIA layers.
@@ -191,11 +214,35 @@ def build_lod_import_params(
     lod_mode           = bool(options.get("lod_mode",           True))
     user_bbox_keys     = set(options.get("layer_bbox",          set()))
 
+    # "Exactly as KLayout draws it" — every polygon built as drawn, nothing
+    # collapsed, filtered or deferred.
+    #
+    # It forces lod_mode off rather than merely disabling the collapse rules:
+    # LOD mode does not simplify a layer, it declines to LOAD it, folding
+    # every non-contact layer into one body box and leaving the rest for the
+    # detail panel. A document showing a box where a layer should be does not
+    # match KLayout no matter how faithfully the loaded layers are built.
+    exact_geometry = bool(options.get("klayout_exact", False))
+    if exact_geometry and lod_mode:
+        lod_mode = False
+        FreeCAD.Console.PrintMessage(
+            "[LOD] Exact KLayout geometry requested — level-of-detail loading "
+            "disabled so every selected layer is built in full.\n")
+
     categories = categorize_layers(all_layers, ihp_map)
 
     fill_layer_keys = {k for k, c in categories.items() if c == "fill"}
     flat_layer_keys = {k for k, c in categories.items() if c == "pin_flat"}
     contact_keys    = {k for k, c in categories.items() if c == "contact"}
+
+    # Boundary/annotation layers are drawn flat on the die surface rather
+    # than extruded to a fabricated thickness — see boundary_layer_keys().
+    _boundary = boundary_layer_keys(all_layers)
+    if _boundary:
+        flat_layer_keys = set(flat_layer_keys) | _boundary
+        FreeCAD.Console.PrintMessage(
+            f"[LOD] Boundary layers drawn flat at the die surface: "
+            + ", ".join(f"{l}/{d}" for l, d in sorted(_boundary)) + "\n")
 
     if lod_mode:
         # Load only contact layers + PIN-Flat immediately
@@ -215,8 +262,10 @@ def build_lod_import_params(
         # Full import — all selected layers immediately
         layers_to_load = all_layers
         extrude_3d     = bool(options.get("extrude_3d", False)) or mesh_3d
-        min_area       = 0.0 if match_klayout else 0.0004
-        decimate       = 0.0 if match_klayout else 0.002
+        # Exact mode never filters by area or decimates outlines: a polygon
+        # KLayout draws must appear, at the vertices it was drawn with.
+        min_area       = 0.0 if (match_klayout or exact_geometry) else 0.0004
+        decimate       = 0.0 if (match_klayout or exact_geometry) else 0.002
         max_polys      = None
 
     stack_mm = None
@@ -233,7 +282,7 @@ def build_lod_import_params(
         # the die surface and the shift comes out as zero. Using it also
         # means a layer promoted later from the detail panel lands
         # consistently with the ones imported immediately.
-        if bool(options.get("drop_to_die_surface", True)):
+        if bool(options.get("drop_to_die_surface", False)):
             from core.tech.stackup import drop_stack_to_die_surface
             stack_mm, shift_mm = drop_stack_to_die_surface(stack_mm)
             if shift_mm:
@@ -270,6 +319,7 @@ def build_lod_import_params(
         force_bbox_keys         = user_bbox_keys,
         exclude_auto_bbox_keys  = excl_bbox,
         protect_via_keys        = via_keys,
+        exact_geometry          = exact_geometry,
         ihp_map                 = ihp_map,
         stack_mm                = stack_mm,
         contacts_only_3d        = lod_mode,
@@ -297,6 +347,7 @@ def build_lod_import_params(
         ihp_map            = ihp_map,
         stackup_data       = stackup_data,
         via_keys           = via_keys,
+        exact_geometry     = exact_geometry,
     )
 
     return load_kwargs, aux

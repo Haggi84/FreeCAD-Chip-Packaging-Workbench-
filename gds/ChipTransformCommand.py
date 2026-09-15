@@ -137,12 +137,24 @@ def _gds_objects(doc):
       document.
     - All objects inside the Substrate_Frames group so that encapsulant frame
       extrusions move together with the chip layers.
+    - The die body — the epi and substrate slabs built under the layout by
+      core.substrate — matched by their IsDieBody property. Name prefixes do
+      not catch them: they are called "GDS_Substrate"/"GDS_EPI" while
+      _GDS_PREFIXES only lists the more specific "GDS_Pin_"/"GDS_PINs_", so
+      moving a chip left its own silicon behind. Matching by property rather
+      than by adding a broad "GDS_" prefix follows the same reasoning as the
+      chip-proxy case above, and survives the objects being relabelled.
+
+      This also corrects "place chip on surface": the chip's bottom is now
+      the underside of the silicon rather than the lowest metal, which is
+      what should actually land on a carrier.
     """
     objs = [
         o for o in _all_objects(doc)
         if any(o.Name.startswith(p) for p in _GDS_PREFIXES)
         or getattr(o, "IsChipProxy", False)
         or getattr(o, "IsContactPoint", False)
+        or getattr(o, "IsDieBody", False)
     ]
 
     # Pull in every frame object from the Substrate_Frames group.
@@ -212,13 +224,18 @@ def _pcb_root_objects(doc):
 
 # Name suffixes of "display proxy" companion objects that live in a
 # SEPARATE sibling group from their source shape — see
-# gds.TogglePerformanceModeCommand (fast-mesh render mode) and
 # gds.ToggleViaDetailCommand (simplified via blocks). Whichever one is
 # currently visible is what the user actually sees in the 3-D view, so
 # moving only the source and not its companion (or vice versa) silently
 # leaves the on-screen geometry behind even though the "wrong" (hidden)
 # copy did move.
-_COMPANION_SUFFIXES = ("_PerfMesh", "_ViaBlock")
+#
+# "_PerfMesh" was also listed here, for the fast-mesh companions that
+# gds.TogglePerformanceModeCommand baked. That feature was removed and no
+# such object is created any more. Documents saved before then may still
+# contain them; they are ordinary Mesh objects and move with the group they
+# sit in, so nothing is stranded.
+_COMPANION_SUFFIXES = ("_ViaBlock",)
 
 
 def _proxy_group_of(o):
@@ -287,12 +304,12 @@ def _expand_selection(root_objects, doc=None):
        or "GDS_Die" actually move its contents instead of doing nothing.
 
     3. Any object reached this way that has a currently-displayed
-       performance proxy (a "<Name>_PerfMesh" fast-mesh companion or a
-       "<Name>_ViaBlock" simplified block) pulls that proxy in too — those
-       live in a SEPARATE sibling group ("GDS Performance Meshes" /
-       "GDS Via Blocks"), so expanding only the source object's own group
-       would move the (often hidden) original shape while the actually
-       visible proxy stays put.
+       "<Name>_ViaBlock" simplified block pulls that block in too — it lives
+       in a SEPARATE sibling group ("GDS Via Blocks"), so expanding only the
+       source object's own group would move the (often hidden) original
+       shape while the actually visible block stays put. A "<Name>_PerfMesh"
+       fast-mesh companion was handled here too until that feature was
+       removed.
     """
     if doc is None:
         doc = FreeCAD.activeDocument()

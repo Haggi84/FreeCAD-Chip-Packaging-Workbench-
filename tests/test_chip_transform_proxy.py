@@ -160,6 +160,60 @@ def run():
               block2.Name not in combined and all(p.Name not in combined for p in pads2),
               f"got {combined}")
 
+    _check_die_body_moves(tc, ctc, doc)
+
     import FreeCAD
     FreeCAD.closeDocument(doc.Name)
     return tc.results
+
+
+def _check_die_body_moves(tc, ctc, doc):
+    """
+    The epi and substrate slabs must move with the chip.
+
+    They are named "GDS_Substrate"/"GDS_EPI", and _GDS_PREFIXES lists only the
+    narrower "GDS_Pin_"/"GDS_PINs_" — so a name-prefix scan matched neither
+    and moving a chip left its own silicon behind. They are matched by their
+    IsDieBody property instead, which also survives relabelling.
+    """
+    import core.substrate as substrate
+    from core.Core_Functionality import parse_stackup_xml
+    import os
+    from _harness import REPO_ROOT
+
+    xml = os.path.join(REPO_ROOT, "resources", "stack_info",
+                       "IHP-PDK_SG13G2", "SG13G2_200um.xml")
+    if not os.path.isfile(xml):
+        return
+    stack = parse_stackup_xml(xml)
+    slabs = substrate.build_substrate_objects(doc, (0.0, 0.0, 1.0, 1.0), stack)
+    doc.recompute()
+    if not tc.check("fixture: die body built (substrate + epi)",
+                     len(slabs) == 2, f"got {len(slabs)}"):
+        return
+
+    scoped = {o.Name for o in ctc._gds_objects(doc)}
+    for slab in slabs:
+        tc.check(f"'GDS Chip Objects' scope includes {slab.Name} — a name "
+                  f"prefix scan alone does not match it",
+                  slab.Name in scoped, f"scope was {sorted(scoped)}")
+
+    # The whole point: it actually moves.
+    before = [o.Placement.Base.z for o in slabs]
+    ctc._translate_objects(slabs, 0.0, 0.0, 2.5)
+    doc.recompute()
+    tc.check("the die body translates with the chip",
+              all(abs((o.Placement.Base.z - b) - 2.5) < 1e-9
+                  for o, b in zip(slabs, before)),
+              str([o.Placement.Base.z for o in slabs]))
+    ctc._translate_objects(slabs, 0.0, 0.0, -2.5)
+    doc.recompute()
+
+    # Including the body changes what "the bottom of the chip" means, which
+    # is what "place chip on surface" snaps to. The silicon underside is the
+    # face that should land on a carrier, not the lowest metal.
+    zmin_with_body = ctc._chip_zmin(slabs)
+    tc.check("the chip's bottom is now the underside of the silicon "
+              "(-183.75 µm), not the lowest drawn layer",
+              abs(zmin_with_body + 0.18375) < 1e-6,
+              f"got {zmin_with_body}")

@@ -27,6 +27,9 @@ import Part
 # should agree exactly; allow a rounding-level mismatch before distrusting it.
 _SUM_TOLERANCE_UM = 0.01
 
+# Below this the "gap" is rounding noise, not unused layers.
+_FILL_MIN_MM = 1e-9
+
 
 def _materials(stackup_data):
     return (stackup_data or {}).get("_materials") or {}
@@ -97,6 +100,106 @@ def substrate_layers_mm(stackup_data):
         })
         z_um += t_um
     return out
+
+
+def interconnect_dielectric(stackup_data):
+    """
+    The dielectric the interconnect stack is embedded in — SiO2 on both
+    bundled PDKs — as its {"name", "material", "thickness_um"} entry.
+
+    Derived rather than looked up by name: <Dielectrics> runs top-of-stack
+    downwards and ends with the entries that make up the die body, so the one
+    immediately above the body is the inter-metal oxide. Everything above
+    THAT is passivation and air, which sit over the top metal, not under the
+    lowest one.
+    """
+    data = stackup_data or {}
+    dielectrics = data.get("_dielectrics") or []
+    body = substrate_layers_mm(data)
+    if not dielectrics or not body:
+        return None
+    index = len(dielectrics) - len(body) - 1
+    if index < 0:
+        return None
+    return dielectrics[index]
+
+
+def dielectric_fill_mm(stackup_data, lowest_used_z0_mm):
+    """
+    The slab that fills the space between the die surface and the lowest
+    layer actually present in the layout, or None when there is none.
+
+    A PDK defines more layers than any one layout uses. A design whose lowest
+    drawn layer is Metal5 has nothing between the silicon and 5.09 um — but
+    that volume is not empty in the real part: it is the oxide the unused
+    metal levels are embedded in. Leaving it open makes the die look like it
+    is standing on legs; closing it by sliding the stack down instead would
+    falsify every Z height in the model.
+
+    Returns {"name", "material", "t_mm", "z0_mm"} spanning z=0 upwards.
+    """
+    try:
+        top = float(lowest_used_z0_mm)
+    except (TypeError, ValueError):
+        return None
+    if top <= _FILL_MIN_MM:
+        return None                      # a full import already reaches z=0
+
+    entry = interconnect_dielectric(stackup_data)
+    material = (entry or {}).get("material") or (entry or {}).get("name") or "SiO2"
+    return {
+        "name": "ILD",                   # inter-layer dielectric
+        "material": material,
+        "t_mm": top,
+        "z0_mm": 0.0,
+    }
+
+
+def build_dielectric_fill(doc, footprint_mm, stackup_data, lowest_used_z0_mm,
+                           group=None, name_prefix="GDS"):
+    """
+    Create the fill slab under the lowest used layer. Returns the object or
+    None. Spans *footprint_mm* exactly like the die body below it.
+    """
+    entry = dielectric_fill_mm(stackup_data, lowest_used_z0_mm)
+    if entry is None:
+        return None
+
+    xmin, ymin, xmax, ymax = (float(v) for v in footprint_mm)
+    width, length = xmax - xmin, ymax - ymin
+    if width <= 0.0 or length <= 0.0:
+        raise ValueError(
+            f"Degenerate die footprint ({width:.4f} x {length:.4f} mm) — "
+            f"cannot build a dielectric fill under it.")
+
+    obj = doc.addObject("Part::Feature", f"{name_prefix}_{entry['name']}")
+    obj.Shape = Part.makeBox(width, length, entry["t_mm"],
+                             FreeCAD.Vector(xmin, ymin, entry["z0_mm"]))
+    obj.Label = (f"{entry['material']} fill "
+                 f"({entry['t_mm'] * 1000.0:.3f} µm)")
+
+    obj.addProperty("App::PropertyBool", "IsDieBody", "Substrate",
+                    "Part of the die's physical body rather than a routing "
+                    "layer — moves with the chip")
+    obj.addProperty("App::PropertyString", "StackMaterial", "Substrate",
+                    "Material named for this slab in the stackup XML")
+    obj.IsDieBody = True
+    obj.StackMaterial = entry["material"]
+
+    if FreeCAD.GuiUp and getattr(obj, "ViewObject", None) is not None:
+        obj.ViewObject.ShapeColor = material_colour(
+            stackup_data, entry["material"], (0.85, 0.83, 0.60))
+        # More transparent than the silicon: this is the volume the layout
+        # sits inside, and it must not hide the layers it surrounds.
+        obj.ViewObject.Transparency = 80
+    if group is not None:
+        group.addObject(obj)
+
+    FreeCAD.Console.PrintMessage(
+        f"[Substrate] {entry['material']} fill "
+        f"{entry['t_mm'] * 1000.0:.3f} µm between the die surface and the "
+        f"lowest used layer\n")
+    return obj
 
 
 def total_thickness_mm(stackup_data) -> float:

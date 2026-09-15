@@ -50,7 +50,9 @@ class LayerSelector(QtWidgets.QDialog):
             "auto_pin_contacts":  False,
             "keep_via_detail":    True,
             "add_die_body":       True,
-            "drop_to_die_surface": True,
+            "drop_to_die_surface": False,
+            "fill_dielectric_gap": True,
+            "klayout_exact":      False,
             "layer_bbox":         set(),
         })
 
@@ -76,7 +78,7 @@ class LayerSelector(QtWidgets.QDialog):
         self.check_auto_pin.setChecked(bool(self.options.get("auto_pin_contacts", False)))
 
         self.check_vias = QtWidgets.QCheckBox(
-            "Keep VIA layers in full detail (never auto-simplify)")
+            "Keep VIA layers in full detail  —  untick to show them as blocks")
         self.check_vias.setChecked(bool(self.options.get("keep_via_detail", True)))
         self.check_vias.setToolTip(
             "Via layers hold the most polygons on a chip, so the automatic\n"
@@ -85,8 +87,12 @@ class LayerSelector(QtWidgets.QDialog):
             "On (recommended): via layers are always built as real geometry.\n"
             "Off: they are simplified like any other layer when the import\n"
             "gets heavy.\n\n"
-            "Independent of Toggle VIA Detail, which clusters already-loaded\n"
-            "vias into blocks and keeps the array's structure."
+            "Either way, switch at any time with Toggle VIA Detail in the\n"
+            "Render toolbar - blocks are built on demand, so starting in\n"
+            "full detail costs nothing later.\n\n"
+            "A block is one cube per cluster of vias, spanning that\n"
+            "cluster's X/Y outline, so a dense array becomes one shape\n"
+            "while physically separate arrays stay separate."
         )
 
         self.check_body = QtWidgets.QCheckBox(
@@ -105,7 +111,7 @@ class LayerSelector(QtWidgets.QDialog):
         self.check_drop = QtWidgets.QCheckBox(
             "Drop the layer stack onto the die surface (close the gap below it)")
         self.check_drop.setChecked(
-            bool(self.options.get("drop_to_die_surface", True)))
+            bool(self.options.get("drop_to_die_surface", False)))
         self.check_drop.setToolTip(
             "Importing only part of a stack leaves it floating. Loading just\n"
             "the top of an SG13G2 stack puts Metal5 at 5.09 µm with nothing\n"
@@ -118,9 +124,49 @@ class LayerSelector(QtWidgets.QDialog):
             "No effect on a full import — the lowest layer is already there."
         )
 
+        self.check_fill = QtWidgets.QCheckBox(
+            "Fill the gap below the lowest used layer with dielectric")
+        self.check_fill.setChecked(
+            bool(self.options.get("fill_dielectric_gap", True)))
+        self.check_fill.setToolTip(
+            "A PDK defines more levels than any one layout draws on. If the\n"
+            "lowest layer used is Metal5, nothing sits between the silicon\n"
+            "and 5.09 um - but that volume is not empty in the real part,\n"
+            "it is the oxide the unused metal levels are embedded in.\n\n"
+            "On: a slab of the stackup's own inter-metal dielectric fills\n"
+            "the space from the die surface up to the lowest used layer,\n"
+            "so every layer keeps its true PDK height.\n\n"
+            "No effect on a full import - the lowest layer already sits on\n"
+            "the die surface, so there is no gap to fill."
+        )
+
+        self.check_exact = QtWidgets.QCheckBox(
+            "Exactly as KLayout draws it (no simplification — can be very slow)")
+        self.check_exact.setChecked(bool(self.options.get("klayout_exact", False)))
+        self.check_exact.setToolTip(
+            "Build every polygon as drawn, with the .lyp's own colours.\n\n"
+            "Switches off, together: the per-layer polygon threshold, the\n"
+            "total polygon budget, the micro-area scan that collapses\n"
+            "sub-micron layers, dummy-fill collapsing, area filtering,\n"
+            "outline decimation, via blocks, fast-mesh baking, and\n"
+            "level-of-detail loading — every selected layer is built in full.\n"
+            "Bond-pad layers also keep their .lyp colour instead of being\n"
+            "repainted gold.\n\n"
+            "This is what those mechanisms exist to avoid. A full chip can\n"
+            "carry millions of polygons and each one becomes an OCCT solid.\n"
+            "Marking individual layers as BBox in the list below still works."
+        )
+        self.check_exact.toggled.connect(self._update_exact_warning)
+
+        self.lbl_exact = QtWidgets.QLabel()
+        self.lbl_exact.setWordWrap(True)
+        self.lbl_exact.setStyleSheet("QLabel { color: #e0a030; }")
+        self.lbl_exact.setVisible(False)
+
         for w in (self.check_match, self.check_hl, self.check_3d,
                   self.check_auto_pin, self.check_vias, self.check_body,
-                  self.check_drop):
+                  self.check_drop, self.check_fill, self.check_exact,
+                  self.lbl_exact):
             opt_top.addWidget(w)
 
         layout.addLayout(opt_top)
@@ -278,6 +324,11 @@ class LayerSelector(QtWidgets.QDialog):
         self.setMinimumWidth(560)
         self.setMinimumHeight(400)
 
+        # Seed the cost warning, so re-opening the dialog with exact mode
+        # already remembered shows it straight away rather than only after
+        # the box is toggled.
+        self._update_exact_warning()
+
         QtGui.QShortcut(
             QtGui.QKeySequence("Ctrl+A"), self.layer_tree,
             activated=self._select_all)
@@ -301,6 +352,54 @@ class LayerSelector(QtWidgets.QDialog):
                 QtCore.Qt.Unchecked if cur == QtCore.Qt.Checked else QtCore.Qt.Checked
             )
 
+    # ── Exact-mode cost ───────────────────────────────────────────────────────
+
+    # Rough build rate for OCCT solids, from measurements on this workbench:
+    # 8,700 polygons took 15 s and 82,000 took 51 s, i.e. very roughly
+    # 1,600/s once the fixed overhead is past. Only ever used to decide how
+    # loudly to warn, never to make a decision for the user.
+    _POLYS_PER_SECOND = 1600.0
+
+    def _total_polygons(self):
+        return sum(int(v or 0) for v in self.poly_counts.values())
+
+    def _update_exact_warning(self, checked=None):
+        """
+        Say what exact mode will actually cost for THIS file.
+
+        A generic "may be slow" is useless when the honest answer ranges from
+        under a second to most of an hour depending on the layout. The
+        polygon counts are already gathered for the Polygons column, so the
+        estimate costs nothing.
+        """
+        if checked is None:
+            checked = self.check_exact.isChecked()
+        if not checked:
+            self.lbl_exact.setVisible(False)
+            return
+
+        total = self._total_polygons()
+        if total <= 0:
+            self.lbl_exact.setText(
+                "⚠  Every polygon will be built as a solid. No polygon count "
+                "is available for this file, so the cost cannot be estimated.")
+            self.lbl_exact.setVisible(True)
+            return
+
+        seconds = total / self._POLYS_PER_SECOND
+        if seconds < 90:
+            when = f"roughly {max(1, int(seconds))} s"
+        elif seconds < 3600:
+            when = f"roughly {seconds / 60.0:.0f} min"
+        else:
+            when = f"roughly {seconds / 3600.0:.1f} hours"
+        self.lbl_exact.setText(
+            f"⚠  {total:,} polygons in this layout, each built as a solid — "
+            f"expect {when}, and correspondingly high memory use. Untick "
+            f"layers you do not need, or mark heavy ones as BBox, to cut this "
+            f"down.")
+        self.lbl_exact.setVisible(True)
+
     # ── Accept ────────────────────────────────────────────────────────────────
 
     def accept(self):
@@ -311,6 +410,8 @@ class LayerSelector(QtWidgets.QDialog):
         self.options["keep_via_detail"]    = self.check_vias.isChecked()
         self.options["add_die_body"]       = self.check_body.isChecked()
         self.options["drop_to_die_surface"] = self.check_drop.isChecked()
+        self.options["fill_dielectric_gap"] = self.check_fill.isChecked()
+        self.options["klayout_exact"]      = self.check_exact.isChecked()
         # mesh_3d and contacts_only_3d no longer in dialog — set internally
         self.options["mesh_3d"]          = False
         self.options["contacts_only_3d"] = False

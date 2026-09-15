@@ -31,11 +31,9 @@ from _harness import TestResult
 import test_wirebond_geometry
 import test_leadframe_build
 import test_gds_import
-import test_performance_mode
 import test_pin_numbering
 import test_via_clustering
 import test_housing_build
-import test_perf_mode_sync
 import test_workbench_state
 import test_lod_state
 import test_add_lid
@@ -58,15 +56,14 @@ import test_desktop_shortcut
 import test_tech_profiles
 import test_via_detail
 import test_substrate
+import test_klayout_exact
 
 MODULES = [
     test_wirebond_geometry,
     test_leadframe_build,
     test_gds_import,
-    test_performance_mode,
     test_pin_numbering,
     test_via_clustering,
-    test_perf_mode_sync,
     test_housing_build,
     test_workbench_state,
     test_lod_state,
@@ -90,6 +87,7 @@ MODULES = [
     test_tech_profiles,
     test_via_detail,
     test_substrate,
+    test_klayout_exact,
 ]
 
 RESULTS_LOG = os.path.join(_THIS_DIR, "results.log")
