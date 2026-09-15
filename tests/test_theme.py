@@ -152,4 +152,49 @@ def run():
     tc.check("status_label_style: is dark, not the old near-white #F5F5F5",
               "#F5F5F5" not in status and theme.palette()["base"] in status)
 
+    _check_opt_in(tc)
     return tc.results
+
+
+def _check_opt_in(tc):
+    """
+    The skin must be OPT-IN.
+
+    It was briefly on unless switched off, which meant a workbench repainted
+    the whole of FreeCAD before being asked to — and, worse, any loss of the
+    preference silently brought it back, because an absent key resolved to
+    the default flavour rather than to "off". Applying the skin is a
+    deliberate choice; nothing else may turn it on.
+    """
+    import FreeCAD
+    import ui.ChipTheme as chip_theme
+
+    params = FreeCAD.ParamGet(chip_theme._PREFS)
+    before_flavour = params.GetString(chip_theme._K_FLAVOUR, "")
+    before_optin = params.GetBool(chip_theme._K_OPTIN, False)
+    try:
+        params.RemString(chip_theme._K_FLAVOUR)
+        tc.check("an absent preference means the skin is OFF, not the "
+                  "default flavour",
+                  chip_theme.saved_flavour() == ""
+                  and chip_theme.is_enabled() is False,
+                  repr(chip_theme.saved_flavour()))
+
+        chip_theme.set_saved_flavour("copper")
+        tc.check("an explicit choice still enables it",
+                  chip_theme.is_enabled() is True)
+
+        # The one-shot migration clears a flavour carried over from the
+        # on-by-default era, and does not fire twice.
+        params.SetBool(chip_theme._K_OPTIN, False)
+        tc.check("migrate_to_opt_in switches an inherited flavour off",
+                  chip_theme.migrate_to_opt_in() is True
+                  and chip_theme.is_enabled() is False)
+        chip_theme.set_saved_flavour("gold")
+        tc.check("migrate_to_opt_in never fires a second time, so a "
+                  "deliberate later choice survives",
+                  chip_theme.migrate_to_opt_in() is False
+                  and chip_theme.is_enabled() is True)
+    finally:
+        params.SetString(chip_theme._K_FLAVOUR, before_flavour)
+        params.SetBool(chip_theme._K_OPTIN, before_optin)

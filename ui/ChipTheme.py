@@ -19,6 +19,13 @@ Two rules shape everything below:
   lives in FreeCAD's parameter store, not in Qt, so it cannot be undone by
   dropping a stylesheet; the previous values are stashed so switching the
   theme off restores the user's own colours rather than guessing at defaults.
+  When no stash survives, the keys are DELETED so FreeCAD's own defaults
+  return — the real defaults are not ours to guess at.
+
+* The skin is OPT-IN. It was briefly on by default, which meant a workbench
+  repainted the whole of FreeCAD before being asked to, and any loss of the
+  preference brought it back. migrate_to_opt_in() switches that off once for
+  anyone carrying a setting from then.
 """
 
 import FreeCAD
@@ -31,6 +38,7 @@ _VIEW = "User parameter:BaseApp/Preferences/View"
 # Keys in _PREFS.
 _K_FLAVOUR = "ThemeFlavour"      # "" (or absent) means the theme is off
 _K_SAVED_BG = "ThemeSavedBackground"   # JSON of the view colours we replaced
+_K_OPTIN = "ThemeIsOptIn"        # marks the one-shot switch to opt-in
 
 # Set while our stylesheet is on the main window, so Deactivated() knows
 # whether there is anything to undo.
@@ -44,8 +52,16 @@ def _params(path=_PREFS):
 # ── Preference ────────────────────────────────────────────────────────────
 
 def saved_flavour() -> str:
-    """The flavour to use, or "" if the user has switched the theme off."""
-    return _params().GetString(_K_FLAVOUR, theme.DEFAULT_FLAVOUR)
+    """
+    The flavour to use, or "" when the skin is off.
+
+    OFF is the default. It used to be theme.DEFAULT_FLAVOUR, which meant an
+    absent key turned the skin ON — so a workbench repainted the whole of
+    FreeCAD before being asked to, and any loss of the preference (a reset
+    config, a new profile) silently brought it back. A cosmetic feature has
+    to be opted into, not opted out of.
+    """
+    return _params().GetString(_K_FLAVOUR, "")
 
 
 def set_saved_flavour(flavour: str) -> None:
@@ -54,6 +70,29 @@ def set_saved_flavour(flavour: str) -> None:
 
 def is_enabled() -> bool:
     return bool(saved_flavour())
+
+
+def migrate_to_opt_in() -> bool:
+    """
+    One-shot: turn the skin off for anyone carrying a flavour set while it
+    was still on-by-default, and give them their viewport colours back.
+
+    Runs once and records that it did, so a deliberate later choice is never
+    undone. Returns True if it changed anything.
+    """
+    p = _params()
+    if p.GetBool(_K_OPTIN, False):
+        return False
+    p.SetBool(_K_OPTIN, True)
+    if not p.GetString(_K_FLAVOUR, ""):
+        return False
+    p.SetString(_K_FLAVOUR, "")
+    _restore_background()
+    FreeCAD.Console.PrintMessage(
+        "[ChipTheme] The chip skin is now opt-in and has been switched off; "
+        "FreeCAD's own colours are back. Turn it on again from Chip Theme in "
+        "the Workbench toolbar." + "\n")
+    return True
 
 
 # ── 3-D viewport ──────────────────────────────────────────────────────────
@@ -85,21 +124,60 @@ def _stash_background() -> None:
     p.SetString(_K_SAVED_BG, json.dumps(saved))
 
 
+def _clear_our_background() -> None:
+    """
+    Delete the viewport keys this module writes, so FreeCAD falls back to its
+    OWN built-in defaults.
+
+    Removing beats writing a "default" value: the real defaults live in
+    FreeCAD and are not ours to guess, and a guess would be wrong in exactly
+    the situation this matters — restoring a native look.
+    """
+    v = _params(_VIEW)
+    for key in _BG_KEYS:
+        try:
+            v.RemUnsigned(key)
+        except Exception:
+            pass
+    for key in _BG_FLAGS:
+        try:
+            v.RemBool(key)
+        except Exception:
+            pass
+
+
 def _restore_background() -> None:
+    """
+    Put the viewport back the way it was, or failing that, back to native.
+
+    The stash can legitimately be missing — the preference file was reset, or
+    the skin was applied by a build that did not stash. Returning early then
+    left a dark viewport with no way back short of editing preferences by
+    hand, which is the opposite of what switching a theme off should do.
+    """
     import json
     p = _params()
     blob = p.GetString(_K_SAVED_BG, "")
     if not blob:
+        _clear_our_background()
         return
     try:
         saved = json.loads(blob)
     except Exception:
         p.SetString(_K_SAVED_BG, "")
+        _clear_our_background()
         return
     v = _params(_VIEW)
     for key, val in (saved.get("colours") or {}).items():
         if val:
             v.SetUnsigned(key, int(val))
+        else:
+            # 0 means the key was absent when stashed, not "black" — writing
+            # it back would paint the viewport black.
+            try:
+                v.RemUnsigned(key)
+            except Exception:
+                pass
     for key, val in (saved.get("flags") or {}).items():
         v.SetBool(key, bool(val))
     p.SetString(_K_SAVED_BG, "")
@@ -114,6 +192,19 @@ def _apply_background(flavour: str) -> None:
     v.SetBool("Simple", False)
     v.SetBool("Gradient", True)
     v.SetBool("UseBackgroundColorMid", False)
+
+
+def ensure_native_background() -> None:
+    """
+    Undo any viewport colours we left behind, when the skin is off.
+
+    The stylesheet lives on the main window and disappears with it; the
+    background lives in FreeCAD's parameters and survives a restart. Without
+    this, turning the skin off in one session and restarting left a dark
+    viewport inside an otherwise native FreeCAD.
+    """
+    if _params().GetString(_K_SAVED_BG, ""):
+        _restore_background()
 
 
 # ── Stylesheet ────────────────────────────────────────────────────────────
