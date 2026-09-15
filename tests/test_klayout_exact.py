@@ -35,6 +35,7 @@ _GDS = os.path.join(REPO_ROOT, "samples", "IC_Pad_EdgeSeal.boundary.gds")
 def run():
     tc = TestCase("klayout_exact")
     if not (os.path.isfile(_GDS) and os.path.isfile(os.path.join(_IHP, "sg13g2.lyp"))):
+        tc.skip("exact-KLayout import checks", f"sample or PDK file not present: {_GDS}")
         return tc.results
     _check_geometry(tc)
     _check_units(tc)

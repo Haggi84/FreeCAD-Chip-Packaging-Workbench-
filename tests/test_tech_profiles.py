@@ -195,3 +195,6 @@ def _check_outline_layers(tc):
         tc.check("a real SKY130 layout takes its outline from prBoundary, "
                   "not from the raw bounding box",
                   "235/4" in d["source"], d["source"])
+    else:
+        tc.skip("a real SKY130 layout measures 2.15 x 2.15 mm from prBoundary",
+                f"sample not present: {sky} (63 MB, not in the repository)")

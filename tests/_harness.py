@@ -34,10 +34,12 @@ if REPO_ROOT not in sys.path:
 
 
 class TestResult:
-    def __init__(self, name: str, passed: bool, message: str = ""):
+    def __init__(self, name: str, passed: bool, message: str = "",
+                 skipped: bool = False):
         self.name = name
         self.passed = passed
         self.message = message
+        self.skipped = skipped
 
 
 class TestCase:
@@ -51,6 +53,18 @@ class TestCase:
         ok = bool(condition)
         self.results.append(TestResult(f"{self.prefix}: {name}", ok, message))
         return ok
+
+    def skip(self, name: str, reason: str) -> None:
+        """
+        Record a check that could not run here — a sample file or tool that
+        is not present on this machine.
+
+        Reported as SKIP and never counted as a pass. A test that simply
+        returned early used to look exactly like one that had run and
+        passed, which is how a check can go missing in CI unnoticed.
+        """
+        self.results.append(
+            TestResult(f"{self.prefix}: {name}", True, reason, skipped=True))
 
     def check_raises_nothing(self, name: str, fn) -> bool:
         try:

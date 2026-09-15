@@ -145,6 +145,9 @@ def run():
             tc.check("all padframe pads came from the named bondpad_* strategy",
                       all(p["name"] == "bondpad_70x70" for p in pf_pads),
                       f"names: {set(p['name'] for p in pf_pads)}")
+    else:
+        tc.skip("6_final.gds finds exactly the real 20-pad ring",
+                f"sample not present: {_GDS_PADFRAME}")
 
     # ── one-shot extraction ──────────────────────────────────────────────────
     def _extract():

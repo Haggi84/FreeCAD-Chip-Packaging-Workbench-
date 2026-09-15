@@ -80,6 +80,39 @@ def run():
             abs(actual_len - expected_len) < 0.05,
             f"got {actual_len:.4f}, expected ~{expected_len:.4f}",
         )
+        wall = _QFN_HOUSING_CONFIG["wall_thickness"]
+        tc.check("the floor sits under z = 0, where the leadframe stands",
+                  abs(bb.ZMin + wall) < 1e-6, f"housing bottom at z={bb.ZMin:.4f}")
+        cavity = doc.getObject("HousingInnerCut")
+        tc.check("the cavity floor is exactly z = 0",
+                  cavity is not None and abs(cavity.Shape.BoundBox.ZMin) < 1e-6,
+                  f"cavity floor at z={cavity.Shape.BoundBox.ZMin if cavity else None}")
+        lid = doc.getObject("Lid")
+        tc.check("the lid still sits on top of the housing",
+                  lid is not None and abs(lid.Shape.BoundBox.ZMin - bb.ZMax) < 1e-6)
+
+        # The leadframe the housing is sized for must fit in the cavity
+        # rather than share volume with the floor.
+        import core.leadframe as leadframe
+        leadframe.build_leadframe({
+            "frame_type": "QFN (Quad Flat No-lead)",
+            "frame_length": _QFN_HOUSING_CONFIG["frame_length"],
+            "frame_width": _QFN_HOUSING_CONFIG["frame_width"],
+            "frame_thickness": _QFN_HOUSING_CONFIG["frame_thickness"],
+            "material": "Copper",
+            "left_lead_count": 3, "right_lead_count": 3,
+            "top_lead_count": 3, "bottom_lead_count": 3,
+            "lead_width": 0.25, "lead_pitch": 0.5, "inner_lead_length": 0.5,
+            "has_die_paddle": True, "die_paddle_length": 2.0, "die_paddle_width": 2.0,
+        })
+        doc.recompute()
+        overlap = 0.0
+        for obj in doc.Objects:
+            if obj.Name == "LeadframeBody" or getattr(obj, "IsLeadFinger", False) \
+                    or getattr(obj, "IsDiePaddle", False):
+                overlap += final.Shape.common(obj.Shape).Volume
+        tc.check("a leadframe of the configured size shares no volume with the housing",
+                  overlap < 1e-9, f"overlap {overlap:.6f} mm³")
 
     FreeCAD.closeDocument(doc.Name)
 
