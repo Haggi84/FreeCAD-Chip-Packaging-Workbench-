@@ -59,6 +59,9 @@ import test_substrate
 import test_klayout_exact
 import test_materials
 import test_thermal_export
+import test_package_guard
+import test_bonding
+import test_proxy_vs_full
 
 MODULES = [
     test_wirebond_geometry,
@@ -92,6 +95,9 @@ MODULES = [
     test_klayout_exact,
     test_materials,
     test_thermal_export,
+    test_package_guard,
+    test_bonding,
+    test_proxy_vs_full,
 ]
 
 RESULTS_LOG = os.path.join(_THIS_DIR, "results.log")
@@ -109,14 +115,19 @@ def main() -> int:
                 f"{exc}\n{traceback.format_exc()}"
             ))
 
-    passed = [r for r in all_results if r.passed]
+    skipped = [r for r in all_results if getattr(r, "skipped", False)]
+    passed = [r for r in all_results if r.passed and not getattr(r, "skipped", False)]
     failed = [r for r in all_results if not r.passed]
 
     lines = []
     lines.append("=" * 70)
-    lines.append(f"RESULTS: {len(passed)} passed, {len(failed)} failed, {len(all_results)} total")
+    lines.append(f"RESULTS: {len(passed)} passed, {len(failed)} failed, "
+                 f"{len(skipped)} skipped, {len(all_results)} total")
     lines.append("=" * 70)
     for r in all_results:
+        if getattr(r, "skipped", False):
+            lines.append(f"[SKIP] {r.name} — {r.message}")
+            continue
         mark = "PASS" if r.passed else "FAIL"
         lines.append(f"[{mark}] {r.name}")
         if not r.passed and r.message:

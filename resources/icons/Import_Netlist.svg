@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- A netlist sheet whose rows become bond wires from die pads to leads. -->
+  <rect x="4" y="6" width="26" height="34" rx="2" fill="#f4f4f4" stroke="#555555" stroke-width="2"/>
+  <path d="M9,14 L25,14 M9,21 L25,21 M9,28 L25,28" stroke="#777777" stroke-width="2"/>
+  <rect x="36" y="38" width="12" height="20" rx="1" fill="#5a7fa8" stroke="#2c4460" stroke-width="2"/>
+  <rect x="52" y="30" width="8" height="8" fill="#cc8833" stroke="#7a4d18" stroke-width="1.5"/>
+  <rect x="52" y="46" width="8" height="8" fill="#cc8833" stroke="#7a4d18" stroke-width="1.5"/>
+  <path d="M44,42 C46,30 50,30 54,34 M44,52 C47,46 50,46 54,50" fill="none"
+        stroke="#d4a017" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M30,28 L38,34 M33,36 L38,34 L35,29" fill="none" stroke="#3f8f5a"
+        stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

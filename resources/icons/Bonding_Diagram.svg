@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Plan view of a die in a lead ring with numbered wires — a bonding diagram. -->
+  <rect x="4" y="4" width="56" height="56" rx="2" fill="#ffffff" stroke="#555555" stroke-width="2"/>
+  <rect x="22" y="22" width="20" height="20" fill="#c9d6e6" stroke="#2c4460" stroke-width="2"/>
+  <path d="M10,14 L10,20 M10,30 L10,36 M10,46 L10,52 M54,14 L54,20 M54,30 L54,36 M54,46 L54,52"
+        stroke="#cc8833" stroke-width="4"/>
+  <path d="M24,26 L12,17 M24,32 L12,33 M24,38 L12,49 M40,26 L52,17 M40,32 L52,33 M40,38 L52,49"
+        stroke="#b8860b" stroke-width="1.8"/>
+</svg>

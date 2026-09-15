@@ -10,6 +10,19 @@ if os.environ.get("FREECAD_DEBUGPY") == "1":
     debugpy.wait_for_client()
     FreeCAD.Console.PrintMessage("debugpy: attached.\n")
 
+# ── Module-name clash check ────────────────────────────────────────────────────
+# Runs before any workbench module is imported, so a clash is reported even
+# when it is the thing that breaks the imports below (see dip_package_guard.py).
+try:
+    import sys as _sys
+    import dip_package_guard as _guard
+    _guard_root = _guard.workbench_root()
+    _guard_msg = _guard.describe(_guard.find_conflicts(_guard_root, _sys.path), _guard_root)
+    if _guard_msg:
+        FreeCAD.Console.PrintError(_guard_msg)
+except Exception as e:
+    FreeCAD.Console.PrintWarning(f"Module-name clash check failed: {e}\n")
+
 # ── Command imports ────────────────────────────────────────────────────────────
 try:
     from gds import GDSCommand
@@ -52,6 +65,7 @@ try:
     from drc import DRCCommand   # noqa: F401
     from thermal import MaterialsCommand   # noqa: F401
     from thermal import ThermalExportCommand   # noqa: F401
+    from wirebond import NetlistCommands   # noqa: F401
 
     FreeCAD.Console.PrintMessage("Commands loaded successfully\n")
 except Exception as e:
@@ -218,6 +232,8 @@ class MyWorkbench(FreeCADGui.Workbench):
                 [
                     "WirebondCommand",
                     "WireBumpConfiguratorCommand",
+                    "ImportNetlistCommand",
+                    "ExportBondingDiagramCommand",
                 ],
             )
 
