@@ -69,11 +69,41 @@ Check rows and click <b>Place Bumps</b> to place at both endpoints.<br>
 <b>Created objects:</b> <code>WireBump_{shape}_{n}</code>
 </div>
 
+<h3>Design Rule Check</h3>
+<div class="card">
+<b>Purpose:</b> Check routed traces and bond wires in the active document.<br><br>
+<b>Rules:</b>
+<table>
+<tr><th>Rule</th><th>Default</th><th>Flags</th></tr>
+<tr><td>clearance</td><td>0.2 mm</td><td>Trace or wire too close to nearby copper, or two traces too close</td></tr>
+<tr><td>min-width</td><td>0.1 mm</td><td>Trace narrower than the minimum</td></tr>
+<tr><td>wire-spacing</td><td>0.025 mm</td><td>Two bond wires too close (wires on the same contact point are exempt)</td></tr>
+<tr><td>wire-crossing</td><td>—</td><td>Two bond wires crossing in plan view (warning)</td></tr>
+<tr><td>lid-clearance</td><td>0.1 mm</td><td>Loop top too close to — or through — the lid, or the housing top when there is no lid</td></tr>
+</table>
+<b>Interaction:</b> Click a finding to select the offending objects.
+</div>
+
+<h3>Assign Materials</h3>
+<div class="card">
+<b>Purpose:</b> Tag every solid with its material for simulation export.<br><br>
+<b>Sources:</b> die body from the stackup; leads and paddle from the Leadframe Configurator; housing and lid from the Housing Configurator; bond wires and bumps gold; traces copper; chip proxies silicon; BGA balls SAC305.<br><br>
+Parts it cannot decide — GDS interconnect layers, imported STEP models — are listed and set to <i>Unassigned</i>. Pick a material in the property editor under <b>Material ▸ PackageMaterial</b>; that choice is kept when the command runs again.
+</div>
+
+<h3>Export for Thermal Simulation</h3>
+<div class="card">
+<b>Purpose:</b> Write the assembly for a thermal solver.<br><br>
+<b>Output:</b> <code>&lt;name&gt;_&lt;material&gt;.step</code> per material, <code>&lt;name&gt;.geo</code> (Gmsh script with one physical volume per material), <code>&lt;name&gt;_materials.csv</code>, <code>&lt;name&gt;_manifest.json</code><br><br>
+<b>Meshing:</b> <code>gmsh &lt;name&gt;.geo -3</code> — geometry is converted to metres, parts share nodes across interfaces.<br>
+<b>Overlaps:</b> mould compound and housing are cut by the parts inside them; overlaps between other materials are reported, not changed.
+</div>
+
 <h3>Session ▾</h3>
 <div class="card">
 <b>Save Design Session:</b> Saves the active document as a native FreeCAD <code>.FCStd</code> file — the exact current design state, including manual edits, not a replay of recognized actions.<br>
 <b>Load Design Session:</b> Opens a previously saved <code>.FCStd</code> file.<br><br>
-Both are thin wrappers around FreeCAD's native save/open — Ctrl+S and File → Open work identically. A few workbench-only display settings (fast-mesh render mode, VIA detail mode, lazy GDS layer-loading state) are captured and restored automatically alongside the document.
+Both are thin wrappers around FreeCAD's native save/open — Ctrl+S and File → Open work identically. A few workbench-only display settings (VIA detail mode, lazy GDS layer-loading state) are captured and restored automatically alongside the document.
 </div>
 
 <h3>Advanced Tools ⇄</h3>

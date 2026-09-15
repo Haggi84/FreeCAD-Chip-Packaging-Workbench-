@@ -5,7 +5,7 @@
 ![Python](https://img.shields.io/badge/Python-3.11-yellow?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-lightgrey?style=flat-square)
 ![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-informational?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-1062%20checks-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-1143%20checks-brightgreen?style=flat-square)
 
 **An open-source FreeCAD workbench for chip-packaging design, developed as part of the BMBF research project DI-PASSIONATE.**
 
@@ -30,6 +30,7 @@ bonds and bumps, and saving the result as a native FreeCAD document.
 - [PCB Integration](#pcb-integration)
 - [Wire Bonding](#wire-bonding)
 - [Contact Point System](#contact-point-system)
+- [Materials and Thermal Export](#materials-and-thermal-export)
 - [Supported File Formats](#supported-file-formats)
 - [Session Save and Load](#session-save-and-load)
 - [Development](#development)
@@ -123,7 +124,14 @@ caption (Tech, Import, Render, Package, Bonding, Routing, Workbench).
 
 | Tool | Description |
 |---|---|
-| **Design Rule Check** | Checks routed traces and bond wires for clearance and minimum-width violations; click a finding to select the offending objects. |
+| **Design Rule Check** | Checks routed traces and bond wires for clearance, trace width, wire-to-wire spacing, wires crossing in plan view, and headroom under the lid — see [Checking bond wires](#checking-bond-wires). Click a finding to select the offending objects. |
+
+### Thermal Simulation
+
+| Tool | Description |
+|---|---|
+| **Assign Materials** | Tag every solid with its material — from the stackup, the leadframe and housing settings, or the kind of part — and list the ones it cannot decide. See [Materials and Thermal Export](#materials-and-thermal-export). |
+| **Export for Thermal Simulation** | Write the assembly as one STEP file per material, a Gmsh script with one physical volume per material, a material-property table and a manifest. |
 
 ### Wire Bonding
 
@@ -239,7 +247,9 @@ by then is usually an empty folder nobody looks at.
 | 7 | Set Contact Points on Face | Define bonding locations |
 | 8 | Wire Bond → Wire Bump Configurator | Create bond wires and end bumps |
 | 9 | Interactive Route *(optional)* | Route conductor traces on the board or package |
-| 10 | Session ▾ → Save | Store the assembly as `.FCStd` |
+| 10 | Design Rule Check | Check clearances, wire spacing and headroom under the lid |
+| 11 | Assign Materials → Export for Thermal Simulation *(optional)* | Hand the assembly to a thermal solver |
+| 12 | Session ▾ → Save | Store the assembly as `.FCStd` |
 
 ---
 
@@ -277,9 +287,9 @@ The layer selector exposes the import options that matter for large layouts:
 **Exactly as KLayout draws it** in the import dialog builds every polygon as drawn, with the
 `.lyp`'s own colours. Off by default — see the cost below.
 
-The workbench has eight independent mechanisms that trade geometry for speed. Each is worth
+The workbench has seven independent mechanisms that trade geometry for speed. Each is worth
 having, and **each on its own is enough to make the document disagree with KLayout**, so the
-option switches off all of them together rather than exposing eight checkboxes:
+option switches off all of them together rather than exposing seven checkboxes:
 
 | | Mechanism | What it does |
 |---|---|---|
@@ -290,7 +300,6 @@ option switches off all of them together rather than exposing eight checkboxes:
 | 5 | Area filter / decimation | drops or simplifies small outlines |
 | 6 | Level-of-detail loading | non-contact layers deferred, shown as one body box |
 | 7 | Via blocks | via arrays → clustered blocks |
-| 8 | Fast-mesh baking | B-rep → baked triangulation |
 
 Colours also come straight from the `.lyp` with **no bondable repaint** — the gold highlight
 on pad layers is useful for wire bonding but is the one thing that makes an otherwise
@@ -957,6 +966,28 @@ Bond ends can be finished with parametric bumps — ball, wedge, stitch or nail 
 the **Wire Bump Configurator**, which includes a live cross-section preview and a netlist
 browser of all bond wires.
 
+### Checking bond wires
+
+The Design Rule Check applies three rules of its own to bond wires, on top of the general
+clearance and width checks. They work at wire scale: the general clearance is sized for board
+copper (0.2 mm by default) and would flag every pair of neighbouring wires on a fine-pitch
+die, so wire-to-wire pairs are left to the spacing rule instead.
+
+| Rule | Default | Flags |
+|---|---|---|
+| **wire-spacing** | 0.025 mm | Two wires closer than the minimum, measured solid to solid in 3-D. Wires landing on the same contact point are exempt. |
+| **wire-crossing** | — | Two wires whose spans cross in plan view. A *warning* rather than a violation, since a long loop can pass over a short one; the 3-D gap between them is in the message. |
+| **lid-clearance** | 0.1 mm | A loop whose top comes within the minimum of the lid underside — or of the housing top, where a lid will sit, when there is no lid yet. A loop that goes through says by how much. |
+
+The spacing rule does not reuse the general check's same-pad exemption. That one finds a
+wire's landing pad by proximity within 0.5 mm, which on a fine-pitch die also reaches the
+neighbouring pads, so every adjacent pair would count as sharing a pad and never be checked.
+Only a shared contact point exempts two wires here.
+
+Only wires inside the lid's or housing's footprint are checked against it, and the height
+tested is the real top of the wire solid. That rests on the die's true pad height, which is
+why the [die body](#the-die-body-epi--substrate) under the layout matters for this check.
+
 ---
 
 ## Contact Point System
@@ -972,6 +1003,93 @@ routing tools snap to.
 
 ---
 
+## Materials and Thermal Export
+
+A thermal model needs a material for every volume, and the geometry does not carry one. The
+stackup XML names the die's materials but gives only their electrical properties, and nothing
+else in the document records a material at all.
+
+### Assigning materials
+
+**Assign Materials** tags every solid with a `PackageMaterial` property, taken from what the
+document already knows:
+
+| Part | Material | From |
+|---|---|---|
+| Die substrate, epi, dielectric fill | Silicon, Silicon dioxide | The slab's `StackMaterial`, from the stackup |
+| Chip proxy | Silicon | A die is over 92 % silicon by thickness |
+| Leads and die paddle | Copper, Alloy 42 or Silver | The Leadframe Configurator's choice, recorded on each part as `LeadframeMaterial` |
+| Leadframe body | Epoxy mould compound | — |
+| BGA balls | SAC305 solder | — |
+| Housing and lid | Polycarbonate, Acrylic or ABS | The Housing Configurator's choice, recorded on the body and lid as `HousingMaterial` |
+| Bond wires and bumps | Gold | — |
+| Routed traces | Copper | — |
+
+It does **not** guess. A GDS interconnect layer is `Type="Conductor"` in the stackup, which
+does not say which metal, and a STEP package or a PCB carries no material at all. Those get the
+property set to *Unassigned*, and the report lists each one with the reason. Pick the material
+in the property editor under **Material ▸ PackageMaterial** — a choice made there is kept when
+the command runs again. (The property is not called `Material` because FreeCAD 1.1 already
+gives every Part feature a `ShapeMaterial`.)
+
+Leadframes and housings built before this release carry no recorded material; their leads,
+paddle and housing are listed as unassigned until set by hand or rebuilt.
+
+Intermediate features are skipped: the housing's outer extrusion and cavity cut are inputs to
+`FinalHousing`, and exporting them as well would count the same volume three times.
+
+The library holds nominal bulk values at about 25 °C — a starting point, not a datasheet.
+Mould compounds in particular vary widely by grade.
+
+| Material | k (W/m·K) | ρ (kg/m³) | c<sub>p</sub> (J/kg·K) | CTE (ppm/K) |
+|---|---|---|---|---|
+| Silicon | 149 | 2329 | 705 | 2.6 |
+| Silicon dioxide | 1.4 | 2200 | 730 | 0.5 |
+| Aluminium | 237 | 2700 | 897 | 23.1 |
+| Copper | 398 | 8960 | 385 | 16.5 |
+| Gold | 318 | 19300 | 129 | 14.2 |
+| Silver | 429 | 10490 | 235 | 18.9 |
+| Alloy 42 | 12 | 8110 | 502 | 4.5 |
+| SAC305 solder | 58 | 7400 | 230 | 21.7 |
+| Epoxy mould compound | 0.9 | 1900 | 900 | 10 |
+| Polycarbonate | 0.20 | 1200 | 1200 | 67 |
+| Acrylic (PMMA) | 0.19 | 1180 | 1450 | 70 |
+| ABS | 0.17 | 1080 | 1400 | 90 |
+| FR-4 | 0.30 | 1850 | 1100 | 16 |
+
+### Exporting
+
+**Export for Thermal Simulation** runs Assign Materials first if nothing has a material yet,
+lists any part that still has none, and writes into one folder:
+
+| File | Contents |
+|---|---|
+| `<name>_<material>.step` | Every solid of that material |
+| `<name>.geo` | Gmsh script: imports the STEP files, glues shared faces, one physical volume per material plus an `Exterior` surface |
+| `<name>_materials.csv` | Material properties and each material's physical-volume tag |
+| `<name>_manifest.json` | Which object went into which file, part volumes, overlaps, and every part left out and why |
+
+Mesh it with `gmsh <name>.geo -3`. The STEP files are in millimetres; the script converts to
+metres on import, so the SI properties in the CSV apply unchanged. The parts share mesh nodes
+across every interface, so heat can cross from die to paddle to mould compound. The test suite
+checks this by meshing an exported package with the Gmsh 4.15 that ships with FreeCAD 1.1,
+whenever Gmsh is available. Boundary conditions — a heat sink, convection, the power
+dissipated in the die — are the solver's to set.
+
+Two fixes are made on the way, because the document's geometry would otherwise be quietly
+wrong as a thermal model:
+
+- **Overlaps with a filler are cut.** The generated leadframe body is a solid box drawn around
+  its leads, so the same volume was both copper and mould compound. The mould compound (or
+  housing polymer) is cut by every part it overlaps.
+- **Overlaps within one material are fused**, so a bump over the end of its wire is meshed once.
+
+Two parts of *different* non-filler materials overlapping — copper inside silicon — has no safe
+automatic answer. It is reported in the manifest and in the export dialog, and nothing is
+changed.
+
+---
+
 ## Supported File Formats
 
 | Format | Purpose |
@@ -982,6 +1100,7 @@ routing tools snap to.
 | `.xml` | KLayout stackup — per-layer Zmin/Zmax from the PDK |
 | `.step` / `.stp` | Package and PCB models |
 | `.FCStd` | Native FreeCAD document — the complete design |
+| `.geo` / `.csv` / `.json` | Written by the thermal export: Gmsh script, material table, manifest |
 
 The IHP Open PDK, including sample technology files, is available at
 <https://github.com/IHP-GmbH/IHP-Open-PDK>. Sample layouts for testing ship in
@@ -1022,6 +1141,9 @@ DI-PASSIONATE-FreeCAD/
 │   ├── trace_obstacles.py      Exact copper outlines as keep-outs
 │   ├── trace_walkaround.py     KiCad-style posture head and walk-around
 │   ├── trace_routing.py        Grid, visibility graph and A* router
+│   ├── drc.py                  Design rule checks for traces and bond wires
+│   ├── materials.py            Material library and assignment
+│   ├── thermal_export.py       Per-material STEP, Gmsh script and manifest
 │   ├── TechConfig.py           Active PDK profile
 │   ├── theme.py                Chip skin palette and stylesheet generation
 │   ├── ico.py                  Multi-size Windows .ico writer
@@ -1035,6 +1157,8 @@ DI-PASSIONATE-FreeCAD/
 ├── housing/                Housing configurator and lid
 ├── wirebond/               Bonding session, bumps, contact point tools
 ├── routing/                Interactive and grid routers
+├── drc/                    Design Rule Check panel
+├── thermal/                Assign Materials and thermal export commands
 ├── session/                Document state save and restore
 ├── ui/                     Dialogs and dock panels
 ├── help/                   In-app help and about
@@ -1056,9 +1180,9 @@ tests need a live FreeCAD and OCCT:
 & "C:\Program Files\FreeCAD 1.1\bin\freecadcmd.exe" tests\run_all.py
 ```
 
-1062 checks across 29 modules covering geometry construction, GDS import, level-of-detail
-state, routing, obstacle handling, session state, theme generation and shortcut
-creation. Results are also written to `tests/results.log`. The runner exits non-zero on
+1143 checks across 31 modules covering geometry construction, GDS import, level-of-detail
+state, routing, obstacle handling, design rule checks, material assignment, thermal export,
+session state, theme generation and shortcut creation. Results are also written to `tests/results.log`. The runner exits non-zero on
 failure, so it is suitable for CI.
 
 Anything that needs a live GUI — applying a stylesheet, rasterising an SVG, the COM call
@@ -1080,9 +1204,8 @@ Concept sketches and the design mindmap for the workbench are kept here:
 
 ## Roadmap
 
-- Traces that wrap across multiple faces of a body (3-D MID / laser direct structuring)
-- Export of assemblies for thermal simulation
-- Expanded material assignment
+- Interconnect metals per PDK layer, so a full GDS import exports with materials
+- Boundary-condition presets (heat sink, convection, die power) in the thermal export
 - Additional online component libraries
 
 ---
