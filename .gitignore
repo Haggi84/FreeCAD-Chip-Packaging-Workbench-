@@ -219,3 +219,9 @@ cython_debug/
 # misc
 archive.zip
 startup.log
+
+# Full-chip sample layouts — tens to hundreds of MB each (fft_FftAccelRing.gds
+# is over GitHub's 100 MB file limit). Keep them locally.
+samples/6_final.gds
+samples/PassionateSocRing.gds
+samples/fft_FftAccelRing.gds

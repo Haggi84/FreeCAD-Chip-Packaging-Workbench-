@@ -115,8 +115,7 @@ def _all_objects(doc):
     Every object in the document that carries movable geometry and a Placement.
 
     Includes both B-rep (Part::Feature, .Shape) and mesh (Mesh::Feature, .Mesh)
-    objects so the fast-mesh proxies move together with their source shapes
-    instead of being left behind.
+    objects, so layers imported as meshes move with the rest of the chip.
     """
     return [
         o for o in (doc.Objects if doc else [])

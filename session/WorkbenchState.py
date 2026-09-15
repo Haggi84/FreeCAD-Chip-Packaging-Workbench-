@@ -5,13 +5,12 @@ Extensible document-level state registry.
 
 FreeCAD's native .FCStd save/reopen already persists every DocumentObject's
 Shape/Mesh/Placement/custom App::Property* fields automatically — so most
-workbench state (contact points, lead tags, pin numbers, mesh companions,
-via blocks, LOD placeholders) survives a normal save/reopen with zero extra
-code.
+workbench state (contact points, lead tags, pin numbers, via blocks, LOD
+placeholders) survives a normal save/reopen with zero extra code.
 
 The remaining gap: a few subsystems keep state in Python module-level
-globals that are NOT tied to any DocumentObject (fast-mesh mode, VIA detail
-mode, the LOD manager registry) — this is lost when the FreeCAD process
+globals that are NOT tied to any DocumentObject (VIA detail mode, the LOD
+manager registry) — this is lost when the FreeCAD process
 restarts even though the document itself reopens fine.
 
 This module stores that residual state as ONE JSON blob in a hidden

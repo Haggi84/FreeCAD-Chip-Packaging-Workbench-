@@ -6,8 +6,8 @@ Headless tests for exact-KLayout import — build the layout as drawn.
 The workbench has six independent mechanisms that trade geometry for speed
 (per-layer polygon threshold, total polygon budget, micro-area scan,
 dummy-fill collapsing, area filtering, outline decimation) plus two that
-defer or re-render it (level-of-detail loading, fast-mesh baking). Each is
-worth having, and each on its own makes the document disagree with KLayout.
+defer or replace it (level-of-detail loading, via blocks). Each is worth
+having, and each on its own makes the document disagree with KLayout.
 They can only be trusted as a SET, which is why exact mode is one flag rather
 than eight, and why the check below is "solid count == polygon count" per
 layer rather than a spot check on one of them.
@@ -264,7 +264,8 @@ def _check_wiring(tc):
     with open(os.path.join(REPO_ROOT, "gds", "GDSCommand.py"),
               encoding="utf-8") as fh:
         gdssrc = fh.read()
-    tc.check("exact mode skips fast-mesh baking, which approximates outlines",
+    tc.check("exact mode keeps via arrays in full detail after the build "
+              "instead of swapping in clustered blocks",
               "if exact_geometry:" in gdssrc)
     tc.check("exact mode takes colours straight from the .lyp, without the "
               "gold bondable repaint KLayout never applies",

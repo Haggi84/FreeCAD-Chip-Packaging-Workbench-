@@ -10,7 +10,7 @@ but "load immediately at import time". All other layers are still registered
 in the LOD manager and can be loaded later from the Detail Layer Panel.
 
 Removed compared to the old version:
-  - "Fast Mesh 3D" (available internally, but no UI switch needed anymore)
+  - "Fast Mesh 3D" (the fast-mesh feature itself has since been removed)
   - "Fast 3D: render contact pads only" (is now always the default)
   - "Import All Layers" checkbox (all layers are always known; selection = immediately)
   - Legend (color coding is explained by tooltips)
@@ -148,8 +148,8 @@ class LayerSelector(QtWidgets.QDialog):
             "Switches off, together: the per-layer polygon threshold, the\n"
             "total polygon budget, the micro-area scan that collapses\n"
             "sub-micron layers, dummy-fill collapsing, area filtering,\n"
-            "outline decimation, via blocks, fast-mesh baking, and\n"
-            "level-of-detail loading — every selected layer is built in full.\n"
+            "outline decimation, via blocks, and level-of-detail\n"
+            "loading — every selected layer is built in full.\n"
             "Bond-pad layers also keep their .lyp colour instead of being\n"
             "repainted gold.\n\n"
             "This is what those mechanisms exist to avoid. A full chip can\n"

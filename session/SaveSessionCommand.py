@@ -4,8 +4,7 @@
 Save Design Session command.
 
 Thin branded wrapper around FreeCAD's native document save. The actual
-extensible state capture (fast-mesh mode, VIA detail mode, LOD manager
-state, …) happens automatically via session.WorkbenchState's
+extensible state capture (VIA detail mode, LOD manager state, …) happens automatically via session.WorkbenchState's
 SaveObserver.slotStartSaveDocument — registered once at workbench init in
 InitGui.py — so it fires identically whether the user clicks this button
 or uses native Ctrl+S. This command exists only to keep the familiar

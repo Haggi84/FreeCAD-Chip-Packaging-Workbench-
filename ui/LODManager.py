@@ -587,12 +587,10 @@ class LODManager(QtCore.QObject):
             existing.ViewObject.Transparency = display_tr
             existing.ViewObject.Visibility   = True
             if target == LODState.DETAIL:
-                # Respect the document's current fast-mesh state instead of
-                # always forcing full B-rep Detail — otherwise a layer
-                # loaded after the initial import would visually and
-                # performance-wise stick out from an already-meshed
-                # document.  PREVIEW's flat 2D polygons are already
-                # lightweight, so they skip mesh baking entirely.
+                # Follow the document's current display convention instead
+                # of always forcing full detail — a via layer loaded while
+                # every other via shows as a block must become a block too.
+                # PREVIEW's flat 2D polygons need no such handling.
                 sync_new_layer_display(doc, existing)
         except Exception:
             pass
@@ -626,7 +624,7 @@ class LODManager(QtCore.QObject):
 
     def _show_layer(self, key: tuple):
         """Makes an already-loaded object visible again, respecting the
-        document's current fast-mesh state (see sync_new_layer_display)."""
+        document's current via-detail state (see sync_new_layer_display)."""
         obj = self._obj_map.get(key)
         if obj:
             try:

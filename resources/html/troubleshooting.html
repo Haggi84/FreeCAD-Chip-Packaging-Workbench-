@@ -81,7 +81,7 @@ Contact points are placed at the bounding-box center of the DT=0 pad polygon —
 <b>Fix:</b> Create or open a document first — e.g. Load GDSII, Leadframe Configurator, or File → New.
 </div>
 
-<h3>Lazy GDS layers / fast-mesh / VIA detail mode not restored after reopening</h3>
+<h3>Lazy GDS layers / VIA detail mode not restored after reopening</h3>
 <div class="warn">
 <b>Cause:</b> The GDS / LYP / MAP source files referenced by the document have moved or been deleted, so the lazy layer-loading state cannot be reconstructed.<br>
 <b>Fix:</b> Check the FreeCAD Report View for a <code>[LOD] restore: source files no longer exist</code> warning, and re-point the workbench at the current file locations (or re-import the GDS) if you need to load additional routing layers on demand. Already-loaded layers and geometry are unaffected — they are part of the document itself.
