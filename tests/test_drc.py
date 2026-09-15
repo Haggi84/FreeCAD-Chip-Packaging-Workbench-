@@ -179,4 +179,150 @@ def run():
     finally:
         FreeCAD.closeDocument(doc5.Name)
 
+    _check_wire_spacing(tc)
+    _check_wire_crossing(tc)
+    _check_lid_clearance(tc)
     return tc.results
+
+
+def _add_wire(doc, name, start, end, radius=0.0125, start_cp="", end_cp=""):
+    """A straight cylinder standing in for a bond wire, carrying the same
+    properties ManualWireBonding writes."""
+    obj = doc.addObject("Part::Feature", name)
+    obj.Shape = Part.makeCylinder(radius, (end - start).Length, start, end - start)
+    for prop, ptype in (("StartPoint", "App::PropertyVector"),
+                        ("EndPoint", "App::PropertyVector"),
+                        ("StartCP", "App::PropertyString"),
+                        ("EndCP", "App::PropertyString")):
+        obj.addProperty(ptype, prop, "Wirebond", "")
+    obj.StartPoint, obj.EndPoint = start, end
+    obj.StartCP, obj.EndCP = start_cp, end_cp
+    return obj
+
+
+def _named(findings, rule):
+    return [set(f.object_names) for f in findings if f.rule == rule]
+
+
+def _check_wire_spacing(tc):
+    doc = new_document("TestDRCWireSpacing")
+    try:
+        # Surface gap 0.02 mm between W1 and W2 (centres 0.045 mm apart).
+        _add_wire(doc, "BondWire_001", V(0, 0, 0.3), V(2, 0, 0.3), start_cp="CP_A")
+        _add_wire(doc, "BondWire_002", V(0, 0.045, 0.3), V(2, 0.045, 0.3), start_cp="CP_B")
+        # Same gap on the other side, but landing on W1's own contact point.
+        _add_wire(doc, "BondWire_003", V(0, -0.045, 0.3), V(2, -0.045, 0.3), start_cp="CP_A")
+        doc.recompute()
+
+        tight = drc.run_drc(doc, min_clearance_mm=0.5, min_trace_width_mm=0.0,
+                            min_wire_spacing_mm=0.025)
+        tc.check("wire-spacing: two wires 0.02 mm apart are flagged at a 0.025 mm minimum",
+                  {"BondWire_001", "BondWire_002"} in _named(tight, "wire-spacing"),
+                  f"got {tight}")
+        tc.check("wire-spacing: wires landing on the same contact point are not flagged",
+                  {"BondWire_001", "BondWire_003"} not in _named(tight, "wire-spacing"),
+                  f"got {tight}")
+        tc.check("clearance: wire-to-wire is left to the wire-spacing rule — the "
+                  "0.5 mm trace clearance would flag every neighbouring wire",
+                  not _named(tight, "clearance"), f"got {tight}")
+
+        loose = drc.run_drc(doc, min_clearance_mm=0.5, min_trace_width_mm=0.0,
+                            min_wire_spacing_mm=0.01)
+        tc.check("wire-spacing: no finding once the minimum is below the real gap",
+                  not _named(loose, "wire-spacing"), f"got {loose}")
+    finally:
+        FreeCAD.closeDocument(doc.Name)
+
+
+def _check_wire_crossing(tc):
+    tc.check("segments crossing in their interiors cross",
+              drc._segments_cross((0, 0), (2, 2), (0, 2), (2, 0)))
+    tc.check("segments touching only at an end do not cross",
+              not drc._segments_cross((0, 0), (1, 1), (1, 1), (2, 0)))
+    tc.check("collinear overlapping segments do not count as crossing",
+              not drc._segments_cross((0, 0), (2, 0), (1, 0), (3, 0)))
+
+    doc = new_document("TestDRCWireCrossing")
+    try:
+        # A passes 0.3 mm under B where they cross at (1, 1).
+        _add_wire(doc, "BondWire_001", V(0, 0, 0.3), V(2, 2, 0.3), start_cp="CP_A")
+        _add_wire(doc, "BondWire_002", V(0, 2, 0.6), V(2, 0, 0.6), start_cp="CP_B")
+        _add_wire(doc, "BondWire_003", V(5, 0, 0.3), V(7, 2, 0.3), start_cp="CP_C")
+        _add_wire(doc, "BondWire_004", V(10, 0, 0.3), V(12, 2, 0.3), start_cp="CP_D")
+        _add_wire(doc, "BondWire_005", V(10, 2, 0.6), V(12, 0, 0.6), start_cp="CP_D")
+        doc.recompute()
+
+        findings = drc.run_drc(doc, min_clearance_mm=0.0, min_trace_width_mm=0.0)
+        crossings = [f for f in findings if f.rule == "wire-crossing"]
+        tc.check("wire-crossing: two wires crossing in plan view are reported",
+                  any(set(f.object_names) == {"BondWire_001", "BondWire_002"}
+                      for f in crossings), f"got {findings}")
+        tc.check("wire-crossing: reported as a warning, with the 3-D gap in the message",
+                  all(f.severity == "warning" and "apart in 3-D" in f.message
+                      for f in crossings), f"got {crossings}")
+        tc.check("wire-crossing: a wire crossing nothing is not reported",
+                  not any("BondWire_003" in f.object_names for f in crossings))
+        tc.check("wire-crossing: wires sharing a contact point are not reported",
+                  not any(set(f.object_names) == {"BondWire_004", "BondWire_005"}
+                          for f in crossings), f"got {crossings}")
+        tc.check("wire-crossing: height-separated crossing wires are not a spacing violation",
+                  not _named(findings, "wire-spacing"), f"got {findings}")
+    finally:
+        FreeCAD.closeDocument(doc.Name)
+
+
+def _check_lid_clearance(tc):
+    doc = new_document("TestDRCLidClearance")
+    try:
+        lid = doc.addObject("Part::Feature", "Lid")
+        lid.Shape = Part.makeBox(10.0, 10.0, 0.3, V(-5, -5, 1.0))    # underside at z=1.0
+        # Loop top at 0.9125 mm: 0.0875 mm of headroom.
+        _add_wire(doc, "BondWire_001", V(0, 0, 0.9), V(2, 0, 0.9), start_cp="CP_A")
+        # Loop top above the lid underside.
+        _add_wire(doc, "BondWire_002", V(0, 2, 1.1), V(2, 2, 1.1), start_cp="CP_B")
+        # Well above, but nowhere near the package.
+        _add_wire(doc, "BondWire_003", V(20, 0, 2.0), V(22, 0, 2.0), start_cp="CP_C")
+        doc.recompute()
+
+        findings = drc.run_drc(doc, min_clearance_mm=0.0, min_trace_width_mm=0.0,
+                               min_lid_clearance_mm=0.1)
+        lid_findings = [f for f in findings if f.rule == "lid-clearance"]
+        tc.check("lid-clearance: 0.0875 mm of headroom is flagged at a 0.1 mm minimum",
+                  any(f.object_names == ["BondWire_001", "Lid"] for f in lid_findings),
+                  f"got {findings}")
+        tc.check("lid-clearance: a loop that goes through the lid says so",
+                  any(f.object_names[0] == "BondWire_002" and "goes through" in f.message
+                      for f in lid_findings), f"got {lid_findings}")
+        tc.check("lid-clearance: a wire outside the package footprint is not checked",
+                  not any("BondWire_003" in f.object_names for f in lid_findings))
+
+        relaxed = drc.run_drc(doc, min_clearance_mm=0.0, min_trace_width_mm=0.0,
+                              min_lid_clearance_mm=0.05)
+        tc.check("lid-clearance: the same loop passes at a 0.05 mm minimum",
+                  not any(f.rule == "lid-clearance" and "BondWire_001" in f.object_names
+                          for f in relaxed), f"got {relaxed}")
+    finally:
+        FreeCAD.closeDocument(doc.Name)
+
+    doc = new_document("TestDRCHousingCeiling")
+    try:
+        housing = doc.addObject("Part::Feature", "FinalHousing")
+        housing.Shape = Part.makeBox(10.0, 10.0, 1.0, V(-5, -5, 0))
+        _add_wire(doc, "BondWire_001", V(0, 0, 0.95), V(2, 0, 0.95), start_cp="CP_A")
+        doc.recompute()
+        findings = drc.run_drc(doc, min_clearance_mm=0.0, min_trace_width_mm=0.0)
+        tc.check("lid-clearance: with no lid yet, the housing top is the ceiling — "
+                  "that is where a lid added later will sit",
+                  any(f.rule == "lid-clearance" and f.object_names == ["BondWire_001", "FinalHousing"]
+                      for f in findings), f"got {findings}")
+    finally:
+        FreeCAD.closeDocument(doc.Name)
+
+    doc = new_document("TestDRCNoPackage")
+    try:
+        _add_wire(doc, "BondWire_001", V(0, 0, 5.0), V(2, 0, 5.0))
+        doc.recompute()
+        tc.check("lid-clearance: nothing to check without a lid or housing",
+                  not any(f.rule == "lid-clearance" for f in drc.run_drc(doc)))
+    finally:
+        FreeCAD.closeDocument(doc.Name)

@@ -32,6 +32,12 @@ Same-net endpoint exemption is NOT optional polish: every routed object
 legitimately touches (distance 0) the pad it starts and ends on — that is
 the entire point of a connection. Skipping this would flag every single
 trace/wire against its own landing pad on the very first run.
+
+Bond wires also get three rules of their own, at wire scale rather than
+trace scale: wire-to-wire spacing (the general clearance is sized for board
+copper and would flag every neighbouring wire on a fine-pitch die), wires
+that cross in plan view, and the headroom between the top of each loop and
+the package lid.
 """
 
 import math
@@ -46,6 +52,20 @@ DRCFinding = namedtuple("DRCFinding", ["severity", "rule", "object_names", "mess
 
 DEFAULT_MIN_CLEARANCE_MM   = 0.2
 DEFAULT_MIN_TRACE_WIDTH_MM = 0.1
+
+# About one wire diameter (25 µm gold) is the usual floor between two wires:
+# closer than that they can touch when a loop sags, or when the mould
+# compound sweeps them sideways during encapsulation.
+DEFAULT_MIN_WIRE_SPACING_MM = 0.025
+
+# The lid (or the top of the housing) has to clear the highest point of every
+# loop by a margin, or the wire is pressed into it when the package closes.
+DEFAULT_MIN_LID_CLEARANCE_MM = 0.1
+
+# Duplicated from core.housing.find_housing_body for the same reason
+# _inside_partdesign_body is duplicated below: this module is loaded
+# standalone by file path and must not import sibling core modules.
+_HOUSING_NAMES = ("FinalHousing", "HousingBody")
 
 # Same construction-geometry guard used throughout core.trace_routing /
 # core.trace_obstacles — anything this large is FreeCAD Origin datum
@@ -424,6 +444,8 @@ def _check_clearance(ctx):
                 continue        # the pad this object legitimately lands on
 
             if cname in routed_names:
+                if _is_bond_wire(o) and cname.startswith("BondWire_"):
+                    continue    # wire-to-wire belongs to the wire-spacing rule
                 pair_key = tuple(sorted((name, cname)))
                 if pair_key in checked_pairs:
                     continue
@@ -441,14 +463,181 @@ def _check_clearance(ctx):
     return findings
 
 
+# ── bond-wire rules ──────────────────────────────────────────────────────────
+
+def _cp_names(obj):
+    return {n for n in (getattr(obj, "StartCP", ""), getattr(obj, "EndCP", "")) if n}
+
+
+def _shares_landing(doc, a, b, tol_mm: float = 1e-6) -> bool:
+    """True when two wires land on the same contact point — a double bond
+    or two wires on one lead meet there by design."""
+    if _cp_names(a) & _cp_names(b):
+        return True
+    return any((pa - pb).Length <= tol_mm
+               for pa in _endpoints_of(doc, a) for pb in _endpoints_of(doc, b))
+
+
+def _bond_wires(ctx):
+    return [o for o in ctx.routed if _is_bond_wire(o)]
+
+
+def _span_xy(doc, obj):
+    """The wire's span in plan view as ((x0, y0), (x1, y1)), or None."""
+    pts = [getattr(obj, p, None) for p in ("StartPoint", "EndPoint")]
+    if any(p is None for p in pts):
+        pts = _endpoints_of(doc, obj)
+    if len(pts) != 2 or (pts[0] - pts[1]).Length < 1e-9:
+        return None
+    return (pts[0].x, pts[0].y), (pts[1].x, pts[1].y)
+
+
+def _segments_cross(p1, p2, q1, q2, tol: float = 1e-12) -> bool:
+    """True when two plan-view segments cross at a point inside both.
+    Touching at an end, or running collinear, is not a crossing."""
+    def orient(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+    def opposite(u, v):
+        return (u > tol and v < -tol) or (u < -tol and v > tol)
+
+    return (opposite(orient(q1, q2, p1), orient(q1, q2, p2))
+            and opposite(orient(p1, p2, q1), orient(p1, p2, q2)))
+
+
+def _boxes_within(a, b, gap_mm: float) -> bool:
+    return not (a.XMin - gap_mm > b.XMax or b.XMin - gap_mm > a.XMax
+                or a.YMin - gap_mm > b.YMax or b.YMin - gap_mm > a.YMax
+                or a.ZMin - gap_mm > b.ZMax or b.ZMin - gap_mm > a.ZMax)
+
+
+@rule("wire-spacing")
+def _check_wire_spacing(ctx):
+    """
+    Minimum gap between two bond wires.
+
+    Deliberately not the shared same-net exemption the clearance rule uses:
+    that finds pads by proximity within _PAD_LOCATE_TOL_MM (0.5 mm), which on
+    a fine-pitch die reaches the neighbouring pads too — every adjacent pair
+    of wires would count as "sharing a pad" and never be checked. Only wires
+    that land on the same contact point are exempt here.
+    """
+    min_spacing = ctx.params.get("min_wire_spacing_mm", DEFAULT_MIN_WIRE_SPACING_MM)
+    wires = _bond_wires(ctx)
+    findings = []
+    for i, a in enumerate(wires):
+        bb_a = a.Shape.BoundBox
+        for b in wires[i + 1:]:
+            if not _boxes_within(bb_a, b.Shape.BoundBox, min_spacing):
+                continue
+            if _shares_landing(ctx.doc, a, b):
+                continue
+            try:
+                dist = a.Shape.distToShape(b.Shape)[0]
+            except Exception as exc:
+                findings.append(DRCFinding(
+                    "violation", "eval-failed", [a.Name, b.Name],
+                    f"Could not evaluate spacing between {a.Name} and {b.Name}: {exc}",
+                    bb_a.Center))
+                continue
+            if dist < min_spacing:
+                findings.append(DRCFinding(
+                    "violation", "wire-spacing", [a.Name, b.Name],
+                    f"{a.Name} is {dist:.4f} mm from {b.Name} "
+                    f"(minimum wire spacing {min_spacing:g} mm)",
+                    bb_a.Center))
+    return findings
+
+
+@rule("wire-crossing")
+def _check_wire_crossing(ctx):
+    """
+    Wires that cross in plan view.
+
+    A warning rather than a violation: one loop can legitimately pass over a
+    shorter one with enough height between them, and the 3-D gap is in the
+    message. But a crossing is where a sagging loop or mould-compound sweep
+    turns into a short, so it should never go unnoticed.
+    """
+    spans = [(w, _span_xy(ctx.doc, w)) for w in _bond_wires(ctx)]
+    spans = [(w, s) for w, s in spans if s is not None]
+    findings = []
+    for i, (a, sa) in enumerate(spans):
+        for b, sb in spans[i + 1:]:
+            if not _segments_cross(sa[0], sa[1], sb[0], sb[1]):
+                continue
+            if _shares_landing(ctx.doc, a, b):
+                continue
+            try:
+                gap = f"{a.Shape.distToShape(b.Shape)[0]:.4f} mm apart in 3-D"
+            except Exception:
+                gap = "3-D gap could not be evaluated"
+            findings.append(DRCFinding(
+                "warning", "wire-crossing", [a.Name, b.Name],
+                f"{a.Name} crosses {b.Name} in plan view ({gap})",
+                None))
+    return findings
+
+
+def _package_ceiling(doc):
+    """
+    The surface bond loops must stay under, as (z, object name, bound box):
+    the underside of the lid, or the top of the housing when it has no lid
+    yet — a lid added later sits exactly there. None when there is neither.
+    """
+    lid = doc.getObject("Lid")
+    if lid is not None and _has_geometry(lid):
+        bb = lid.Shape.BoundBox
+        return bb.ZMin, lid.Name, bb
+    for name in _HOUSING_NAMES:
+        housing = doc.getObject(name)
+        if housing is not None and _has_geometry(housing):
+            bb = housing.Shape.BoundBox
+            return bb.ZMax, housing.Name, bb
+    return None
+
+
+@rule("lid-clearance")
+def _check_lid_clearance(ctx):
+    """Headroom between the top of each bond loop and the package ceiling."""
+    ceiling = _package_ceiling(ctx.doc)
+    if ceiling is None:
+        return []
+    z_ceiling, ceiling_name, cbb = ceiling
+    min_clearance = ctx.params.get("min_lid_clearance_mm", DEFAULT_MIN_LID_CLEARANCE_MM)
+
+    findings = []
+    for o in _bond_wires(ctx):
+        bb = o.Shape.BoundBox
+        # A wire outside the package footprint — on a board elsewhere in the
+        # same document — is not under this lid at all.
+        if (bb.XMax < cbb.XMin or bb.XMin > cbb.XMax
+                or bb.YMax < cbb.YMin or bb.YMin > cbb.YMax):
+            continue
+        headroom = z_ceiling - bb.ZMax
+        if headroom >= min_clearance:
+            continue
+        if headroom < 0.0:
+            msg = (f"{o.Name} loop top at z={bb.ZMax:.4f} mm goes through "
+                   f"{ceiling_name} by {-headroom:.4f} mm")
+        else:
+            msg = (f"{o.Name} loop top at z={bb.ZMax:.4f} mm is {headroom:.4f} mm "
+                   f"below {ceiling_name} (minimum {min_clearance:g} mm)")
+        findings.append(DRCFinding(
+            "violation", "lid-clearance", [o.Name, ceiling_name], msg, bb.Center))
+    return findings
+
+
 # ── entry point ──────────────────────────────────────────────────────────────
 
 def run_drc(doc, min_clearance_mm: float = DEFAULT_MIN_CLEARANCE_MM,
-           min_trace_width_mm: float = DEFAULT_MIN_TRACE_WIDTH_MM):
+           min_trace_width_mm: float = DEFAULT_MIN_TRACE_WIDTH_MM,
+           min_wire_spacing_mm: float = DEFAULT_MIN_WIRE_SPACING_MM,
+           min_lid_clearance_mm: float = DEFAULT_MIN_LID_CLEARANCE_MM):
     """
     Check every Trace_NNN / BondWire_NNN in *doc* for violations, by running
-    every registered rule (see RULES) against a shared context. Public
-    signature and return type (list[DRCFinding]) are unchanged.
+    every registered rule (see RULES) against a shared context. Returns
+    list[DRCFinding]; severity is "violation" or "warning".
     """
     findings = []
     if doc is None:
@@ -462,6 +651,8 @@ def run_drc(doc, min_clearance_mm: float = DEFAULT_MIN_CLEARANCE_MM,
     params = {
         "min_clearance_mm": min_clearance_mm,
         "min_trace_width_mm": min_trace_width_mm,
+        "min_wire_spacing_mm": min_wire_spacing_mm,
+        "min_lid_clearance_mm": min_lid_clearance_mm,
     }
     ctx = _DRCContext(doc, routed, params)
 

@@ -3,7 +3,7 @@
 """
 Design Rule Check panel.
 
-A dockable panel with two threshold spin boxes, a "Run Check" button, and a
+A dockable panel with the rule thresholds, a "Run Check" button, and a
 results table. Clicking a finding selects the offending object(s) in the 3-D
 view, the same click-to-select mechanism wirebond.ContactPointPanel already
 uses. No hover-highlight in v1 (deferred — the property-swap mechanism
@@ -84,10 +84,36 @@ class DRCPanel(QtWidgets.QDockWidget):
         settings_row.addStretch()
         layout.addLayout(settings_row)
 
+        wire_row = QtWidgets.QHBoxLayout()
+        wire_row.addWidget(QtWidgets.QLabel("Min wire spacing (mm):"))
+        self.spin_wire_spacing = QtWidgets.QDoubleSpinBox()
+        self.spin_wire_spacing.setRange(0.0, 10.0)
+        self.spin_wire_spacing.setDecimals(3)
+        self.spin_wire_spacing.setSingleStep(0.005)
+        self.spin_wire_spacing.setValue(drc.DEFAULT_MIN_WIRE_SPACING_MM)
+        self.spin_wire_spacing.setToolTip(
+            "Minimum gap between two bond wires that do not land on the same pad")
+        wire_row.addWidget(self.spin_wire_spacing)
+
+        wire_row.addSpacing(12)
+        wire_row.addWidget(QtWidgets.QLabel("Min lid clearance (mm):"))
+        self.spin_lid_clearance = QtWidgets.QDoubleSpinBox()
+        self.spin_lid_clearance.setRange(0.0, 10.0)
+        self.spin_lid_clearance.setDecimals(3)
+        self.spin_lid_clearance.setSingleStep(0.05)
+        self.spin_lid_clearance.setValue(drc.DEFAULT_MIN_LID_CLEARANCE_MM)
+        self.spin_lid_clearance.setToolTip(
+            "Minimum headroom between the top of a bond loop and the lid "
+            "underside — or the top of the housing when it has no lid yet")
+        wire_row.addWidget(self.spin_lid_clearance)
+        wire_row.addStretch()
+        layout.addLayout(wire_row)
+
         run_row = QtWidgets.QHBoxLayout()
         self.btn_run = QtWidgets.QPushButton("Run Check")
         self.btn_run.setToolTip("Check every routed trace and bond wire in the "
-                                 "active document for clearance and width violations")
+                                 "active document for clearance, width, wire "
+                                 "spacing, wire crossings and lid clearance")
         self.btn_run.clicked.connect(self.run_check)
         run_row.addWidget(self.btn_run)
         self._lbl_summary = QtWidgets.QLabel("Not run yet.")
@@ -96,14 +122,13 @@ class DRCPanel(QtWidgets.QDockWidget):
         run_row.addStretch()
         layout.addLayout(run_row)
 
-        self._table = QtWidgets.QTableWidget(0, 3)
-        self._table.setHorizontalHeaderLabels(["Rule", "Objects", "Message"])
+        self._table = QtWidgets.QTableWidget(0, 4)
+        self._table.setHorizontalHeaderLabels(["Severity", "Rule", "Objects", "Message"])
+        for col in (0, 1, 2):
+            self._table.horizontalHeader().setSectionResizeMode(
+                col, QtWidgets.QHeaderView.ResizeToContents)
         self._table.horizontalHeader().setSectionResizeMode(
-            0, QtWidgets.QHeaderView.ResizeToContents)
-        self._table.horizontalHeader().setSectionResizeMode(
-            1, QtWidgets.QHeaderView.ResizeToContents)
-        self._table.horizontalHeader().setSectionResizeMode(
-            2, QtWidgets.QHeaderView.Stretch)
+            3, QtWidgets.QHeaderView.Stretch)
         self._table.verticalHeader().setVisible(False)
         self._table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self._table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
@@ -128,6 +153,8 @@ class DRCPanel(QtWidgets.QDockWidget):
             doc,
             min_clearance_mm=self.spin_clearance.value(),
             min_trace_width_mm=self.spin_width.value(),
+            min_wire_spacing_mm=self.spin_wire_spacing.value(),
+            min_lid_clearance_mm=self.spin_lid_clearance.value(),
         )
         self._populate_table()
 
@@ -137,13 +164,17 @@ class DRCPanel(QtWidgets.QDockWidget):
         tbl = self._table
         tbl.setRowCount(len(self._findings))
 
+        n_warnings = sum(1 for f in self._findings if f.severity == "warning")
+        n_violations = len(self._findings) - n_warnings
         if not self._findings:
             self._lbl_summary.setText("No violations found.")
         else:
-            self._lbl_summary.setText(f"{len(self._findings)} violation(s) found.")
+            self._lbl_summary.setText(
+                f"{n_violations} violation(s), {n_warnings} warning(s) found.")
 
         for row, finding in enumerate(self._findings):
-            cells = [finding.rule, ", ".join(finding.object_names), finding.message]
+            cells = [finding.severity, finding.rule,
+                     ", ".join(finding.object_names), finding.message]
             for col, text in enumerate(cells):
                 item = QtWidgets.QTableWidgetItem(text)
                 item.setData(QtCore.Qt.UserRole, row)
