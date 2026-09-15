@@ -85,6 +85,25 @@ pads. None of that was caught until a human looked at a screenshot. These
 tests exist to catch the next regression in under a minute instead of a full
 manual FreeCAD session.
 
+## Skipped checks
+
+A check that needs a file or tool this machine does not have — the 63 MB SKY130 sample,
+Gmsh — is reported as `[SKIP]` with the reason, and counted separately. It never counts as a
+pass. Returning early from a test used to look exactly like having run and passed.
+
+## GUI smoke test
+
+The headless suite cannot see whether the workbench activates, whether every toolbar button
+is backed by a registered command, or whether the dock panels build. This can:
+
+```
+"C:\Program Files\FreeCAD 1.1\bin\python.exe" tests\run_gui_smoke.py
+```
+
+A FreeCAD window opens for a few seconds and closes itself. It runs with a throwaway user
+folder, so your preferences are untouched. Set `DIP_FREECAD_EXE` for a FreeCAD installed
+elsewhere; on a headless Linux machine run it under `xvfb-run`.
+
 ## Known quirks of `freecadcmd`
 
 - **No GUI at all.** `FreeCAD.GuiUp` is `False`, `obj.ViewObject` is always

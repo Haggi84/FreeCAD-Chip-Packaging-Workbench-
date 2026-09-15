@@ -69,6 +69,19 @@ Check rows and click <b>Place Bumps</b> to place at both endpoints.<br>
 <b>Created objects:</b> <code>WireBump_{shape}_{n}</code>
 </div>
 
+<h3>Import Netlist</h3>
+<div class="card">
+<b>Purpose:</b> Bond every connection listed in a CSV netlist.<br><br>
+<b>Format:</b> header <code>net,from,to</code> (or <code>die_pad</code> / <code>package_pin</code>), one connection per row; <code>#</code> lines are ignored.<br>
+<b>Matching:</b> contact point name, pad name from the layout's label, label, lead pin number, lead name — case-insensitive.<br>
+Ambiguous or unknown ends are listed, never guessed. Re-importing renames existing wires instead of duplicating them.
+</div>
+
+<h3>Export Bonding Diagram</h3>
+<div class="card">
+<b>Purpose:</b> Write <code>&lt;name&gt;_bonding_diagram.svg</code> (plan view, wires numbered) and <code>&lt;name&gt;_wire_table.csv</code> (net, pads, span, length along the loop, loop height, diameter).
+</div>
+
 <h3>Design Rule Check</h3>
 <div class="card">
 <b>Purpose:</b> Check routed traces and bond wires in the active document.<br><br>
@@ -80,6 +93,9 @@ Check rows and click <b>Place Bumps</b> to place at both endpoints.<br>
 <tr><td>wire-spacing</td><td>0.025 mm</td><td>Two bond wires too close (wires on the same contact point are exempt)</td></tr>
 <tr><td>wire-crossing</td><td>—</td><td>Two bond wires crossing in plan view (warning)</td></tr>
 <tr><td>lid-clearance</td><td>0.1 mm</td><td>Loop top too close to — or through — the lid, or the housing top when there is no lid</td></tr>
+<tr><td>wire-length</td><td>0.5 – 5 mm</td><td>Wire too short or too long, measured along its loop</td></tr>
+<tr><td>bond-angle</td><td>45°</td><td>Wire leaving a die too steeply to the edge it crosses (warning)</td></tr>
+<tr><td>die-edge-clearance</td><td>0.025 mm</td><td>Wire passing too close to the top edge of the die it leaves</td></tr>
 </table>
 <b>Interaction:</b> Click a finding to select the offending objects.
 </div>
@@ -96,7 +112,8 @@ Parts it cannot decide — GDS interconnect layers, imported STEP models — are
 <b>Purpose:</b> Write the assembly for a thermal solver.<br><br>
 <b>Output:</b> <code>&lt;name&gt;_&lt;material&gt;.step</code> per material, <code>&lt;name&gt;.geo</code> (Gmsh script with one physical volume per material), <code>&lt;name&gt;_materials.csv</code>, <code>&lt;name&gt;_manifest.json</code><br><br>
 <b>Meshing:</b> <code>gmsh &lt;name&gt;.geo -3</code> — geometry is converted to metres, parts share nodes across interfaces.<br>
-<b>Overlaps:</b> mould compound and housing are cut by the parts inside them; overlaps between other materials are reported, not changed.
+<b>Overlaps:</b> mould compound and housing are cut by the parts inside them; overlaps between other materials are reported, not changed.<br>
+<b>Boundary conditions:</b> die power, heat-sink temperature (underside), convection coefficient and ambient temperature — named as surfaces in the Gmsh script, values in the manifest.
 </div>
 
 <h3>Session ▾</h3>

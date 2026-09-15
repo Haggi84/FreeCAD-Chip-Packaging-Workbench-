@@ -5,7 +5,7 @@
 ![Python](https://img.shields.io/badge/Python-3.11-yellow?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-lightgrey?style=flat-square)
 ![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-informational?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-1143%20checks-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-1238%20checks-brightgreen?style=flat-square)
 
 **An open-source FreeCAD workbench for chip-packaging design, developed as part of the BMBF research project DI-PASSIONATE.**
 
@@ -63,6 +63,11 @@ git clone <repository-url> "$env:APPDATA\FreeCAD\Mod\DI-PASSIONATE-FreeCAD"
 ```
 
 Restart FreeCAD and choose **Chip-Packaging Workbench** in the workbench selector.
+
+> **"Another folder on the Python path provides the same module names"** in the Report view
+> means a second copy of this workbench — or another addon using a name such as `core` or
+> `ui` — is installed. Python imports each name from whichever folder comes first, so which
+> code runs depends on folder order. Remove or rename the other folder; the message names it.
 
 ---
 
@@ -124,7 +129,7 @@ caption (Tech, Import, Render, Package, Bonding, Routing, Workbench).
 
 | Tool | Description |
 |---|---|
-| **Design Rule Check** | Checks routed traces and bond wires for clearance, trace width, wire-to-wire spacing, wires crossing in plan view, and headroom under the lid — see [Checking bond wires](#checking-bond-wires). Click a finding to select the offending objects. |
+| **Design Rule Check** | Checks routed traces and bond wires for clearance, trace width, wire-to-wire spacing, crossings in plan view, wire length, bond angle, clearance over the die edge and headroom under the lid — see [Checking bond wires](#checking-bond-wires). Click a finding to select the offending objects. |
 
 ### Thermal Simulation
 
@@ -139,6 +144,8 @@ caption (Tech, Import, Render, Package, Bonding, Routing, Workbench).
 |---|---|
 | **Wire Bond** | Interactive bonding session: click a die pad, then a package or PCB pad; a solid bond wire is created. |
 | **Wire Bump Configurator** | Place parametric bumps (ball, wedge, stitch, nail head) at wire endpoints via a netlist browser. |
+| **Import Netlist** | Bond every connection in a CSV netlist, matching pads by name, layout label, pin number or lead — see [Netlist import](#netlist-import). |
+| **Export Bonding Diagram** | Write a plan-view bonding diagram (SVG) and a wire table (CSV) — see [Bonding diagram](#bonding-diagram). |
 | **Confirm / Abort** | Contextual toolbar shown only while a bonding session is active. |
 
 ### Advanced Tools (dropdown)
@@ -147,7 +154,7 @@ caption (Tech, Import, Render, Package, Bonding, Routing, Workbench).
 |---|---|
 | **Leadframe Configurator** | Generate parametric QFN, QFP or BGA leadframes. |
 | **Center Leadframe** | Align the leadframe to the imported die geometry. |
-| **Housing Configurator** | Generate a mould-compound body around the leadframe. |
+| **Housing Configurator** | Generate a mould-compound body around the leadframe. Its cavity floor is the plane the leadframe stands on (z = 0, or the underside of the balls for a BGA), so the two never share volume. |
 | **Add Lid** | Add or resize a lid on an existing housing. |
 | **Layer on Leadframe** | Scale, rotate and place GDS layers onto a leadframe. |
 | **Define Contact Points** | Batch-place markers at the top-face centre of selected layer objects. |
@@ -925,6 +932,20 @@ The result is stored on the block as `DieWidth`, `DieLength`, `DieThickness`,
 `Shape.BoundBox` they keep reporting the die's own size after the chip has been positioned
 on a carrier.
 
+### The proxy and the full import agree
+
+That every tool can work on the proxy rests on the two describing the same part, so the test
+suite imports `IC_Pad_EdgeSeal.boundary.gds` both ways and compares them: the proxy's
+footprint is the seal ring the full import draws, its underside is the die body's underside,
+its top is the top of the highest built layer, and its pads are at exactly the full import's
+contact points.
+
+Writing that test found a real error. **Auto PIN contact detection** in Load GDSII placed its
+contact points at heights from a rank-based heuristic rather than the stackup the import had
+just used — on this file at 3.8 and 7.6 µm, inside the metal, where the pad tops are at 8.43
+and 14.23 µm. It now uses the import's own stacking, and the test checks that every contact
+point sits on top of pad metal the import built.
+
 **View in GDS3D** hands the looking to a tool built for it.
 [GDS3D](https://github.com/trilomix/GDS3D) is an external C++/OpenGL viewer that renders a
 layout as triangles with no CAD kernel, which is why it copes with layouts FreeCAD cannot —
@@ -968,7 +989,7 @@ browser of all bond wires.
 
 ### Checking bond wires
 
-The Design Rule Check applies three rules of its own to bond wires, on top of the general
+The Design Rule Check applies six rules of its own to bond wires, on top of the general
 clearance and width checks. They work at wire scale: the general clearance is sized for board
 copper (0.2 mm by default) and would flag every pair of neighbouring wires on a fine-pitch
 die, so wire-to-wire pairs are left to the spacing rule instead.
@@ -978,6 +999,14 @@ die, so wire-to-wire pairs are left to the spacing rule instead.
 | **wire-spacing** | 0.025 mm | Two wires closer than the minimum, measured solid to solid in 3-D. Wires landing on the same contact point are exempt. |
 | **wire-crossing** | — | Two wires whose spans cross in plan view. A *warning* rather than a violation, since a long loop can pass over a short one; the 3-D gap between them is in the message. |
 | **lid-clearance** | 0.1 mm | A loop whose top comes within the minimum of the lid underside — or of the housing top, where a lid will sit, when there is no lid yet. A loop that goes through says by how much. |
+| **wire-length** | 0.5 – 5 mm | A wire shorter or longer than the bounds, measured along its loop (see [Wire length](#wire-length)). The bounds match the Wire Bonding Configurator's defaults; a maximum of 0 means no limit. |
+| **bond-angle** | 45° | A wire leaving a die at more than the limit to the perpendicular of the edge it crosses, in plan view. A *warning*: a corner lead sometimes leaves no other way. |
+| **die-edge-clearance** | 0.025 mm | A wire passing closer than the minimum to the top edge of the die it leaves, where a low loop touches the seal ring. |
+
+A die is every chip proxy, and every die body from a full import — its top edge taken at the
+highest layer standing on it, which is where the pads are, not at the top of the silicon.
+Only wires with exactly one end on a die are checked against it: a wire between two pads of
+the same die crosses no edge.
 
 The spacing rule does not reuse the general check's same-pad exemption. That one finds a
 wire's landing pad by proximity within 0.5 mm, which on a fine-pitch die also reaches the
@@ -987,6 +1016,56 @@ Only a shared contact point exempts two wires here.
 Only wires inside the lid's or housing's footprint are checked against it, and the height
 tested is the real top of the wire solid. That rests on the die's true pad height, which is
 why the [die body](#the-die-body-epi--substrate) under the layout matters for this check.
+
+### Wire length
+
+Every bond wire records `WireLength` — its length **along the loop**, pad to pad, measured
+on the same curve the wire is swept along — together with `SpanLength` (the straight
+plan-view distance), `LoopHeight`, `WireDiameter` and `BondType`. `WireLength` used to hold
+the straight distance between the pads. On a 2.06 mm span with a 0.3 mm loop that is 2.06 mm,
+where the wire is really 2.23 mm as a spline loop and 2.40 mm as a JEDEC trapezoid — 8 % and
+16 % short. The solid's own `Shape.Length` is no substitute: it sums every edge of
+the swept tube, profile circles included. Wires placed before this change keep the value they
+were given.
+
+### Pad names
+
+A layout's text labels name its pads. Both **Import Chip Proxy** and auto PIN detection in
+**Load GDSII** give each contact point a `PadName` — the label lying inside that pad's
+outline, the one nearest its centre if there are several. A pad with no label inside stays
+unnamed rather than borrowing a neighbour's.
+
+### Netlist import
+
+**Import Netlist** reads a CSV with a header row and one connection per row:
+
+```csv
+net,from,to
+VDD,VDD,Lead_L01
+GND,GND,2
+```
+
+`die_pad` / `package_pin` are accepted in place of `from` / `to`; blank lines and lines
+starting with `#` are ignored. Each end is looked up by, in order: contact point name,
+`PadName`, label, the `PinNumber` of the lead it sits on, and the name of that lead — case
+does not matter. It then asks for the wire parameters and bonds every connection it can match.
+
+It refuses to guess. An end that matches **several** contact points by the same criterion —
+two pads both labelled `IO` — is reported as ambiguous instead of bonded to whichever came
+first, and so is an end that matches none. A connection that already has a wire only has its
+net name updated, so importing the same netlist twice does not double the wires.
+
+Wires are numbered on from the highest existing `BondWire_NNN`, whether placed by hand or by
+import, so nothing is renamed or collides.
+
+### Bonding diagram
+
+**Export Bonding Diagram** writes the two things an assembly house asks for:
+
+| File | Contents |
+|---|---|
+| `<name>_bonding_diagram.svg` | Plan view of the die, leadframe and pads, every wire numbered |
+| `<name>_wire_table.csv` | One row per wire, numbered to match: net, from and to pad (by `PadName` when known), span, length along the loop, loop height, diameter |
 
 ---
 
@@ -1024,9 +1103,19 @@ document already knows:
 | Housing and lid | Polycarbonate, Acrylic or ABS | The Housing Configurator's choice, recorded on the body and lid as `HousingMaterial` |
 | Bond wires and bumps | Gold | — |
 | Routed traces | Copper | — |
+| GDS routing metals | Aluminium | The stackup `<Material>`'s `ThermalMaterial` attribute |
 
-It does **not** guess. A GDS interconnect layer is `Type="Conductor"` in the stackup, which
-does not say which metal, and a STEP package or a PCB carries no material at all. Those get the
+A GDS layer is `Type="Conductor"` in the stackup, which does not say which metal. The bundled
+stackups therefore carry one extra attribute, `ThermalMaterial`, on the `<Material>` entries
+whose metal is known — aluminium, for SG13G2's Metal1–5 and TopMetal1–2 and for SKY130's
+met1–met5. KLayout and other readers of the stackup format ignore it. The layer is looked up
+by layer and datatype, so SKY130's met1 (68/20) and the via drawn on the same layer number
+(68/44) are told apart. Assign Materials reads the stackup of the active Technology
+Configuration profile.
+
+It does **not** guess. Vias, contacts, SKY130's `li1` and any layer whose `<Material>` has no
+`ThermalMaterial` stay unassigned — add the attribute to your stackup once you know their fill.
+A STEP package or a PCB carries no material at all. Those get the
 property set to *Unassigned*, and the report lists each one with the reason. Pick the material
 in the property editor under **Material ▸ PackageMaterial** — a choice made there is kept when
 the command runs again. (The property is not called `Material` because FreeCAD 1.1 already
@@ -1065,7 +1154,7 @@ lists any part that still has none, and writes into one folder:
 | File | Contents |
 |---|---|
 | `<name>_<material>.step` | Every solid of that material |
-| `<name>.geo` | Gmsh script: imports the STEP files, glues shared faces, one physical volume per material plus an `Exterior` surface |
+| `<name>.geo` | Gmsh script: imports the STEP files, glues shared faces, one physical volume per material, and the boundary surfaces `HeatSink` and `Convection` |
 | `<name>_materials.csv` | Material properties and each material's physical-volume tag |
 | `<name>_manifest.json` | Which object went into which file, part volumes, overlaps, and every part left out and why |
 
@@ -1073,8 +1162,20 @@ Mesh it with `gmsh <name>.geo -3`. The STEP files are in millimetres; the script
 metres on import, so the SI properties in the CSV apply unchanged. The parts share mesh nodes
 across every interface, so heat can cross from die to paddle to mould compound. The test suite
 checks this by meshing an exported package with the Gmsh 4.15 that ships with FreeCAD 1.1,
-whenever Gmsh is available. Boundary conditions — a heat sink, convection, the power
-dissipated in the die — are the solver's to set.
+whenever Gmsh is available.
+
+Before writing, the export asks for four boundary conditions:
+
+| Condition | Default | Applied to |
+|---|---|---|
+| Die power | 0.5 W | The `Silicon` volume — the manifest gives it as a power density |
+| Heat-sink temperature | 25 °C | `HeatSink`: every outside face in the lowest plane of the assembly |
+| Convection coefficient | 10 W/m²K | `Convection`: every other outside face |
+| Ambient temperature | 25 °C | `Convection` |
+
+The Gmsh script names the surfaces and the manifest carries the values; the solver applies
+them. The tests check on a real mesh that `HeatSink` is exactly the underside and that
+`Convection` covers the rest, top included.
 
 Two fixes are made on the way, because the document's geometry would otherwise be quietly
 wrong as a thermal model:
@@ -1129,6 +1230,7 @@ DI-PASSIONATE-FreeCAD/
 ├── InitGui.py              Workbench registration, toolbars, dropdown menus
 ├── version.py              Single source of truth for the version number
 ├── Get_Path.py             Icon and resource path helpers
+├── dip_package_guard.py    Reports other folders providing this workbench's module names
 ├── compat.py               Qt compatibility shim
 ├── core/                   Algorithms and geometry — no Qt, no GUI
 │   ├── Core_Functionality.py   GDS parsing, shape building, PIN detection
@@ -1144,6 +1246,9 @@ DI-PASSIONATE-FreeCAD/
 │   ├── drc.py                  Design rule checks for traces and bond wires
 │   ├── materials.py            Material library and assignment
 │   ├── thermal_export.py       Per-material STEP, Gmsh script and manifest
+│   ├── pad_names.py            Pad names from the layout's text labels
+│   ├── netlist.py              Netlist CSV reading and matching
+│   ├── bonding_diagram.py      Bonding diagram SVG and wire table
 │   ├── TechConfig.py           Active PDK profile
 │   ├── theme.py                Chip skin palette and stylesheet generation
 │   ├── ico.py                  Multi-size Windows .ico writer
@@ -1180,9 +1285,19 @@ tests need a live FreeCAD and OCCT:
 & "C:\Program Files\FreeCAD 1.1\bin\freecadcmd.exe" tests\run_all.py
 ```
 
-1143 checks across 31 modules covering geometry construction, GDS import, level-of-detail
+1238 checks across 34 modules covering geometry construction, GDS import, level-of-detail
 state, routing, obstacle handling, design rule checks, material assignment, thermal export,
-session state, theme generation and shortcut creation. Results are also written to `tests/results.log`. The runner exits non-zero on
+netlist import, the bonding diagram, agreement between chip proxy and full import, session
+state, theme generation and shortcut creation. A check that needs a file or tool the machine
+does not have is reported as `[SKIP]` with the reason, never counted as a pass.
+
+What the headless suite cannot see — the workbench activating, every toolbar button backed by
+a registered command, the dock panels building, an error in the Report view at start-up — is
+covered by a separate GUI smoke test, which opens FreeCAD briefly with a throwaway user folder:
+
+```powershell
+& "C:\Program Files\FreeCAD 1.1\bin\python.exe" tests\run_gui_smoke.py
+``` Results are also written to `tests/results.log`. The runner exits non-zero on
 failure, so it is suitable for CI.
 
 Anything that needs a live GUI — applying a stylesheet, rasterising an SVG, the COM call
@@ -1204,8 +1319,8 @@ Concept sketches and the design mindmap for the workbench are kept here:
 
 ## Roadmap
 
-- Interconnect metals per PDK layer, so a full GDS import exports with materials
-- Boundary-condition presets (heat sink, convection, die power) in the thermal export
+- Elmer solver input (`.sif`) alongside the Gmsh script
+- Via and contact fill materials in the bundled stackups
 - Additional online component libraries
 
 ---
