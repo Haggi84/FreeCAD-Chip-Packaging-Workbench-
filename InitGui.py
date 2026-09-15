@@ -50,6 +50,8 @@ try:
     from routing import TraceDragCommand   # noqa: F401
     from routing import BodyRouteCommand   # noqa: F401
     from drc import DRCCommand   # noqa: F401
+    from thermal import MaterialsCommand   # noqa: F401
+    from thermal import ThermalExportCommand   # noqa: F401
 
     FreeCAD.Console.PrintMessage("Commands loaded successfully\n")
 except Exception as e:
@@ -61,8 +63,8 @@ except Exception as e:
 # runs the first time this specific workbench is activated — a document may
 # be opened before that ever happens). This makes native FreeCAD save/open
 # automatically capture and restore the handful of workbench state values
-# that live in Python module-level globals (fast-mesh mode, VIA detail mode,
-# LOD manager) rather than on a DocumentObject — see session/WorkbenchState.py.
+# that live in Python module-level globals (VIA detail mode, LOD manager)
+# rather than on a DocumentObject — see session/WorkbenchState.py.
 try:
     from session import WorkbenchState
     FreeCAD.addDocumentObserver(WorkbenchState.SaveObserver())
@@ -158,6 +160,7 @@ class MyWorkbench(FreeCADGui.Workbench):
         "Batch Route Session":      "Route All / Cancel",
         "Contact Point Pattern":    "Confirm / Undo / Abort",
         "Design Rule Check":        "DRC",
+        "Thermal Simulation":       "Thermal",
         "Session and Help":         "Workbench",
     }
 
@@ -298,6 +301,15 @@ class MyWorkbench(FreeCADGui.Workbench):
                 "Design Rule Check",
                 [
                     "ShowDRCPanelCommand",
+                ],
+            )
+
+            # ── Thermal Simulation ───────────────────────────────────────
+            self.appendToolbar(
+                "Thermal Simulation",
+                [
+                    "AssignMaterialsCommand",
+                    "ThermalExportCommand",
                 ],
             )
 

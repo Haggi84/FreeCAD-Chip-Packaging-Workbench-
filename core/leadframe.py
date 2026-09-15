@@ -8,6 +8,7 @@ Object naming convention
 LeadframeBody      : semi-transparent package body (mold compound)
 DiePaddle          : central die-attach copper pad  — IsDiePaddle = True
 Lead_L01 … L/R/T/B: individual lead fingers        — IsLeadFinger = True
+                     (paddle and leads record LeadframeMaterial)
 BGA_Ball_00_00 …   : individual BGA solder balls   — IsLeadFinger = True
 ContactPoint_001 … : auto-generated snap markers   — IsContactPoint = True
                      placed at the top-face centre of every lead / ball
@@ -55,6 +56,14 @@ def _tag_lead(obj, side: str, index: int):
     obj.IsLeadFinger = True
     obj.LeadSide     = side
     obj.LeadIndex    = index
+
+
+def _tag_material(obj, material: str):
+    """Record the configured leadframe metal on a lead or paddle — nothing
+    else in the document says what it is made of (see core.materials)."""
+    obj.addProperty("App::PropertyString", "LeadframeMaterial", "Leadframe",
+                    "Leadframe metal chosen in the configurator")
+    obj.LeadframeMaterial = material or ""
 
 
 # ── contact-point marker creation ─────────────────────────────────────────────
@@ -209,6 +218,7 @@ def _build_qfn_qfp(doc, config, frame_type, color, half_l, half_w):
         dp_obj.addProperty("App::PropertyBool", "IsDiePaddle", "Leadframe",
                             "Central die-attach paddle")
         dp_obj.IsDiePaddle = True
+        _tag_material(dp_obj, config.get("material", ""))
 
     # ── Individual lead fingers ───────────────────────────────────────────
     sides = [
@@ -265,6 +275,7 @@ def _build_qfn_qfp(doc, config, frame_type, color, half_l, half_w):
             name     = f"Lead_{side}{i + 1:02d}"
             lead_obj = _feature(doc, name, shape, color)
             _tag_lead(lead_obj, side, i + 1)
+            _tag_material(lead_obj, config.get("material", ""))
             pairs.append((lead_obj, snap_pt))
 
     return pairs

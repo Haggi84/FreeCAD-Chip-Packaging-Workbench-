@@ -57,6 +57,8 @@ import test_tech_profiles
 import test_via_detail
 import test_substrate
 import test_klayout_exact
+import test_materials
+import test_thermal_export
 
 MODULES = [
     test_wirebond_geometry,
@@ -88,6 +90,8 @@ MODULES = [
     test_via_detail,
     test_substrate,
     test_klayout_exact,
+    test_materials,
+    test_thermal_export,
 ]
 
 RESULTS_LOG = os.path.join(_THIS_DIR, "results.log")

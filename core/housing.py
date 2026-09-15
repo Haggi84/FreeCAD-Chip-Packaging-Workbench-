@@ -4,6 +4,18 @@ from FreeCAD import Base
 import FreeCAD, Part, Sketcher, FreeCADGui
 
 
+def _tag_housing_material(obj, material):
+    """Record the configured housing material on the finished body or lid —
+    the only trace of it otherwise is the outer sketch's name (see
+    core.materials)."""
+    if obj is None or not material:
+        return
+    if not hasattr(obj, "HousingMaterial"):
+        obj.addProperty("App::PropertyString", "HousingMaterial", "Housing",
+                        "Housing material chosen in the configurator")
+    obj.HousingMaterial = material
+
+
 def build_housing(config):
     """Create a transparent housing around a leadframe based on the provided configuration.
 
@@ -150,6 +162,7 @@ def build_housing(config):
     final_housing.Tool = post_extrusion
     if FreeCAD.GuiUp:
         final_housing.ViewObject.Transparency = int(transparency * 100)
+    _tag_housing_material(final_housing, material)
 
     # Optional lid
     if include_lid:
@@ -173,6 +186,7 @@ def build_housing(config):
         lid_extrusion.Solid = True
         if FreeCAD.GuiUp:
             lid_extrusion.ViewObject.Transparency = int(transparency * 100)
+        _tag_housing_material(lid_extrusion, material)
 
     doc.recompute()
     if FreeCAD.GuiUp:
@@ -281,6 +295,7 @@ def add_lid_to_housing(doc, lid_thickness, transparency=None, housing_obj=None):
     lid_extrusion.Solid = True
     if FreeCAD.GuiUp:
         lid_extrusion.ViewObject.Transparency = int(transparency * 100)
+    _tag_housing_material(lid_extrusion, getattr(housing, "HousingMaterial", ""))
 
     doc.recompute()
     FreeCAD.Console.PrintMessage(
