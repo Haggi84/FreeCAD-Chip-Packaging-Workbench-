@@ -67,6 +67,8 @@ try:
     from thermal import ThermalExportCommand   # noqa: F401
     from wirebond import NetlistCommands   # noqa: F401
     from wirebond import PackagePadsCommand   # noqa: F401
+    from gds import StackDieCommand   # noqa: F401
+    from gds import DiesPanelCommand   # noqa: F401
 
     FreeCAD.Console.PrintMessage("Commands loaded successfully\n")
 except Exception as e:
@@ -222,6 +224,8 @@ class MyWorkbench(FreeCADGui.Workbench):
                     "SetContactPointsOnFaceCommand",
                     "InteractiveContactPointCommand",
                     "DetectPackagePadsCommand",
+                    "StackDieCommand",
+                    "ShowDiesPanelCommand",
                     "ContactPointSymmetryCommand",
                     "ContactPointPatternCommand",
                     "ShowContactPointPanelCommand",

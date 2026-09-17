@@ -68,6 +68,8 @@ LIBRARY = {m.name: m for m in (
              "Sn-3.0Ag-0.5Cu"),
     Material("Epoxy mould compound", "encapsulant",     0.9, 1900.0,  900.0, 10.0,
              "Typical filled EMC; varies strongly by grade"),
+    Material("Die attach epoxy",     "adhesive",        1.8, 1900.0,  900.0, 60.0,
+             "Non-conductive epoxy; silver-filled grades reach 20-60 W/(m·K)"),
     Material("Polycarbonate",        "polymer",         0.20, 1200.0, 1200.0, 67.0, ""),
     Material("Acrylic (PMMA)",       "polymer",         0.19, 1180.0, 1450.0, 70.0, ""),
     Material("ABS",                  "polymer",         0.17, 1080.0, 1400.0, 90.0,
@@ -217,6 +219,9 @@ def classify(obj, stackup_data=None):
 
     if getattr(obj, "IsChipProxy", False):
         return "Silicon", "chip proxy: modelled as bulk silicon"
+
+    if getattr(obj, "IsDieAttach", False):
+        return "Die attach epoxy", "default: die attach"
 
     if getattr(obj, "IsRoutingTrace", False):
         return "Copper", "default: routed trace"

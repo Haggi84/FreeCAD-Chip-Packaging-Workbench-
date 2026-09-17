@@ -134,7 +134,7 @@ def _check_library(tc):
                   for m in materials.LIBRARY.values()))
     tc.check("every library material has a known kind",
               all(m.kind in {"semiconductor", "dielectric", "metal", "solder",
-                             "encapsulant", "polymer", "laminate"}
+                             "encapsulant", "polymer", "laminate", "adhesive"}
                   for m in materials.LIBRARY.values()))
 
     for name, expected in (("Substrate", "Silicon"), ("EPI", "Silicon"),

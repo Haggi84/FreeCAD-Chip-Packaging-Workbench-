@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Two dies stacked with adhesive between them, on a carrier. -->
+  <rect x="4" y="46" width="56" height="10" rx="1" fill="#cc8833" stroke="#7a4d18" stroke-width="2"/>
+  <rect x="10" y="42" width="44" height="4" fill="#5a4a3a" stroke="#3a2c1c" stroke-width="1"/>
+  <rect x="10" y="30" width="44" height="12" fill="#c9d6e6" stroke="#2c4460" stroke-width="2"/>
+  <rect x="20" y="26" width="24" height="4" fill="#5a4a3a" stroke="#3a2c1c" stroke-width="1"/>
+  <rect x="20" y="14" width="24" height="12" fill="#c9d6e6" stroke="#2c4460" stroke-width="2"/>
+  <path d="M32,10 L32,4 M28,7 L32,3 L36,7" fill="none" stroke="#3f8f5a" stroke-width="2.5"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

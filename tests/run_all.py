@@ -64,6 +64,7 @@ import test_bonding
 import test_proxy_vs_full
 import test_package_pads
 import test_netlist_propose
+import test_dies
 
 MODULES = [
     test_wirebond_geometry,
@@ -102,6 +103,7 @@ MODULES = [
     test_proxy_vs_full,
     test_package_pads,
     test_netlist_propose,
+    test_dies,
 ]
 
 RESULTS_LOG = os.path.join(_THIS_DIR, "results.log")
