@@ -5,7 +5,7 @@
 ![Python](https://img.shields.io/badge/Python-3.11-yellow?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-lightgrey?style=flat-square)
 ![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-informational?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-1274%20checks-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-1328%20checks-brightgreen?style=flat-square)
 
 **An open-source FreeCAD workbench for chip-packaging design, developed as part of the BMBF research project DI-PASSIONATE.**
 
@@ -30,6 +30,7 @@ bonds and bumps, and saving the result as a native FreeCAD document.
 - [PCB Integration](#pcb-integration)
 - [Wire Bonding](#wire-bonding)
 - [Contact Point System](#contact-point-system)
+- [Multi-die and stacked assemblies](#multi-die-and-stacked-assemblies)
 - [Materials and Thermal Export](#materials-and-thermal-export)
 - [Supported File Formats](#supported-file-formats)
 - [Session Save and Load](#session-save-and-load)
@@ -110,6 +111,8 @@ caption (Tech, Import, Render, Package, Bonding, Routing, Workbench).
 | **Set Contact Points on Face** | Grid-based placement: pick faces, generate a UV grid, select points, confirm. |
 | **Interactive Contact Point** | Place individual contact points by clicking directly in the 3-D view. |
 | **Detect Package Pads** | Find the bond-finger plane of an imported package model and place a contact point on every finger — see [Bond fingers on a package model](#bond-fingers-on-a-package-model). |
+| **Stack Die** | Put one die on another with the die attach between them, and report overhang and buried pads — see [Multi-die and stacked assemblies](#multi-die-and-stacked-assemblies). |
+| **Dies** | Dock panel listing every die with its tier, size, pads and how many are bonded; isolates one tier at a time. |
 | **Contact Point Symmetry** | Mirror, symmetrize or generate contact points about the centre of one or many faces — see [Symmetric Placement](#symmetric-placement). |
 | **Contact Point Pattern** | Place points face by face with a live cross-hair preview and exact numeric entry, optionally copying an existing point's position — see [Copying a point onto other faces](#copying-a-point-onto-other-faces). |
 | **Confirm / Undo / Abort** | Contextual toolbar shown only while a pattern session is active. |
@@ -251,7 +254,7 @@ by then is usually an empty folder nobody looks at.
 | 2 | Load GDSII *or* Import Chip Proxy | Bring in the die — full geometry, or a fast stand-in for layout work |
 | 3 | Leadframe Library *or* Leadframe Configurator | Import or generate the package |
 | 4 | Center Leadframe | Align package to die |
-| 5 | Move / Rotate Chip | Fine-tune die placement |
+| 5 | Move / Rotate Chip, or Stack Die for a second tier | Fine-tune die placement |
 | 6 | Housing Configurator *(optional)* | Add mould compound and lid |
 | 7 | Detect Package Pads *or* Set Contact Points on Face | Define bonding locations |
 | 8 | Propose Netlist → Import Netlist, *or* Wire Bond by hand | Create bond wires |
@@ -1005,6 +1008,8 @@ die, so wire-to-wire pairs are left to the spacing rule instead.
 | **wire-length** | 0.5 – 5 mm | A wire shorter or longer than the bounds, measured along its loop (see [Wire length](#wire-length)). The bounds match the Wire Bonding Configurator's defaults; a maximum of 0 means no limit. |
 | **bond-angle** | 45° | A wire leaving a die at more than the limit to the perpendicular of the edge it crosses, in plan view. A *warning*: a corner lead sometimes leaves no other way. |
 | **die-edge-clearance** | 0.025 mm | A wire passing closer than the minimum to the top edge of the die it leaves, where a low loop touches the seal ring. |
+| **stack-clearance** | 0.1 mm | A wire from an upper tier passing closer than the minimum over the die below it — which it never lands on, so the die-edge rule never sees it. |
+| **covered-pad** | — | A pad with a die sitting over it. It cannot be bonded, and nothing shows that from above. Reported before any wire exists. |
 
 A die is every chip proxy, and every die body from a full import — its top edge taken at the
 highest layer standing on it, which is where the pads are, not at the top of the silicon.
@@ -1115,7 +1120,8 @@ import, so nothing is renamed or collides.
 | File | Contents |
 |---|---|
 | `<name>_bonding_diagram.svg` | Plan view of the die, leadframe and pads, every wire numbered |
-| `<name>_wire_table.csv` | One row per wire, numbered to match: net, from and to pad (by `PadName` when known), span, length along the loop, loop height, diameter |
+| `<name>_wire_table.csv` | One row per wire, numbered to match: net, die and tier, from and to pad (by `PadName` when known), span, length along the loop, loop height, diameter |
+| `<name>_stack_elevation.svg` | Side view of the stack: carrier, dies with the adhesive between them, and every loop. Written when the document has dies. Its vertical scale is exaggerated — a stack is a fraction of a millimetre over several — and by how much is stated in the title. |
 
 The **Contact Point Browser** carries the same three steps as buttons — *Propose*, *Import*
 and *Export* — running exactly the code the toolbar commands run. *Export* writes the
@@ -1135,6 +1141,76 @@ routing tools snap to.
 | Die side | `ContactPoint_NNN` | Orange | Auto PIN detection, Define Contact Points, Chip Proxy import |
 | Package / housing | `contact_point_housing_NNN` | Yellow | Set Contact Points on Face, Interactive Contact Point |
 | PCB | `PCB_Pad_NNN` | Yellow | PCB Import (auto-detected) |
+
+---
+
+## Multi-die and stacked assemblies
+
+A die used to be a block with some contact points near it. Nothing recorded which pads belong
+to which die, or which die sits on which — enough for one die in a package, and wrong for a
+stack. Every die now carries an identity, derived from geometry already in the document and
+then recorded, so an existing assembly gains it without being rebuilt:
+
+| Property | On | Meaning |
+|---|---|---|
+| `DieName` | the die | `U1`, `U2`, … — what pads, nets and reports refer to. A name you change is never overwritten. |
+| `DieTier` | the die | 0 on the carrier, 1 for the die above it, … |
+| `DieBelow` | the die | The die this one is stacked on |
+| `DieName` | each pad | The die the pad belongs to |
+
+A pad belongs to **one** die: the one whose top face is nearest it. A thin die's pads sit
+within a marker's thickness of the die below as well, so "inside the outline and near the
+top" gives those pads to both tiers.
+
+### The Dies panel
+
+In a stack the 3-D view shows mostly the top die. The **Dies** panel lists them instead — name,
+tier, what each sits on, size, thickness, pads and how many of those are bonded — and
+**Isolate** hides every other die so one tier can be worked on.
+
+### Stacking
+
+**Stack Die** puts one die on another: it sets the height from the base die's top plus the
+die-attach thickness, optionally centres it, builds the adhesive as real geometry, and
+records the tier.
+
+The die attach is modelled because it carries the heat out of the die and sets the height of
+everything above it. Leaving it out makes a stack thinner than it is and understates every
+loop height in it. It spans the supported part of the die and is assigned *Die attach epoxy*,
+so it appears in the thermal export.
+
+Afterwards the command reports the two things a stack hides: how much of the upper die hangs
+over nothing, and which pads of the die below it now covers.
+
+Moving a die moves what its pads **say**, not only where their markers are drawn — a contact
+point stores its position as a property, and bonding, netlist matching and every check read
+that property.
+
+### What stacking changed in the checks
+
+Three defects surfaced when the first stack was modelled, all of them silent:
+
+- **A pad on an upper die counted as being on every die below it.** The test for "on this die"
+  had no upper bound in Z, so a pad on the next tier — inside the same outline, simply higher
+  — matched as well.
+- **Die-to-die wires were checked against nothing.** The die rules only looked at wires with
+  exactly one end on a die, and a wire between two tiers has both.
+- **Move / Rotate Chip left every pad's stored position behind.** It set placements only, so
+  after moving a chip each pad still reported where it used to be, and the next bond went
+  there. Restore Original now restores those positions too.
+
+### Netlist proposal per die
+
+**Propose Netlist** pairs each die separately, about that die's **own** centre. Treating a
+module's pads as one ring orders the pads of two side-by-side dies around a point between
+them, which is meaningless for both.
+
+The package pins are shared out in proportion to each die's pad count, each pin going to the
+die nearest it among those still short. Nearest-die alone starves a stack: the tiers share a
+footprint, the base is bigger and nearer, and it takes every pin.
+
+The netlist gains a `die` column, and a pad name that repeats across dies is written
+die-qualified — `U2.VDD` — which Import Netlist matches.
 
 ---
 
@@ -1197,6 +1273,7 @@ Mould compounds in particular vary widely by grade.
 | Alloy 42 | 12 | 8110 | 502 | 4.5 |
 | SAC305 solder | 58 | 7400 | 230 | 21.7 |
 | Epoxy mould compound | 0.9 | 1900 | 900 | 10 |
+| Die attach epoxy | 1.8 | 1900 | 900 | 60 |
 | Polycarbonate | 0.20 | 1200 | 1200 | 67 |
 | Acrylic (PMMA) | 0.19 | 1180 | 1450 | 70 |
 | ABS | 0.17 | 1080 | 1400 | 90 |
@@ -1305,6 +1382,7 @@ DI-PASSIONATE-FreeCAD/
 │   ├── pad_names.py            Pad names from the layout's text labels
 │   ├── netlist.py              Netlist CSV reading, matching and proposal
 │   ├── package_pads.py         Bond-finger planes of a package model
+│   ├── dies.py                 Die identity, tiers, stacking and die attach
 │   ├── bonding_diagram.py      Bonding diagram SVG and wire table
 │   ├── TechConfig.py           Active PDK profile
 │   ├── theme.py                Chip skin palette and stylesheet generation
@@ -1342,10 +1420,11 @@ tests need a live FreeCAD and OCCT:
 & "C:\Program Files\FreeCAD 1.1\bin\freecadcmd.exe" tests\run_all.py
 ```
 
-1274 checks across 36 modules covering geometry construction, GDS import, level-of-detail
+1328 checks across 37 modules covering geometry construction, GDS import, level-of-detail
 state, routing, obstacle handling, design rule checks, material assignment, thermal export,
-bond-finger detection, netlist proposal and import, the bonding diagram, agreement between
-chip proxy and full import, session state, theme generation and shortcut creation. A check that needs a file or tool the machine
+die identity and stacking, bond-finger detection, netlist proposal and import, the bonding
+diagram, agreement between chip proxy and full import, session state, theme generation and
+shortcut creation. A check that needs a file or tool the machine
 does not have is reported as `[SKIP]` with the reason, never counted as a pass.
 
 What the headless suite cannot see — the workbench activating, every toolbar button backed by

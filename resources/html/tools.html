@@ -69,6 +69,20 @@ Check rows and click <b>Place Bumps</b> to place at both endpoints.<br>
 <b>Created objects:</b> <code>WireBump_{shape}_{n}</code>
 </div>
 
+<h3>Stack Die</h3>
+<div class="card">
+<b>Purpose:</b> Put one die on another, with the die attach between them.<br><br>
+Sets the height from the base die's top plus the adhesive thickness, optionally centres the die, builds the die attach as real material (assigned <i>Die attach epoxy</i>), and records the tier.<br>
+The die's pads move with it — including the positions they store, which is what bonding and the design rules read.<br><br>
+<b>Reports:</b> how much of the upper die hangs over nothing, and which pads of the die below it now covers.
+</div>
+
+<h3>Dies</h3>
+<div class="card">
+<b>Purpose:</b> List the dies of the assembly: name, tier, what each sits on, size, thickness, pads and how many are bonded.<br><br>
+<b>Isolate</b> shows only the selected die and its pads — in a stack the 3-D view otherwise shows mostly the top die. <b>Refresh</b> finds dies added since, naming and tiering any new one.
+</div>
+
 <h3>Detect Package Pads</h3>
 <div class="card">
 <b>Purpose:</b> Place contact points on the bond fingers of an imported package model.<br><br>
@@ -112,6 +126,8 @@ Ambiguous or unknown ends are listed, never guessed. Re-importing renames existi
 <tr><td>wire-length</td><td>0.5 – 5 mm</td><td>Wire too short or too long, measured along its loop</td></tr>
 <tr><td>bond-angle</td><td>45°</td><td>Wire leaving a die too steeply to the edge it crosses (warning)</td></tr>
 <tr><td>die-edge-clearance</td><td>0.025 mm</td><td>Wire passing too close to the top edge of the die it leaves</td></tr>
+<tr><td>stack-clearance</td><td>0.1 mm</td><td>Wire from an upper tier passing too close over the die below it</td></tr>
+<tr><td>covered-pad</td><td>—</td><td>Pad with a die sitting over it — reported before any wire exists</td></tr>
 </table>
 <b>Interaction:</b> Click a finding to select the offending objects.
 </div>
