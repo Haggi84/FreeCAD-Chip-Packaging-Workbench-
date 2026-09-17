@@ -367,6 +367,27 @@ def _bounding_center(objects):
 
 # ── Low-level transform helpers ────────────────────────────────────────────────
 
+def _move_contact_point(obj, how):
+    """
+    Move the position a contact point STORES, not only the marker drawn at it.
+
+    A ContactPoint marker keeps its position in a property, and that property
+    is what wire bonding, netlist matching and every design rule read — the
+    marker's placement is only what you see. Moving a chip without it leaves
+    every pad claiming to be where it used to be, so the next bond lands at
+    the old spot.
+    """
+    point = getattr(obj, "ContactPoint", None)
+    if point is None:
+        return
+    try:
+        obj.ContactPoint = how(FreeCAD.Vector(point))
+    except Exception as exc:
+        FreeCAD.Console.PrintWarning(
+            f"[ChipTransform] could not move the stored position of "
+            f"'{obj.Name}': {exc}\n")
+
+
 def _translate_objects(objects, dx, dy, dz):
     v = FreeCAD.Vector(dx, dy, dz)
     for obj in objects:
@@ -374,6 +395,7 @@ def _translate_objects(objects, dx, dy, dz):
             obj.Placement.Base + v,
             obj.Placement.Rotation,
         )
+        _move_contact_point(obj, lambda p: p + v)
 
 
 def _rotate_objects(objects, axis_vec, angle_deg, center):
@@ -389,13 +411,20 @@ def _rotate_objects(objects, axis_vec, angle_deg, center):
         new_pos = rot.multVec(rel) + center
         new_rot = rot * old_rot          # * is the correct compose operator in FreeCAD
         obj.Placement = FreeCAD.Placement(new_pos, new_rot)
+        _move_contact_point(obj, lambda p: rot.multVec(p - center) + center)
 
 
 def _restore_placements(objects, saved):
-    """Restore placements from a {name: Placement} snapshot."""
+    """Restore placements — and the positions contact points store — from a
+    {name: (Placement, ContactPoint or None)} snapshot."""
     for obj in objects:
-        if obj.Name in saved:
-            obj.Placement = saved[obj.Name].copy()
+        entry = saved.get(obj.Name)
+        if entry is None:
+            continue
+        placement, point = entry if isinstance(entry, tuple) else (entry, None)
+        obj.Placement = placement.copy()
+        if point is not None and hasattr(obj, "ContactPoint"):
+            obj.ContactPoint = FreeCAD.Vector(point)
 
 
 # ── Align helpers ──────────────────────────────────────────────────────────────
@@ -939,7 +968,11 @@ class ChipTransformDialog(QtWidgets.QDialog):
         """Capture current placements so 'Restore Original' can undo everything."""
         doc = FreeCAD.activeDocument()
         all_objs = _all_objects(doc) if doc else []
-        self._initial_placements = {o.Name: o.Placement.copy() for o in all_objs}
+        self._initial_placements = {
+            o.Name: (o.Placement.copy(),
+                     FreeCAD.Vector(o.ContactPoint)
+                     if getattr(o, "ContactPoint", None) is not None else None)
+            for o in all_objs}
 
     def _restore_original(self):
         doc = FreeCAD.activeDocument()
