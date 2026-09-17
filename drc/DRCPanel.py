@@ -136,6 +136,13 @@ class DRCPanel(QtWidgets.QDockWidget):
             0.0, 10.0, 3, 0.005, drc.DEFAULT_MIN_DIE_EDGE_CLEARANCE_MM,
             "Smallest gap between a wire and the top edge of the die it leaves")
         die_row.addWidget(self.spin_die_edge)
+        die_row.addSpacing(12)
+        die_row.addWidget(QtWidgets.QLabel("Min stack clearance (mm):"))
+        self.spin_stack = self._spin(
+            0.0, 10.0, 3, 0.05, drc.DEFAULT_MIN_STACK_CLEARANCE_MM,
+            "Smallest gap between a wire and the top of a die it flies over "
+            "on its way out of a stack")
+        die_row.addWidget(self.spin_stack)
         die_row.addStretch()
         layout.addLayout(die_row)
 
@@ -198,6 +205,7 @@ class DRCPanel(QtWidgets.QDockWidget):
             max_wire_length_mm=self.spin_max_length.value(),
             max_bond_angle_deg=self.spin_bond_angle.value(),
             min_die_edge_clearance_mm=self.spin_die_edge.value(),
+            min_stack_clearance_mm=self.spin_stack.value(),
         )
         self._populate_table()
 

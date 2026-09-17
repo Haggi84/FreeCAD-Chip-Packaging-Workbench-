@@ -39,6 +39,10 @@ copper and would flag every neighbouring wire on a fine-pitch die), wires
 that cross in plan view, headroom between the top of each loop and the
 package lid, wire length along the loop, the angle at which a wire leaves
 its die, and how close it passes to the die's edge.
+
+Stacked dies add two more: a wire flying over the die below it on its way
+out, and a pad buried under the tier above. Both are invisible from above in
+the 3-D view, which is the only place they would otherwise show up.
 """
 
 import math
@@ -76,6 +80,11 @@ DEFAULT_MAX_BOND_ANGLE_DEG = 45.0
 # Gap between a wire and the top edge of the die it leaves, where a low loop
 # touches the seal ring or the die's chipped edge.
 DEFAULT_MIN_DIE_EDGE_CLEARANCE_MM = 0.025
+
+# Gap between a wire and the top of a die it flies over on its way out of a
+# stack. The wire never lands on that die, so the die-edge rule says nothing
+# about it, and the surface it can touch is the whole face, not just an edge.
+DEFAULT_MIN_STACK_CLEARANCE_MM = 0.1
 
 # A wire end counts as on a die when it is inside the outline and no lower
 # than this below the die's top.
@@ -693,25 +702,27 @@ def _check_wire_length(ctx):
 
 def _die_outlines(doc):
     """
-    (xmin, ymin, xmax, ymax, z_top, name) for every die: each chip proxy, and
-    each die body — its slabs grouped by footprint, topped by the highest GDS
-    layer standing on it, which is where its pads and its top edge are.
+    (xmin, ymin, xmax, ymax, z_top, name, z_bottom) for every die: each chip
+    proxy, and each die body — its slabs grouped by footprint, topped by the
+    highest GDS layer standing on it, which is where its pads and its top edge
+    are. The underside is what tells a die stacked on another from one beside
+    it.
     """
     dies = []
     for o in doc.Objects:
         if getattr(o, "IsChipProxy", False) and _has_geometry(o):
             bb = o.Shape.BoundBox
-            dies.append((bb.XMin, bb.YMin, bb.XMax, bb.YMax, bb.ZMax, o.Name))
+            dies.append((bb.XMin, bb.YMin, bb.XMax, bb.YMax, bb.ZMax, o.Name, bb.ZMin))
 
     bodies = {}
     for o in doc.Objects:
         if getattr(o, "IsDieBody", False) and _has_geometry(o):
             bb = o.Shape.BoundBox
             key = tuple(round(v, 6) for v in (bb.XMin, bb.YMin, bb.XMax, bb.YMax))
-            top, name = bodies.get(key, (bb.ZMax, o.Name))
-            bodies[key] = (max(top, bb.ZMax), name)
+            top, name, bottom = bodies.get(key, (bb.ZMax, o.Name, bb.ZMin))
+            bodies[key] = (max(top, bb.ZMax), name, min(bottom, bb.ZMin))
     tol = 1e-6
-    for (x0, y0, x1, y1), (top, name) in bodies.items():
+    for (x0, y0, x1, y1), (top, name, bottom) in bodies.items():
         for o in doc.Objects:
             if not hasattr(o, "GDSLayerID") or not _has_geometry(o):
                 continue
@@ -719,19 +730,29 @@ def _die_outlines(doc):
             if (bb.XMin >= x0 - tol and bb.XMax <= x1 + tol
                     and bb.YMin >= y0 - tol and bb.YMax <= y1 + tol):
                 top = max(top, bb.ZMax)
-        dies.append((x0, y0, x1, y1, top, name))
+        dies.append((x0, y0, x1, y1, top, name, bottom))
     return dies
 
 
 def _on_die(point, die):
-    x0, y0, x1, y1, top, _name = die
+    """
+    True when *point* is a pad ON this die: inside its outline and on its top
+    face, within a marker's thickness EITHER WAY.
+
+    The upper bound is what tells the tiers of a stack apart. Without it every
+    pad of an upper die — inside the same outline, simply higher up — counts
+    as being on the die below as well, so its wires are measured against the
+    wrong die, and a wire between two tiers looks like it leaves neither.
+    """
+    x0, y0, x1, y1, top = die[:5]
     return (x0 <= point.x <= x1 and y0 <= point.y <= y1
-            and point.z >= top - _ON_DIE_Z_TOL_MM)
+            and abs(point.z - top) <= _ON_DIE_Z_TOL_MM)
 
 
 def _leaving_die(doc, wire, dies):
     """[(die, inside_point, outside_point)] for each die the wire leaves —
-    exactly one end on it. A wire between two pads of one die leaves none."""
+    exactly one end on it. A wire between two pads of one die leaves none; a
+    wire between two dies leaves both, and is listed once for each."""
     pts = _wire_points(doc, wire)
     if not pts:
         return []
@@ -758,7 +779,7 @@ def _check_bond_angle(ctx):
         return findings
     for o in _bond_wires(ctx):
         for die, inside, outside in _leaving_die(ctx.doc, o, dies):
-            x0, y0, x1, y1, _top, die_name = die
+            x0, y0, x1, y1, _top, die_name = die[:6]
             dx, dy = outside.x - inside.x, outside.y - inside.y
             span = math.hypot(dx, dy)
             if span < 1e-9:
@@ -787,7 +808,7 @@ def _check_die_edge_clearance(ctx):
     edges = {}
     for o in _bond_wires(ctx):
         for die, inside, _outside in _leaving_die(ctx.doc, o, dies):
-            x0, y0, x1, y1, top, die_name = die
+            x0, y0, x1, y1, top, die_name = die[:6]
             if die not in edges:
                 V = FreeCAD.Vector
                 edges[die] = Part.makePolygon([V(x0, y0, top), V(x1, y0, top),
@@ -809,6 +830,123 @@ def _check_die_edge_clearance(ctx):
     return findings
 
 
+# ── stacked dies ─────────────────────────────────────────────────────────────
+
+def _contact_points(doc):
+    return [o for o in (doc.Objects if doc else [])
+            if getattr(o, "IsContactPoint", False)]
+
+
+def _segment_hits_box(p0, p1, box):
+    """True when the segment touches the axis-aligned box in plan view."""
+    x0, y0, x1, y1 = box
+    for point in (p0, p1):
+        if x0 <= point.x <= x1 and y0 <= point.y <= y1:
+            return True
+    corners = ((x0, y0), (x1, y0), (x1, y1), (x0, y1))
+    a0, a1 = (p0.x, p0.y), (p1.x, p1.y)
+    return any(_segments_cross(a0, a1, corners[i], corners[(i + 1) % 4])
+               for i in range(4))
+
+
+def _flies_over(doc, wire, dies):
+    """Dies the wire passes over without landing on either end: its span
+    crosses their outline in plan view and their top is below it."""
+    pts = _wire_points(doc, wire)
+    if not pts:
+        return []
+    highest = max(p.z for p in pts)
+    over = []
+    for die in dies:
+        if any(_on_die(p, die) for p in pts):
+            continue
+        if die[4] > highest:
+            continue
+        if _segment_hits_box(pts[0], pts[1], die[:4]):
+            over.append(die)
+    return over
+
+
+def _die_top_face(die):
+    x0, y0, x1, y1, top = die[:5]
+    V = FreeCAD.Vector
+    return Part.Face(Part.makePolygon([
+        V(x0, y0, top), V(x1, y0, top), V(x1, y1, top), V(x0, y1, top), V(x0, y0, top)]))
+
+
+@rule("stack-clearance")
+def _check_stack_clearance(ctx):
+    """
+    Gap between a wire and the top of a die it flies over.
+
+    In a stack, the wires of an upper die run out across the die below, and
+    that die's surface is what they can touch. The wire lands on neither end
+    of it, so the die-edge rule — which only looks at the die a wire leaves —
+    never sees it.
+    """
+    minimum = ctx.params.get("min_stack_clearance_mm", DEFAULT_MIN_STACK_CLEARANCE_MM)
+    dies = _die_outlines(ctx.doc)
+    findings, faces = [], {}
+    if not dies:
+        return findings
+    for o in _bond_wires(ctx):
+        for die in _flies_over(ctx.doc, o, dies):
+            die_name = die[5]
+            if die_name not in faces:
+                try:
+                    faces[die_name] = _die_top_face(die)
+                except Exception:
+                    continue
+            try:
+                gap = o.Shape.distToShape(faces[die_name])[0]
+            except Exception as exc:
+                findings.append(DRCFinding(
+                    "violation", "eval-failed", [o.Name, die_name],
+                    f"Could not evaluate {o.Name} over {die_name}: {exc}", None))
+                continue
+            if gap < minimum:
+                findings.append(DRCFinding(
+                    "violation", "stack-clearance", [o.Name, die_name],
+                    f"{o.Name} passes {gap:.4f} mm over {die_name} "
+                    f"(minimum {minimum:g} mm)", None))
+    return findings
+
+
+@rule("covered-pad")
+def _check_covered_pads(ctx):
+    """
+    A pad with a die sitting over it.
+
+    Stacking hides it from above in the 3-D view and it cannot be bonded at
+    all — the mistake stacking invites, and an expensive one to find late.
+    Unlike every other rule here this one is about pads, so it is worth
+    running before a single wire exists.
+    """
+    dies = _die_outlines(ctx.doc)
+    findings = []
+    if len(dies) < 2:
+        return findings
+    for cp in _contact_points(ctx.doc):
+        point = getattr(cp, "ContactPoint", None)
+        if point is None:
+            continue
+        holder = next((d for d in dies if _on_die(point, d)), None)
+        if holder is None:
+            continue
+        for die in dies:
+            if die is holder or die[6] < holder[4] - _ON_DIE_Z_TOL_MM:
+                continue
+            x0, y0, x1, y1 = die[:4]
+            if x0 <= point.x <= x1 and y0 <= point.y <= y1:
+                findings.append(DRCFinding(
+                    "violation", "covered-pad", [cp.Name, die[5]],
+                    f"{cp.Name} on {holder[5]} is under {die[5]}, which sits "
+                    f"{die[6] - holder[4]:.4f} mm above it — it cannot be bonded",
+                    FreeCAD.Vector(point)))
+                break
+    return findings
+
+
 # ── entry point ──────────────────────────────────────────────────────────────
 
 def run_drc(doc, min_clearance_mm: float = DEFAULT_MIN_CLEARANCE_MM,
@@ -818,7 +956,8 @@ def run_drc(doc, min_clearance_mm: float = DEFAULT_MIN_CLEARANCE_MM,
            min_wire_length_mm: float = DEFAULT_MIN_WIRE_LENGTH_MM,
            max_wire_length_mm: float = DEFAULT_MAX_WIRE_LENGTH_MM,
            max_bond_angle_deg: float = DEFAULT_MAX_BOND_ANGLE_DEG,
-           min_die_edge_clearance_mm: float = DEFAULT_MIN_DIE_EDGE_CLEARANCE_MM):
+           min_die_edge_clearance_mm: float = DEFAULT_MIN_DIE_EDGE_CLEARANCE_MM,
+           min_stack_clearance_mm: float = DEFAULT_MIN_STACK_CLEARANCE_MM):
     """
     Check every Trace_NNN / BondWire_NNN in *doc* for violations, by running
     every registered rule (see RULES) against a shared context. Returns
@@ -830,7 +969,10 @@ def run_drc(doc, min_clearance_mm: float = DEFAULT_MIN_CLEARANCE_MM,
 
     routed = [o for o in doc.Objects
               if (_is_routing_trace(o) or _is_bond_wire(o)) and _has_geometry(o)]
-    if not routed:
+    # The covered-pad rule is about pads, not wires: a stack can bury a pad
+    # the moment a die is placed, which is exactly when it is worth hearing
+    # about, long before anything is bonded.
+    if not routed and not _contact_points(doc):
         return findings
 
     params = {
@@ -842,6 +984,7 @@ def run_drc(doc, min_clearance_mm: float = DEFAULT_MIN_CLEARANCE_MM,
         "max_wire_length_mm": max_wire_length_mm,
         "max_bond_angle_deg": max_bond_angle_deg,
         "min_die_edge_clearance_mm": min_die_edge_clearance_mm,
+        "min_stack_clearance_mm": min_stack_clearance_mm,
     }
     ctx = _DRCContext(doc, routed, params)
 

@@ -184,6 +184,7 @@ def run():
     _check_lid_clearance(tc)
     _check_wire_length(tc)
     _check_die_rules(tc)
+    _check_stack_rules(tc)
     return tc.results
 
 
@@ -367,10 +368,13 @@ def _check_die_rules(tc):
         die.Shape = Part.makeBox(1.0, 1.0, 0.2, V(0, 0, 0))
         die.addProperty("App::PropertyBool", "IsChipProxy", "ChipProxy", "")
         die.IsChipProxy = True
-        # Straight out through the +X edge, well above it.
-        _add_wire(doc, "BondWire_001", V(0.9, 0.5, 0.5), V(2.9, 0.5, 0.5), start_cp="CP_A")
+        # Every wire starts ON the die, at its top: that is where a pad is,
+        # and a wire end higher than a marker's thickness above it belongs to
+        # the tier above, not to this die.
+        # Straight out through the +X edge, rising away from it.
+        _add_wire(doc, "BondWire_001", V(0.9, 0.5, 0.2), V(1.9, 0.5, 1.2), start_cp="CP_A")
         # Out through the +X edge at atan(1.1 / 1.0) = 47.7° to its normal.
-        _add_wire(doc, "BondWire_002", V(0.9, 0.2, 0.8), V(1.9, 1.3, 0.8), start_cp="CP_B")
+        _add_wire(doc, "BondWire_002", V(0.9, 0.2, 0.2), V(1.9, 1.3, 1.2), start_cp="CP_B")
         # A low loop: its underside passes 0.0075 mm above the top edge.
         _add_wire(doc, "BondWire_003", V(0.9, 0.8, 0.22), V(2.0, 0.8, 0.22), start_cp="CP_C")
         # Low too, but between two pads of the same die — it leaves no edge.
@@ -421,5 +425,91 @@ def _check_die_rules(tc):
                   "pads and top edge are — not the top of the silicon",
                   len(outlines) == 1 and abs(outlines[0][4] - 0.0142) < 1e-9,
                   str(outlines))
+    finally:
+        FreeCAD.closeDocument(doc.Name)
+
+
+def _proxy_die(doc, name, size, at):
+    die = doc.addObject("Part::Feature", name)
+    die.Shape = Part.makeBox(*size, at)
+    die.addProperty("App::PropertyBool", "IsChipProxy", "ChipProxy", "")
+    die.IsChipProxy = True
+    return die
+
+
+def _pad(doc, name, point):
+    pad = doc.addObject("Part::Feature", name)
+    pad.Shape = Part.Vertex(point)
+    pad.addProperty("App::PropertyVector", "ContactPoint", "Wirebond", "")
+    pad.addProperty("App::PropertyBool", "IsContactPoint", "Wirebond", "")
+    pad.ContactPoint, pad.IsContactPoint = point, True
+    return pad
+
+
+def _check_stack_rules(tc):
+    """A stacked die: a 1 mm die on a 3 mm one, 25 µm of adhesive between."""
+    doc = new_document("TestDRCStack")
+    try:
+        _proxy_die(doc, "Base_Block", (3.0, 3.0, 0.2), V(0, 0, 0))
+        _proxy_die(doc, "Upper_Block", (1.0, 1.0, 0.15), V(1.0, 1.0, 0.225))
+        _pad(doc, "ContactPoint_001", V(0.2, 0.2, 0.2))     # base, in the open
+        _pad(doc, "ContactPoint_002", V(1.5, 1.5, 0.2))     # base, under the upper die
+        _pad(doc, "ContactPoint_003", V(1.2, 1.2, 0.375))   # upper die
+
+        # Out of the stack, high enough to clear the die below.
+        _add_wire(doc, "BondWire_001", V(1.2, 1.2, 0.375), V(4.0, 1.2, 0.375), start_cp="CP_A")
+        # Out of the stack, sagging towards the die below on the way.
+        _add_wire(doc, "BondWire_002", V(1.2, 1.8, 0.375), V(4.0, 1.8, 0.26), start_cp="CP_B")
+        # Between the two tiers.
+        _add_wire(doc, "BondWire_003", V(0.2, 0.2, 0.2), V(1.2, 1.2, 0.375), start_cp="CP_C")
+        doc.recompute()
+
+        dies = drc._die_outlines(doc)
+        tc.check("both dies are found, with the stacked one above the base",
+                  len(dies) == 2 and abs(max(d[6] for d in dies) - 0.225) < 1e-9,
+                  str(dies))
+        die_to_die = doc.getObject("BondWire_003")
+        tc.check("a wire between two tiers is seen to leave BOTH dies — before "
+                  "the height bound it appeared to leave neither",
+                  len(drc._leaving_die(doc, die_to_die, dies)) == 2,
+                  str(drc._leaving_die(doc, die_to_die, dies)))
+
+        findings = drc.run_drc(doc, min_clearance_mm=0.0, min_trace_width_mm=0.0,
+                               min_wire_length_mm=0.0)
+        stack = {f.object_names[0]: f.message
+                 for f in findings if f.rule == "stack-clearance"}
+        tc.check("a wire sagging towards the die it flies over is flagged",
+                  "BondWire_002" in stack, str(stack))
+        tc.check("a wire with room to spare over the same die is not",
+                  "BondWire_001" not in stack, str(stack))
+        tc.check("...and the finding names the die it passes over",
+                  "Base_Block" in stack.get("BondWire_002", ""), str(stack))
+
+        covered = {f.object_names[0]: f.message
+                   for f in findings if f.rule == "covered-pad"}
+        tc.check("a pad under the tier above is flagged as unbondable",
+                  "ContactPoint_002" in covered, str(covered))
+        tc.check("a pad in the open is not", "ContactPoint_001" not in covered,
+                  str(covered))
+        tc.check("...nor is a pad of the covering die itself",
+                  "ContactPoint_003" not in covered, str(covered))
+
+        relaxed = drc.run_drc(doc, min_clearance_mm=0.0, min_trace_width_mm=0.0,
+                              min_wire_length_mm=0.0, min_stack_clearance_mm=0.05)
+        tc.check("a smaller stack clearance lets the sagging wire pass",
+                  not any(f.rule == "stack-clearance" for f in relaxed), f"got {relaxed}")
+    finally:
+        FreeCAD.closeDocument(doc.Name)
+
+    doc = new_document("TestDRCStackNoWires")
+    try:
+        _proxy_die(doc, "Base_Block", (3.0, 3.0, 0.2), V(0, 0, 0))
+        _proxy_die(doc, "Upper_Block", (1.0, 1.0, 0.15), V(1.0, 1.0, 0.225))
+        _pad(doc, "ContactPoint_001", V(1.5, 1.5, 0.2))
+        doc.recompute()
+        findings = drc.run_drc(doc)
+        tc.check("a buried pad is reported before anything is bonded — the "
+                  "moment the die is placed is when it is worth knowing",
+                  any(f.rule == "covered-pad" for f in findings), f"got {findings}")
     finally:
         FreeCAD.closeDocument(doc.Name)
