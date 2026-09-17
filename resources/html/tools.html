@@ -69,6 +69,22 @@ Check rows and click <b>Place Bumps</b> to place at both endpoints.<br>
 <b>Created objects:</b> <code>WireBump_{shape}_{n}</code>
 </div>
 
+<h3>Detect Package Pads</h3>
+<div class="card">
+<b>Purpose:</b> Place contact points on the bond fingers of an imported package model.<br><br>
+<b>Usage:</b> Select the package body, then run the command. It lists the planes of near-horizontal faces with their face count, size range and how much of each lies around the outline; pick the plane holding the ring of like-sized faces.<br>
+Faces between 0.01 mm² and 150 mm² are considered, so the package body itself stays out of the list. Faces that already have a contact point are skipped.<br><br>
+<b>Created objects:</b> <code>contact_point_housing_{n}</code>
+</div>
+
+<h3>Propose Netlist</h3>
+<div class="card">
+<b>Purpose:</b> Write a first pinout when none exists yet.<br><br>
+Sorts die pads and package pins by angle and pairs them in ring order — each pad to the pin facing it, with no crossings — then writes a netlist CSV (counts, unpaired points and crossing count as comments) and offers to bond it immediately.<br>
+Die-side means lying over a chip proxy or die body. A document without a die is refused rather than paired arbitrarily.<br><br>
+The proposal is a starting point: edit it for supply pins and anything the pad order dictates.
+</div>
+
 <h3>Import Netlist</h3>
 <div class="card">
 <b>Purpose:</b> Bond every connection listed in a CSV netlist.<br><br>

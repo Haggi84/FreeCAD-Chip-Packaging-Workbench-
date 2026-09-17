@@ -5,7 +5,7 @@
 ![Python](https://img.shields.io/badge/Python-3.11-yellow?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-lightgrey?style=flat-square)
 ![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-informational?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-1238%20checks-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-1274%20checks-brightgreen?style=flat-square)
 
 **An open-source FreeCAD workbench for chip-packaging design, developed as part of the BMBF research project DI-PASSIONATE.**
 
@@ -109,6 +109,7 @@ caption (Tech, Import, Render, Package, Bonding, Routing, Workbench).
 | **Leadframe Library** | Browse and import STEP package models from the MirrorSemi online catalogue. |
 | **Set Contact Points on Face** | Grid-based placement: pick faces, generate a UV grid, select points, confirm. |
 | **Interactive Contact Point** | Place individual contact points by clicking directly in the 3-D view. |
+| **Detect Package Pads** | Find the bond-finger plane of an imported package model and place a contact point on every finger — see [Bond fingers on a package model](#bond-fingers-on-a-package-model). |
 | **Contact Point Symmetry** | Mirror, symmetrize or generate contact points about the centre of one or many faces — see [Symmetric Placement](#symmetric-placement). |
 | **Contact Point Pattern** | Place points face by face with a live cross-hair preview and exact numeric entry, optionally copying an existing point's position — see [Copying a point onto other faces](#copying-a-point-onto-other-faces). |
 | **Confirm / Undo / Abort** | Contextual toolbar shown only while a pattern session is active. |
@@ -144,6 +145,7 @@ caption (Tech, Import, Render, Package, Bonding, Routing, Workbench).
 |---|---|
 | **Wire Bond** | Interactive bonding session: click a die pad, then a package or PCB pad; a solid bond wire is created. |
 | **Wire Bump Configurator** | Place parametric bumps (ball, wedge, stitch, nail head) at wire endpoints via a netlist browser. |
+| **Propose Netlist** | Write a first pinout for a die and package that have none: each pad bonded to the pin facing it — see [Proposing a pinout](#proposing-a-pinout). |
 | **Import Netlist** | Bond every connection in a CSV netlist, matching pads by name, layout label, pin number or lead — see [Netlist import](#netlist-import). |
 | **Export Bonding Diagram** | Write a plan-view bonding diagram (SVG) and a wire table (CSV) — see [Bonding diagram](#bonding-diagram). |
 | **Confirm / Abort** | Contextual toolbar shown only while a bonding session is active. |
@@ -251,8 +253,9 @@ by then is usually an empty folder nobody looks at.
 | 4 | Center Leadframe | Align package to die |
 | 5 | Move / Rotate Chip | Fine-tune die placement |
 | 6 | Housing Configurator *(optional)* | Add mould compound and lid |
-| 7 | Set Contact Points on Face | Define bonding locations |
-| 8 | Wire Bond → Wire Bump Configurator | Create bond wires and end bumps |
+| 7 | Detect Package Pads *or* Set Contact Points on Face | Define bonding locations |
+| 8 | Propose Netlist → Import Netlist, *or* Wire Bond by hand | Create bond wires |
+| 8a | Wire Bump Configurator *(optional)* | Add end bumps |
 | 9 | Interactive Route *(optional)* | Route conductor traces on the board or package |
 | 10 | Design Rule Check | Check clearances, wire spacing and headroom under the lid |
 | 11 | Assign Materials → Export for Thermal Simulation *(optional)* | Hand the assembly to a thermal solver |
@@ -1035,6 +1038,53 @@ A layout's text labels name its pads. Both **Import Chip Proxy** and auto PIN de
 outline, the one nearest its centre if there are several. A pad with no label inside stays
 unnamed rather than borrowing a neighbour's.
 
+### Bond fingers on a package model
+
+A package from the Leadframe Library is a STEP solid with no contact points, so every bond
+finger has to be marked before wire bonding can start — dozens of clicks on a QFP.
+
+**Detect Package Pads** does not guess which faces those are: the bond shelf is a ring of
+small faces *inside* the body, well below its top, and how far below depends on the model.
+Instead it groups every near-horizontal face into the plane it lies in, and shows the planes:
+
+| Z (mm) | Faces | Smallest (mm²) | Largest (mm²) | Around the edge |
+|---|---|---|---|---|
+| 1.200 | 17 | 0.5000 | 9.0000 | 94 % |
+| 1.000 | 17 | 0.5000 | 9.0000 | 94 % |
+
+The bond shelf is the plane with many like-sized faces, most of them around the outline —
+the first row above, where 16 leads and a die paddle share a plane. Select one or more
+planes and a contact point is placed on every face of them. Faces that already carry a
+contact point are skipped, so running it again after adding leads costs nothing.
+
+Faces are taken as horizontal by the absolute Z of their normal, up or down: STEP face
+orientation is not dependable, and a lead's underside lands in its own plane anyway, easy to
+tell from the shelf. Only faces between 0.01 mm² and 150 mm² are considered, which is what
+keeps the package body itself out of the list.
+
+### Proposing a pinout
+
+Nothing in a GDS says which package pin a pad goes to: that is a packaging decision, and on a
+new design nobody has made it yet. **Propose Netlist** makes a first one to edit.
+
+It sorts the die pads and the package pins by angle around their own centres and pairs them
+in ring order, trying every starting offset and both directions and keeping the shortest
+total. That is what makes the result usable: pads bonded to the pins facing them, and **no
+crossings**. Pairing each pad with its nearest pin instead gives a shorter total on paper and
+a diagram full of crossed wires.
+
+It writes an ordinary netlist CSV — with the counts, anything unpaired and the crossing
+count as comment lines — and then offers to bond it straight away. Rings of different sizes
+are paired as far as they go, and whatever is left over is named in the file rather than
+dropped.
+
+Which contact points count as die-side is geometric: those lying over a chip proxy or a die
+body. So a pad placed by hand on the die is die-side too, and a document with no die at all
+is refused with the reason rather than paired arbitrarily.
+
+The proposal is a starting point, not a pinout. Supply pins, symmetry requirements and
+anything the die's own pad order dictates still have to be edited in.
+
 ### Netlist import
 
 **Import Netlist** reads a CSV with a header row and one connection per row:
@@ -1066,6 +1116,12 @@ import, so nothing is renamed or collides.
 |---|---|
 | `<name>_bonding_diagram.svg` | Plan view of the die, leadframe and pads, every wire numbered |
 | `<name>_wire_table.csv` | One row per wire, numbered to match: net, from and to pad (by `PadName` when known), span, length along the loop, loop height, diameter |
+
+The **Contact Point Browser** carries the same three steps as buttons — *Propose*, *Import*
+and *Export* — running exactly the code the toolbar commands run. *Export* writes the
+document's existing wires back out as a netlist, which is how a design bonded by hand becomes
+a file you can re-import into another document, or after deleting the wires to rebuild them
+with different loop height or diameter.
 
 ---
 
@@ -1247,7 +1303,8 @@ DI-PASSIONATE-FreeCAD/
 │   ├── materials.py            Material library and assignment
 │   ├── thermal_export.py       Per-material STEP, Gmsh script and manifest
 │   ├── pad_names.py            Pad names from the layout's text labels
-│   ├── netlist.py              Netlist CSV reading and matching
+│   ├── netlist.py              Netlist CSV reading, matching and proposal
+│   ├── package_pads.py         Bond-finger planes of a package model
 │   ├── bonding_diagram.py      Bonding diagram SVG and wire table
 │   ├── TechConfig.py           Active PDK profile
 │   ├── theme.py                Chip skin palette and stylesheet generation
@@ -1285,10 +1342,10 @@ tests need a live FreeCAD and OCCT:
 & "C:\Program Files\FreeCAD 1.1\bin\freecadcmd.exe" tests\run_all.py
 ```
 
-1238 checks across 34 modules covering geometry construction, GDS import, level-of-detail
+1274 checks across 36 modules covering geometry construction, GDS import, level-of-detail
 state, routing, obstacle handling, design rule checks, material assignment, thermal export,
-netlist import, the bonding diagram, agreement between chip proxy and full import, session
-state, theme generation and shortcut creation. A check that needs a file or tool the machine
+bond-finger detection, netlist proposal and import, the bonding diagram, agreement between
+chip proxy and full import, session state, theme generation and shortcut creation. A check that needs a file or tool the machine
 does not have is reported as `[SKIP]` with the reason, never counted as a pass.
 
 What the headless suite cannot see — the workbench activating, every toolbar button backed by
