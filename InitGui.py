@@ -66,6 +66,7 @@ try:
     from thermal import MaterialsCommand   # noqa: F401
     from thermal import ThermalExportCommand   # noqa: F401
     from wirebond import NetlistCommands   # noqa: F401
+    from wirebond import PackagePadsCommand   # noqa: F401
 
     FreeCAD.Console.PrintMessage("Commands loaded successfully\n")
 except Exception as e:
@@ -220,6 +221,7 @@ class MyWorkbench(FreeCADGui.Workbench):
                     "LeadframeLibraryCommand",
                     "SetContactPointsOnFaceCommand",
                     "InteractiveContactPointCommand",
+                    "DetectPackagePadsCommand",
                     "ContactPointSymmetryCommand",
                     "ContactPointPatternCommand",
                     "ShowContactPointPanelCommand",
@@ -232,6 +234,7 @@ class MyWorkbench(FreeCADGui.Workbench):
                 [
                     "WirebondCommand",
                     "WireBumpConfiguratorCommand",
+                    "ProposeNetlistCommand",
                     "ImportNetlistCommand",
                     "ExportBondingDiagramCommand",
                 ],

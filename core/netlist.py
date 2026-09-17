@@ -28,6 +28,9 @@ this module testable without the bonding code's geometry.
 """
 
 import csv
+import math
+
+import FreeCAD
 
 _FROM_COLUMNS = ("from", "die_pad", "pad")
 _TO_COLUMNS = ("to", "package_pin", "pin")
@@ -151,3 +154,219 @@ def apply_netlist(doc, rows, place_wire):
         _set_net(wire, row["net"])
         report["placed"].append((row, wire.Name))
     return report
+
+
+# ── proposing a netlist ──────────────────────────────────────────────────────
+#
+# With no pinout to start from, the usual first proposal is to bond each die
+# pad to the package pin facing it, in ring order: the shortest wires that do
+# not cross. That is a geometric question, so it can be answered here and
+# handed over as an ordinary netlist CSV to edit.
+
+def _position(cp):
+    point = getattr(cp, "ContactPoint", None)
+    return FreeCAD.Vector(point) if point is not None else None
+
+
+def die_outlines(doc):
+    """(xmin, ymin, xmax, ymax) for every chip proxy and die body in *doc*."""
+    outlines = []
+    for obj in doc.Objects:
+        if not (getattr(obj, "IsChipProxy", False) or getattr(obj, "IsDieBody", False)):
+            continue
+        try:
+            bb = obj.Shape.BoundBox
+        except Exception:
+            continue
+        if bb.isValid() and bb.XLength > 0 and bb.YLength > 0:
+            outlines.append((bb.XMin, bb.YMin, bb.XMax, bb.YMax))
+    return outlines
+
+
+def classify_contact_points(doc):
+    """
+    (die_side, package_side) contact points, split by whether each lies over a
+    die — geometry, not naming, so a contact point placed by hand on a die is
+    die-side too.
+
+    With no die in the document nothing is die-side and no proposal is
+    possible; the caller reports that rather than pairing arbitrarily.
+    """
+    outlines = die_outlines(doc)
+    die, package = [], []
+    for cp in _contact_points(doc):
+        point = _position(cp)
+        if point is None:
+            continue
+        over_die = any(x0 <= point.x <= x1 and y0 <= point.y <= y1
+                       for x0, y0, x1, y1 in outlines)
+        (die if over_die else package).append(cp)
+    return die, package
+
+
+def _centre(points):
+    return FreeCAD.Vector(sum(p.x for p in points) / len(points),
+                          sum(p.y for p in points) / len(points), 0.0)
+
+
+def _by_angle(cps):
+    """Contact points in ring order, anticlockwise about their own centre."""
+    centre = _centre([_position(cp) for cp in cps])
+    return sorted(cps, key=lambda cp: math.atan2(_position(cp).y - centre.y,
+                                                 _position(cp).x - centre.x))
+
+
+def _plan_distance(a, b):
+    pa, pb = _position(a), _position(b)
+    return math.hypot(pb.x - pa.x, pb.y - pa.y)
+
+
+def _best_alignment(die, package):
+    """
+    Pair two rings by trying every starting offset and both directions, and
+    keeping the shortest total. Without this the pairing depends on where
+    atan2 happens to start, which is nowhere in particular.
+    """
+    best, best_total = None, None
+    for direction in (1, -1):
+        for offset in range(len(package)):
+            pairs = [(die[i], package[(offset + direction * i) % len(package)])
+                     for i in range(len(die))]
+            total = sum(_plan_distance(a, b) for a, b in pairs)
+            if best_total is None or total < best_total:
+                best, best_total = pairs, total
+    return best or []
+
+
+def _greedy_pairs(die, package):
+    """Shortest-first pairing for rings of different sizes: every pin goes to
+    the nearest pad still free, and the rest are reported."""
+    candidates = sorted((_plan_distance(a, b), i, j)
+                        for i, a in enumerate(die) for j, b in enumerate(package))
+    used_die, used_package, pairs = set(), set(), []
+    for _distance, i, j in candidates:
+        if i in used_die or j in used_package:
+            continue
+        used_die.add(i)
+        used_package.add(j)
+        pairs.append((die[i], package[j]))
+    return pairs
+
+
+def _pad_name_counts(cps):
+    counts = {}
+    for cp in cps:
+        pad_name = (getattr(cp, "PadName", "") or "").strip().lower()
+        if pad_name:
+            counts[pad_name] = counts.get(pad_name, 0) + 1
+    return counts
+
+
+def _reference(cp, pad_name_counts):
+    """What to write for a contact point: its pad name when that is
+    unambiguous in this document, otherwise its object name."""
+    pad_name = (getattr(cp, "PadName", "") or "").strip()
+    if pad_name and pad_name_counts.get(pad_name.lower(), 0) == 1:
+        return pad_name
+    return cp.Name
+
+
+def _crosses(a0, a1, b0, b1, tol=1e-12):
+    def orient(p, q, r):
+        return (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x)
+
+    def opposite(u, v):
+        return (u > tol and v < -tol) or (u < -tol and v > tol)
+
+    return (opposite(orient(b0, b1, a0), orient(b0, b1, a1))
+            and opposite(orient(a0, a1, b0), orient(a0, a1, b1)))
+
+
+def count_crossings(pairs):
+    """How many wires of the proposal would cross in plan view."""
+    segments = [(_position(a), _position(b)) for a, b in pairs]
+    return sum(1 for i, (a0, a1) in enumerate(segments)
+               for b0, b1 in segments[i + 1:]
+               if _crosses(a0, a1, b0, b1))
+
+
+def propose_connections(doc):
+    """
+    A first pinout for a die and a package that have none: every die pad
+    bonded to the pin facing it, in ring order.
+
+    Returns (rows, report). The rows are as read_netlist_csv returns them, so
+    they can be written out and imported unchanged. The report carries the
+    counts, anything left unpaired, and how many wires cross — 0 for two rings
+    of the same size, which is the point of pairing by angle rather than by
+    nearest neighbour.
+    """
+    die, package = classify_contact_points(doc)
+    report = {"die": len(die), "package": len(package), "crossings": 0,
+              "unpaired_die": [], "unpaired_package": [], "problem": None}
+    if not die or not package:
+        report["problem"] = (
+            "A proposal needs contact points on a die and on a package: found "
+            f"{len(die)} over a die and {len(package)} elsewhere. Import the "
+            "chip and place the package bond fingers first.")
+        return [], report
+
+    die_ring, package_ring = _by_angle(die), _by_angle(package)
+    if len(die_ring) <= len(package_ring):
+        pairs = _best_alignment(die_ring, package_ring)
+    else:
+        pairs = _greedy_pairs(die_ring, package_ring)
+
+    paired_die = {a.Name for a, _b in pairs}
+    paired_package = {b.Name for _a, b in pairs}
+    report["unpaired_die"] = [cp.Name for cp in die if cp.Name not in paired_die]
+    report["unpaired_package"] = [cp.Name for cp in package
+                                  if cp.Name not in paired_package]
+    report["crossings"] = count_crossings(pairs)
+
+    counts = _pad_name_counts(die + package)
+    rows = []
+    for number, (a, b) in enumerate(pairs, start=1):
+        pad_name = (getattr(a, "PadName", "") or "").strip()
+        rows.append({
+            "net": pad_name or f"Net_{number:03d}",
+            "from": _reference(a, counts),
+            "to": _reference(b, counts),
+            "row": number,
+            "distance_mm": _plan_distance(a, b),
+        })
+    return rows, report
+
+
+def write_netlist_csv(rows, path, comments=()):
+    """Write *rows* as a netlist this module can read back."""
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        for line in comments:
+            fh.write(f"# {line}\n")
+        writer = csv.writer(fh)
+        writer.writerow(["net", "from", "to"])
+        for row in rows:
+            writer.writerow([row["net"], row["from"], row["to"]])
+    return path
+
+
+def export_netlist_csv(doc, path):
+    """Write the document's bond wires as a netlist. Returns how many
+    connections were written."""
+    counts = _pad_name_counts(_contact_points(doc))
+    rows = []
+    for obj in sorted(doc.Objects, key=lambda o: o.Name):
+        if not obj.Name.startswith("BondWire_"):
+            continue
+        start = doc.getObject(getattr(obj, "StartCP", "") or "")
+        end = doc.getObject(getattr(obj, "EndCP", "") or "")
+        if start is None or end is None:
+            continue
+        rows.append({
+            "net": getattr(obj, "NetName", "") or obj.Name,
+            "from": _reference(start, counts),
+            "to": _reference(end, counts),
+        })
+    write_netlist_csv(rows, path,
+                      comments=[f"{len(rows)} bond wire(s) from {doc.Label}"])
+    return len(rows)

@@ -125,6 +125,21 @@ class ContactPointPanel(QtWidgets.QDockWidget):
         lbl_hint = QtWidgets.QLabel("Hover to highlight  |  Click to select")
         lbl_hint.setStyleSheet("color: #888; font-size: 12px;")
         btn_row.addWidget(btn_refresh)
+
+        for label, action, tip in (
+            ("Propose…", "propose_netlist",
+             "Pair every die pad with the package pin facing it and write it as "
+             "a netlist CSV to edit"),
+            ("Import…", "import_netlist",
+             "Bond the connections listed in a netlist CSV"),
+            ("Export…", "export_netlist",
+             "Write the bond wires in this document as a netlist CSV"),
+        ):
+            button = QtWidgets.QPushButton(label)
+            button.setToolTip(tip)
+            button.clicked.connect(lambda _checked=False, a=action: self._netlist_action(a))
+            btn_row.addWidget(button)
+
         btn_row.addStretch()
         btn_row.addWidget(lbl_hint)
         layout.addLayout(btn_row)
@@ -198,6 +213,22 @@ class ContactPointPanel(QtWidgets.QDockWidget):
         self.setWidget(central)
 
     # ── public API ────────────────────────────────────────────────────
+
+    def _netlist_action(self, action: str):
+        """Run one of the netlist steps on the active document, then refresh.
+
+        The same functions the toolbar commands call — see
+        wirebond.NetlistCommands — so a button and its command cannot drift
+        apart."""
+        doc = FreeCAD.activeDocument()
+        if doc is None:
+            return
+        from wirebond import NetlistCommands
+        try:
+            getattr(NetlistCommands, action)(self, doc)
+        except Exception as exc:
+            FreeCAD.Console.PrintError(f"[ContactPointPanel] {action}: {exc}\n")
+        self.populate()
 
     def populate(self):
         """Rebuild the tree and netlist from the active document."""
