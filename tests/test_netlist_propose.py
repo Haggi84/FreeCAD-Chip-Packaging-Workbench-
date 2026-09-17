@@ -70,7 +70,112 @@ def run():
     _check_refusals(tc)
     _check_round_trip(tc)
     _check_export(tc)
+    _check_multi_die(tc)
+    _check_stacked_dies(tc)
     return tc.results
+
+
+def _die_at(doc, name, at, size):
+    die = doc.addObject("Part::Feature", name)
+    die.Shape = Part.makeBox(*size, at)
+    die.addProperty("App::PropertyBool", "IsChipProxy", "ChipProxy", "")
+    die.IsChipProxy = True
+    return die
+
+
+def _pads_on(doc, prefix, die_at, size, z, count=4):
+    """Pads spread around the top face of a die."""
+    x0, y0 = die_at
+    w, h = size
+    spots = ((x0 + 0.2 * w, y0 + 0.2 * h), (x0 + 0.8 * w, y0 + 0.2 * h),
+             (x0 + 0.8 * w, y0 + 0.8 * h), (x0 + 0.2 * w, y0 + 0.8 * h))
+    return [_contact_point(doc, f"{prefix}{i + 1:03d}", V(x, y, z))
+            for i, (x, y) in enumerate(spots[:count])]
+
+
+def _check_multi_die(tc):
+    """Two dies side by side: each pairs with the pins along its own side."""
+    doc = new_document("ProposeTwoDies")
+    try:
+        _die_at(doc, "Left_Block", V(-4.0, -1.0, 0.0), (2.0, 2.0, 0.2))
+        _die_at(doc, "Right_Block", V(2.0, -1.0, 0.0), (2.0, 2.0, 0.2))
+        _pads_on(doc, "LeftPad_", (-4.0, -1.0), (2.0, 2.0), 0.2)
+        _pads_on(doc, "RightPad_", (2.0, -1.0), (2.0, 2.0), 0.2)
+        # Four bond fingers round each die, as a two-die module would have.
+        for index, (cx, prefix) in enumerate(((-3.0, "left"), (3.0, "right"))):
+            for slot in range(4):
+                angle = math.pi / 4 + slot * math.pi / 2
+                point = V(cx + 3.0 * math.cos(angle), 3.0 * math.sin(angle), 0.2)
+                _contact_point(doc, f"contact_point_housing_{index * 4 + slot + 1:03d}",
+                               point)
+        doc.recompute()
+
+        rows, report = netlist.propose_connections(doc)
+        tc.check("every pad of both dies is bonded", len(rows) == 8, str(report))
+        tc.check("the report is per die, naming each and its pad count",
+                  sorted((d["die"], d["pads"]) for d in report["per_die"])
+                  == [("Left_Block", 4), ("Right_Block", 4)],
+                  str(report["per_die"]))
+        tc.check("every connection records which die it belongs to",
+                  all(row["die"] in ("Left_Block", "Right_Block") for row in rows),
+                  str(rows))
+
+        # Each die's pins must be the ones on its own side, which is what
+        # pairing per die about its own centre is for.
+        for row in rows:
+            pad = doc.getObject(row["from"])
+            pin = doc.getObject(row["to"])
+            own_side = (pad.ContactPoint.x < 0) == (pin.ContactPoint.x < 0)
+            if not own_side:
+                tc.check("each die bonds to the pins on its own side", False,
+                          f"{row['from']} -> {row['to']}")
+                break
+        else:
+            tc.check("each die bonds to the pins on its own side", True)
+        tc.check("no wires cross", report["crossings"] == 0, str(report))
+    finally:
+        FreeCAD.closeDocument(doc.Name)
+
+
+def _check_stacked_dies(tc):
+    """Two tiers: pads of the upper die must not be counted on the lower one."""
+    doc = new_document("ProposeStack")
+    try:
+        _die_at(doc, "Base_Block", V(-1.5, -1.5, 0.0), (3.0, 3.0, 0.2))
+        _die_at(doc, "Upper_Block", V(-0.5, -0.5, 0.225), (1.0, 1.0, 0.15))
+        _pads_on(doc, "BasePad_", (-1.5, -1.5), (3.0, 3.0), 0.2)
+        _pads_on(doc, "UpperPad_", (-0.5, -0.5), (1.0, 1.0), 0.375)
+        _ring(doc, "contact_point_housing_", 8, 6.0, 0.2)
+        doc.recompute()
+
+        rows, report = netlist.propose_connections(doc)
+        by_die = {entry["die"]: entry for entry in report["per_die"]}
+        tc.check("each tier is reported separately, with its own pads",
+                  by_die.get("Base_Block", {}).get("pads") == 4
+                  and by_die.get("Upper_Block", {}).get("pads") == 4,
+                  str(report["per_die"]))
+        tc.check("the tiers are numbered",
+                  by_die["Base_Block"]["tier"] == 0
+                  and by_die["Upper_Block"]["tier"] == 1, str(report["per_die"]))
+        tc.check("all eight pads are bonded, four from each tier",
+                  len(rows) == 8 and len([r for r in rows if r["die"] == "Upper_Block"]) == 4,
+                  str(rows))
+
+        tmp = tempfile.mkdtemp(prefix="propose_stack_")
+        try:
+            path = netlist.write_netlist_csv(rows, os.path.join(tmp, "stack.csv"))
+            with open(path, encoding="utf-8") as fh:
+                header = fh.readline().strip()
+            tc.check("the netlist carries a die column when the dies differ",
+                      header == "net,from,to,die", header)
+            read_back = netlist.read_netlist_csv(path)
+            tc.check("...and reading it back still gives the same connections",
+                      [(r["from"], r["to"]) for r in read_back]
+                      == [(r["from"], r["to"]) for r in rows], str(read_back))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    finally:
+        FreeCAD.closeDocument(doc.Name)
 
 
 def _angle_of(cp):
@@ -117,8 +222,9 @@ def _check_proposal(tc):
         tc.check("a labelled pad names its net and is referred to by its label",
                   any(row["net"] == "VDD" and row["from"] == "VDD" for row in rows),
                   str(rows))
-        tc.check("unlabelled pads get placeholder nets and are referred to by name",
-                  all(row["net"].startswith("Net_")
+        tc.check("unlabelled pads get a placeholder net named after their die, "
+                  "and are referred to by object name",
+                  all(row["net"].startswith("Chip_Block_")
                       and row["from"].startswith("ContactPoint_")
                       for row in rows if row["net"] != "VDD"), str(rows))
     finally:

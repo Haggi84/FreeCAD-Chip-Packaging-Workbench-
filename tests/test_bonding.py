@@ -240,6 +240,8 @@ def _check_netlist_and_diagram(tc, tmp):
     try:
         die = doc.addObject("Part::Feature", "Chip_Block")
         die.Shape = Part.makeBox(1.0, 1.0, 0.2, V(0, 0, 0))
+        die.addProperty("App::PropertyBool", "IsChipProxy", "ChipProxy", "")
+        die.IsChipProxy = True
         _contact_point(doc, "ContactPoint_001", V(0.2, 0.8, 0.2), "VDD", "Chip_Block")
         _contact_point(doc, "ContactPoint_002", V(0.2, 0.2, 0.2), "GND", "Chip_Block")
         _contact_point(doc, "ContactPoint_003", V(0.5, 0.5, 0.2), "IO", "Chip_Block")
@@ -277,9 +279,19 @@ def _check_netlist_and_diagram(tc, tmp):
                   len(again["placed"]) == 0 and len(again["updated"]) == 2 and count == 2,
                   f"{again} / {count} wires")
 
-        svg_path, csv_path = bonding_diagram.write_bonding_diagram(doc, tmp, "pkg")
+        svg_path, csv_path, elevation = bonding_diagram.write_bonding_diagram(
+            doc, tmp, "pkg")
         tc.check("diagram: writes the SVG and the wire table",
                   os.path.isfile(svg_path) and os.path.isfile(csv_path))
+        tc.check("diagram: a document with a die also gets a stack elevation",
+                  elevation is not None and os.path.isfile(elevation), str(elevation))
+        with open(elevation, encoding="utf-8") as fh:
+            elevation_svg = fh.read()
+        tc.check("elevation: says how far its vertical scale is exaggerated, "
+                  "since the two axes differ",
+                  "scale" in elevation_svg and "elevation" in elevation_svg)
+        tc.check("elevation: draws the die",
+                  'class="die"' in elevation_svg)
         root = ET.parse(svg_path).getroot()
         lines = [e for e in root.iter("{http://www.w3.org/2000/svg}line")
                  if e.get("class") == "wire"]

@@ -186,7 +186,7 @@ def export_bonding_diagram(parent, doc):
     if not out_dir:
         return False
     try:
-        svg_path, csv_path = bonding_diagram.write_bonding_diagram(doc, out_dir)
+        svg_path, csv_path, elevation = bonding_diagram.write_bonding_diagram(doc, out_dir)
     except ValueError as exc:
         QtWidgets.QMessageBox.warning(parent, title, str(exc))
         return False
@@ -194,8 +194,9 @@ def export_bonding_diagram(parent, doc):
         FreeCAD.Console.PrintError(f"[BondingDiagram] {exc}\n{traceback.format_exc()}")
         QtWidgets.QMessageBox.critical(parent, title, f"Export failed: {exc}")
         return False
+    written = [svg_path, csv_path] + ([elevation] if elevation else [])
     QtWidgets.QMessageBox.information(
-        parent, title, f"Written:\n{svg_path}\n{csv_path}")
+        parent, title, "Written:\n" + "\n".join(written))
     return True
 
 

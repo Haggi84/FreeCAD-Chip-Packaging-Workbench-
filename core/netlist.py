@@ -86,9 +86,15 @@ def _pin_number(doc, cp):
 def find_contact_point(doc, key):
     """(contact point, None) or (None, reason)."""
     wanted = str(key).strip().lower()
+    die_part, _, pad_part = wanted.partition(".")
     cps = _contact_points(doc)
     criteria = (
         ("name", lambda cp: cp.Name.lower() == wanted),
+        # "U2.VDD" — the die is part of the name when several dies use it
+        ("die and pad name",
+         lambda cp: bool(pad_part)
+         and (getattr(cp, "DieName", "") or "").lower() == die_part
+         and (getattr(cp, "PadName", "") or "").lower() == pad_part),
         ("pad name", lambda cp: (getattr(cp, "PadName", "") or "").lower() == wanted),
         ("label", lambda cp: (cp.Label or "").lower() == wanted),
         ("pin number", lambda cp: _pin_number(doc, cp) == wanted),
@@ -183,25 +189,34 @@ def die_outlines(doc):
     return outlines
 
 
-def classify_contact_points(doc):
+def pads_by_die(doc):
     """
-    (die_side, package_side) contact points, split by whether each lies over a
-    die — geometry, not naming, so a contact point placed by hand on a die is
-    die-side too.
+    [(die, [pads])] for every die that has pads, bottom tier first, plus the
+    package-side contact points: ([(die, pads)], package).
 
-    With no die in the document nothing is die-side and no proposal is
-    possible; the caller reports that rather than pairing arbitrarily.
+    Which side a contact point is on is decided by geometry — it sits on a
+    die's top face — so a pad placed by hand counts too, and the tiers of a
+    stack are kept apart rather than lumped together (see core.dies.on_die).
     """
-    outlines = die_outlines(doc)
-    die, package = [], []
-    for cp in _contact_points(doc):
-        point = _position(cp)
-        if point is None:
-            continue
-        over_die = any(x0 <= point.x <= x1 and y0 <= point.y <= y1
-                       for x0, y0, x1, y1 in outlines)
-        (die if over_die else package).append(cp)
-    return die, package
+    from core import dies as die_model
+
+    dies = die_model.collect(doc)
+    grouped, claimed = [], set()
+    for die in sorted(dies, key=lambda d: (d.tier, d.name or d.block.Name)):
+        pads = [pad for pad in die_model.pads_of(doc, die) if pad.Name not in claimed]
+        claimed.update(pad.Name for pad in pads)
+        if pads:
+            grouped.append((die, pads))
+    package = [cp for cp in _contact_points(doc)
+               if cp.Name not in claimed and _position(cp) is not None]
+    return grouped, package
+
+
+def classify_contact_points(doc):
+    """(die_side, package_side) contact points — the flat view of
+    pads_by_die(), kept for callers that do not care which die is which."""
+    grouped, package = pads_by_die(doc)
+    return [pad for _die, pads in grouped for pad in pads], package
 
 
 def _centre(points):
@@ -209,11 +224,21 @@ def _centre(points):
                           sum(p.y for p in points) / len(points), 0.0)
 
 
-def _by_angle(cps):
-    """Contact points in ring order, anticlockwise about their own centre."""
-    centre = _centre([_position(cp) for cp in cps])
+def _by_angle(cps, centre=None):
+    """Contact points in ring order, anticlockwise about *centre* — their own
+    centre when none is given. Pads and the pins they face have to be ordered
+    about the SAME point, which for a stack is the die's centre, not the
+    module's."""
+    if centre is None:
+        centre = _centre([_position(cp) for cp in cps])
     return sorted(cps, key=lambda cp: math.atan2(_position(cp).y - centre.y,
                                                  _position(cp).x - centre.x))
+
+
+def _distance_to_outline(point, outline):
+    x0, y0, x1, y1 = outline
+    return math.hypot(max(x0 - point.x, 0.0, point.x - x1),
+                      max(y0 - point.y, 0.0, point.y - y1))
 
 
 def _plan_distance(a, b):
@@ -262,12 +287,22 @@ def _pad_name_counts(cps):
     return counts
 
 
-def _reference(cp, pad_name_counts):
-    """What to write for a contact point: its pad name when that is
-    unambiguous in this document, otherwise its object name."""
+def _reference(cp, pad_name_counts, die_name="", die_counts=None):
+    """
+    What to write for a contact point: its pad name when that is unambiguous
+    in the document, "Die.Pad" when the name repeats across dies but not
+    within this one, and the object name when even that would be ambiguous.
+
+    Several dies of the same type in one module all have a pad called VDD,
+    which is exactly why the die has to be part of the name.
+    """
     pad_name = (getattr(cp, "PadName", "") or "").strip()
-    if pad_name and pad_name_counts.get(pad_name.lower(), 0) == 1:
+    if not pad_name:
+        return cp.Name
+    if pad_name_counts.get(pad_name.lower(), 0) == 1:
         return pad_name
+    if die_name and (die_counts or {}).get((die_name, pad_name.lower()), 0) == 1:
+        return f"{die_name}.{pad_name}"
     return cp.Name
 
 
@@ -290,63 +325,147 @@ def count_crossings(pairs):
                if _crosses(a0, a1, b0, b1))
 
 
+def _die_pad_counts(grouped):
+    counts = {}
+    for die, pads in grouped:
+        for pad in pads:
+            pad_name = (getattr(pad, "PadName", "") or "").strip().lower()
+            if pad_name:
+                key = (die.name or die.block.Name, pad_name)
+                counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _allocate_pins(grouped, package):
+    """
+    Share the package pins out between the dies, each pin going to the die it
+    is nearest to among those still short of their share.
+
+    Nearest-die alone does not work for a stack: the tiers share a footprint,
+    the base is the bigger and nearer of them, and it takes every pin — the
+    die above ends up with none. So each die is first given a share in
+    proportion to how many pads it has, capped at that number, since a die
+    cannot use more pins than it has pads.
+    """
+    names = [(die.name or die.block.Name) for die, _pads in grouped]
+    pad_counts = [len(pads) for _die, pads in grouped]
+    total_pads = sum(pad_counts) or 1
+
+    share = {}
+    for name, pads in zip(names, pad_counts):
+        share[name] = min(pads, int(round(len(package) * pads / total_pads)))
+    # Hand out whatever rounding left over to the dies still short of pins.
+    spare = len(package) - sum(share.values())
+    for name, pads in sorted(zip(names, pad_counts), key=lambda e: -e[1]):
+        while spare > 0 and share[name] < pads:
+            share[name] += 1
+            spare -= 1
+
+    allocation = {name: [] for name in names}
+    order = sorted(package, key=lambda pin: min(
+        _distance_to_outline(_position(pin), die.outline) for die, _pads in grouped))
+    for pin in order:
+        point = _position(pin)
+        ranked = sorted(grouped,
+                        key=lambda entry: _distance_to_outline(point, entry[0].outline))
+        for die, _pads in ranked:
+            name = die.name or die.block.Name
+            if len(allocation[name]) < share[name]:
+                allocation[name].append(pin)
+                break
+    return allocation
+
+
 def propose_connections(doc):
     """
-    A first pinout for a die and a package that have none: every die pad
-    bonded to the pin facing it, in ring order.
+    A first pinout for dies and a package that have none: every die pad bonded
+    to the pin facing it, in ring order, one die at a time.
 
-    Returns (rows, report). The rows are as read_netlist_csv returns them, so
-    they can be written out and imported unchanged. The report carries the
-    counts, anything left unpaired, and how many wires cross — 0 for two rings
-    of the same size, which is the point of pairing by angle rather than by
-    nearest neighbour.
+    Returns (rows, report). The rows are as read_netlist_csv returns them plus
+    a "die" column, so they can be written out and imported unchanged. The
+    report carries the counts, anything left unpaired, how many wires cross —
+    0 for a ring paired by angle — and the same per die.
+
+    Each die is paired separately about its OWN centre. Treating every pad in
+    a module as one ring, as this used to, orders the pads of two side-by-side
+    dies around a point between them, which is meaningless for both.
     """
-    die, package = classify_contact_points(doc)
-    report = {"die": len(die), "package": len(package), "crossings": 0,
-              "unpaired_die": [], "unpaired_package": [], "problem": None}
-    if not die or not package:
+    grouped, package = pads_by_die(doc)
+    pad_total = sum(len(pads) for _die, pads in grouped)
+    report = {"die": pad_total, "package": len(package), "crossings": 0,
+              "unpaired_die": [], "unpaired_package": [], "per_die": [],
+              "problem": None}
+    if not grouped or not package:
         report["problem"] = (
             "A proposal needs contact points on a die and on a package: found "
-            f"{len(die)} over a die and {len(package)} elsewhere. Import the "
+            f"{pad_total} on dies and {len(package)} elsewhere. Import the "
             "chip and place the package bond fingers first.")
         return [], report
 
-    die_ring, package_ring = _by_angle(die), _by_angle(package)
-    if len(die_ring) <= len(package_ring):
-        pairs = _best_alignment(die_ring, package_ring)
-    else:
-        pairs = _greedy_pairs(die_ring, package_ring)
+    allocation = _allocate_pins(grouped, package)
+    all_pads = [pad for _die, pads in grouped for pad in pads]
+    counts = _pad_name_counts(all_pads + package)
+    die_counts = _die_pad_counts(grouped)
 
-    paired_die = {a.Name for a, _b in pairs}
-    paired_package = {b.Name for _a, b in pairs}
-    report["unpaired_die"] = [cp.Name for cp in die if cp.Name not in paired_die]
+    rows, every_pair = [], []
+    for die, pads in grouped:
+        die_name = die.name or die.block.Name
+        pins = allocation[die_name]
+        centre = _centre([_position(pad) for pad in pads])
+        ring_pads = _by_angle(pads, centre)
+        ring_pins = _by_angle(pins, centre) if pins else []
+        if not ring_pins:
+            pairs = []
+        elif len(ring_pads) <= len(ring_pins):
+            pairs = _best_alignment(ring_pads, ring_pins)
+        else:
+            pairs = _greedy_pairs(ring_pads, ring_pins)
+
+        paired = {a.Name for a, _b in pairs}
+        report["unpaired_die"] += [pad.Name for pad in pads if pad.Name not in paired]
+        report["per_die"].append({
+            "die": die_name,
+            "tier": die.tier,
+            "pads": len(pads),
+            "pins": len(pins),
+            "bonded": len(pairs),
+            "crossings": count_crossings(pairs),
+        })
+        every_pair += pairs
+        for a, b in pairs:
+            number = len(rows) + 1
+            pad_name = (getattr(a, "PadName", "") or "").strip()
+            rows.append({
+                "net": pad_name or f"{die_name}_{number:03d}",
+                "from": _reference(a, counts, die_name, die_counts),
+                "to": _reference(b, counts),
+                "die": die_name,
+                "row": number,
+                "distance_mm": _plan_distance(a, b),
+            })
+
+    paired_package = {b.Name for _a, b in every_pair}
     report["unpaired_package"] = [cp.Name for cp in package
                                   if cp.Name not in paired_package]
-    report["crossings"] = count_crossings(pairs)
-
-    counts = _pad_name_counts(die + package)
-    rows = []
-    for number, (a, b) in enumerate(pairs, start=1):
-        pad_name = (getattr(a, "PadName", "") or "").strip()
-        rows.append({
-            "net": pad_name or f"Net_{number:03d}",
-            "from": _reference(a, counts),
-            "to": _reference(b, counts),
-            "row": number,
-            "distance_mm": _plan_distance(a, b),
-        })
+    report["crossings"] = count_crossings(every_pair)
     return rows, report
 
 
 def write_netlist_csv(rows, path, comments=()):
-    """Write *rows* as a netlist this module can read back."""
+    """Write *rows* as a netlist this module can read back. A "die" column is
+    written when the rows carry one; reading ignores it, so a file edited by
+    hand keeps working either way."""
+    with_die = any(row.get("die") for row in rows)
     with open(path, "w", encoding="utf-8", newline="") as fh:
         for line in comments:
             fh.write(f"# {line}\n")
         writer = csv.writer(fh)
-        writer.writerow(["net", "from", "to"])
+        writer.writerow(["net", "from", "to"] + (["die"] if with_die else []))
         for row in rows:
-            writer.writerow([row["net"], row["from"], row["to"]])
+            line = [row["net"], row["from"], row["to"]]
+            if with_die:
+                line.append(row.get("die", ""))
+            writer.writerow(line)
     return path
 
 
