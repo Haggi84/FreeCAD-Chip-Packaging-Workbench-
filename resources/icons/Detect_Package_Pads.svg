@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- A package body with a ring of bond fingers, three of them marked. -->
+  <rect x="10" y="10" width="44" height="44" rx="3" fill="#e8e8e8" stroke="#555555" stroke-width="2"/>
+  <rect x="20" y="20" width="24" height="24" fill="#c9d6e6" stroke="#2c4460" stroke-width="1.5"/>
+  <path d="M14,24 L18,24 M14,32 L18,32 M14,40 L18,40 M46,24 L50,24 M46,32 L50,32 M46,40 L50,40"
+        stroke="#cc8833" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="16" cy="24" r="3" fill="#e6c229" stroke="#7a5c10" stroke-width="1.5"/>
+  <circle cx="16" cy="32" r="3" fill="#e6c229" stroke="#7a5c10" stroke-width="1.5"/>
+  <circle cx="48" cy="32" r="3" fill="#e6c229" stroke="#7a5c10" stroke-width="1.5"/>
+</svg>
