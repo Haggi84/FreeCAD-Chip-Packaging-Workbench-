@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Pads joined by rubber lines; one pair already routed in copper. -->
+  <circle cx="12" cy="16" r="4" fill="#cc8833" stroke="#7a4d18" stroke-width="1.5"/>
+  <circle cx="52" cy="16" r="4" fill="#cc8833" stroke="#7a4d18" stroke-width="1.5"/>
+  <circle cx="12" cy="48" r="4" fill="#cc8833" stroke="#7a4d18" stroke-width="1.5"/>
+  <circle cx="52" cy="48" r="4" fill="#cc8833" stroke="#7a4d18" stroke-width="1.5"/>
+  <path d="M12,16 L52,48 M52,16 L12,48" stroke="#e6c229" stroke-width="2"
+        stroke-dasharray="4 3"/>
+  <path d="M12,16 L32,16 L52,16" fill="none" stroke="#cc8833" stroke-width="4"
+        stroke-linecap="round"/>
+</svg>

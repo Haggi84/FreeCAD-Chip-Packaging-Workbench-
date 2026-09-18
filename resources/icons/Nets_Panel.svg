@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- A list of nets, each with how much is left to route. -->
+  <rect x="6" y="8" width="52" height="48" rx="2" fill="#f6f6f6" stroke="#555555" stroke-width="2"/>
+  <path d="M12,18 L34,18 M12,30 L34,30 M12,42 L34,42" stroke="#777777" stroke-width="2.5"/>
+  <circle cx="46" cy="18" r="4" fill="#e6c229" stroke="#7a5c10" stroke-width="1.5"/>
+  <circle cx="46" cy="30" r="4" fill="#e6c229" stroke="#7a5c10" stroke-width="1.5"/>
+  <circle cx="46" cy="42" r="4" fill="#3f8f5a" stroke="#1d4a2e" stroke-width="1.5"/>
+</svg>

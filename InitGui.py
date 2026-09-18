@@ -69,6 +69,8 @@ try:
     from wirebond import PackagePadsCommand   # noqa: F401
     from gds import StackDieCommand   # noqa: F401
     from gds import DiesPanelCommand   # noqa: F401
+    from kicad import KicadImportCommand   # noqa: F401
+    from kicad import NetlistCommands   # noqa: F401
 
     FreeCAD.Console.PrintMessage("Commands loaded successfully\n")
 except Exception as e:
@@ -176,6 +178,7 @@ class MyWorkbench(FreeCADGui.Workbench):
         "Trace Routing Session":    "Confirm / Abort / End",
         "Batch Route Session":      "Route All / Cancel",
         "Contact Point Pattern":    "Confirm / Undo / Abort",
+        "Netlist":                  "Netlist",
         "Design Rule Check":        "DRC",
         "Thermal Simulation":       "Thermal",
         "Session and Help":         "Workbench",
@@ -198,6 +201,7 @@ class MyWorkbench(FreeCADGui.Workbench):
                 [
                     "PCBImportCommand",
                     "PCBPlacementCommand",
+                    "KicadImportCommand",
                     "GDSCommand",
                     "ImportChipProxyCommand",
                     "ChipTextureCommand",
@@ -316,6 +320,15 @@ class MyWorkbench(FreeCADGui.Workbench):
                     "ConfirmPatternCommand",
                     "UndoPatternCommand",
                     "AbortPatternCommand",
+                ],
+            )
+
+            # ── Netlist (KiCad nets and the ratsnest) ────────────────────
+            self.appendToolbar(
+                "Netlist",
+                [
+                    "ShowNetsPanelCommand",
+                    "UpdateRatsnestCommand",
                 ],
             )
 
