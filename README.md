@@ -5,7 +5,7 @@
 ![Python](https://img.shields.io/badge/Python-3.11-yellow?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-lightgrey?style=flat-square)
 ![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-informational?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-1328%20checks-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-1373%20checks-brightgreen?style=flat-square)
 
 **An open-source FreeCAD workbench for chip-packaging design, developed as part of the BMBF research project DI-PASSIONATE.**
 
@@ -30,6 +30,7 @@ bonds and bumps, and saving the result as a native FreeCAD document.
 - [PCB Integration](#pcb-integration)
 - [Wire Bonding](#wire-bonding)
 - [Contact Point System](#contact-point-system)
+- [KiCad boards and nets](#kicad-boards-and-nets)
 - [Multi-die and stacked assemblies](#multi-die-and-stacked-assemblies)
 - [Materials and Thermal Export](#materials-and-thermal-export)
 - [Supported File Formats](#supported-file-formats)
@@ -89,6 +90,7 @@ caption (Tech, Import, Render, Package, Bonding, Routing, Workbench).
 |---|---|
 | **PCB Import** | Load a PCB from STEP; copper pad faces are auto-detected as ContactPoints. |
 | **Move / Rotate PCB** | Reposition a loaded PCB together with all of its pad ContactPoints. |
+| **Import KiCad** | Import components with their 3-D models, pads and nets from a KiCad board — see [KiCad boards and nets](#kicad-boards-and-nets). |
 | **Load GDSII** | Import `.gds` with KLayout colours, optional technology map and stackup for true Z-heights. Supports level-of-detail import. |
 | **View in GDS3D** | Open the selected chip's full layout in the external GDS3D viewer, generating its process file from the active PDK. Requires GDS3D installed separately. |
 | **Texture Chip Proxy** | Paint a proxy with a picture of its own layout so several proxies stay tellable apart — optional, purely visual. |
@@ -134,6 +136,13 @@ caption (Tech, Import, Render, Package, Bonding, Routing, Workbench).
 | Tool | Description |
 |---|---|
 | **Design Rule Check** | Checks routed traces and bond wires for clearance, trace width, wire-to-wire spacing, crossings in plan view, wire length, bond angle, clearance over the die edge and headroom under the lid — see [Checking bond wires](#checking-bond-wires). Click a finding to select the offending objects. |
+
+### Netlist
+
+| Tool | Description |
+|---|---|
+| **Nets** | Dock panel listing every net with its pads, how many connections are still open and how many are routed. |
+| **Update Ratsnest** | Redraw the rubber lines. They are also redrawn automatically after every trace is routed. |
 
 ### Thermal Simulation
 
@@ -1144,6 +1153,74 @@ routing tools snap to.
 
 ---
 
+## KiCad boards and nets
+
+A module is not only dies: it carries the components a schematic defines, and those come from
+KiCad. **Import KiCad** reads a board and brings in its components, their pads and their nets,
+then shows what is still unconnected as rubber lines you route away.
+
+### What is read
+
+| File | What it gives |
+|---|---|
+| `.kicad_pcb` | Where each component sits, its pads, the net on each pad, and the path of its 3-D model |
+| `.net` *(optional)* | The schematic's own view: reference, value and footprint per component, and the nets by name |
+
+The netlist is optional but worth giving: the two are compared before anything is built, and a
+board saved before the last schematic change is reported — components the netlist does not
+know, and pads whose net differs between the two. Every rubber line drawn from such a board
+would be wrong, so this is said first rather than discovered later.
+
+**Coordinates are converted once, on the way in.** KiCad's board Y axis points down the page
+and FreeCAD's points up, so every position is mirrored and every rotation negated with it — a
+component turned clockwise on the KiCad canvas is turned clockwise in the 3-D view. Get that
+wrong and a board imports mirrored, which looks perfectly plausible and routes wrong.
+
+### Components
+
+Each component becomes a group holding its body and one contact point per pad:
+
+- The body is the footprint's own **STEP model** where that file can be found — KiCad's
+  `${KICAD*_3DMODEL_DIR}` variables are honoured, and a folder can be given in the dialog.
+  KiCad usually names the `.wrl`, which is a rendering mesh, so the `.step` beside it is what
+  gets imported.
+- Where no model is found, the component gets a **stand-in body** the size of its courtyard.
+  A component whose model is missing still has to be placeable, and its pads are what the
+  routing needs.
+- Pads are ordinary contact points, so every tool that snaps to one already works on them.
+  Each carries `PadName` (`R1.2`), `PadNumber`, `ComponentRef` and `NetName`.
+- Pads sit on the plane the components stand on — set in the dialog — because that is where
+  they meet the substrate and where a trace has to reach.
+
+Move components with **Move / Rotate Chip** as usual; their pads and the rubber lines follow.
+
+### The ratsnest
+
+A rubber line is not wiring: it is what is **left** to wire. For each net, the pads already
+joined in copper form one group, and the groups are then linked by the shortest hop between
+them — n groups need n − 1 lines, not a line between every pair.
+
+- Route a connection and **its line disappears**, automatically, as soon as the trace is baked.
+  The rest of the net keeps its lines.
+- Move a component and the lines follow, because they are rebuilt from where the pads are now
+  rather than stored.
+- Which pads a trace joins is not recorded by the routers, so a trace's two ends are matched
+  to the nearest pad within 0.25 mm — the same way the design rule check finds the pad a trace
+  lands on. Bond wires name their contact points outright.
+
+The **Nets** panel lists every net with its pads, what is still open and what is routed;
+clicking a row selects that net's pads and lines. **Update Ratsnest** redraws on demand, for
+after a hand edit.
+
+### A module, end to end
+
+1. **Import KiCad** — components, pads, nets, and the ratsnest.
+2. Place the components (and any dies) where they belong.
+3. Route with any of the routers; each connection takes its rubber line with it.
+4. **Design Rule Check**, then **Export Bonding Diagram** or the thermal export.
+
+---
+
 ## Multi-die and stacked assemblies
 
 A die used to be a block with some contact points near it. Nothing recorded which pads belong
@@ -1332,7 +1409,9 @@ changed.
 | `.lyp` | KLayout layer properties — colours and visibility |
 | `.map` | Technology map — layer names and EDI types (PIN, NET, VIA, FILL) |
 | `.xml` | KLayout stackup — per-layer Zmin/Zmax from the PDK |
-| `.step` / `.stp` | Package and PCB models |
+| `.step` / `.stp` | Package and PCB models, and KiCad's component models |
+| `.kicad_pcb` | KiCad board: components, pads, nets and model references |
+| `.net` | KiCad netlist export, used to check the board against the schematic |
 | `.FCStd` | Native FreeCAD document — the complete design |
 | `.geo` / `.csv` / `.json` | Written by the thermal export: Gmsh script, material table, manifest |
 
@@ -1383,6 +1462,9 @@ DI-PASSIONATE-FreeCAD/
 │   ├── netlist.py              Netlist CSV reading, matching and proposal
 │   ├── package_pads.py         Bond-finger planes of a package model
 │   ├── dies.py                 Die identity, tiers, stacking and die attach
+│   ├── kicad.py                Reading KiCad boards, netlists and model paths
+│   ├── components.py           KiCad components as bodies with their pads
+│   ├── ratsnest.py             The connections a net still needs
 │   ├── bonding_diagram.py      Bonding diagram SVG and wire table
 │   ├── TechConfig.py           Active PDK profile
 │   ├── theme.py                Chip skin palette and stylesheet generation
@@ -1398,6 +1480,7 @@ DI-PASSIONATE-FreeCAD/
 ├── wirebond/               Bonding session, bumps, contact point tools
 ├── routing/                Interactive and grid routers
 ├── drc/                    Design Rule Check panel
+├── kicad/                  KiCad import, Nets panel and ratsnest commands
 ├── thermal/                Assign Materials and thermal export commands
 ├── session/                Document state save and restore
 ├── ui/                     Dialogs and dock panels
@@ -1420,11 +1503,11 @@ tests need a live FreeCAD and OCCT:
 & "C:\Program Files\FreeCAD 1.1\bin\freecadcmd.exe" tests\run_all.py
 ```
 
-1328 checks across 37 modules covering geometry construction, GDS import, level-of-detail
+1373 checks across 38 modules covering geometry construction, GDS import, level-of-detail
 state, routing, obstacle handling, design rule checks, material assignment, thermal export,
-die identity and stacking, bond-finger detection, netlist proposal and import, the bonding
-diagram, agreement between chip proxy and full import, session state, theme generation and
-shortcut creation. A check that needs a file or tool the machine
+die identity and stacking, bond-finger detection, KiCad import and the ratsnest, netlist
+proposal and import, the bonding diagram, agreement between chip proxy and full import,
+session state, theme generation and shortcut creation. A check that needs a file or tool the machine
 does not have is reported as `[SKIP]` with the reason, never counted as a pass.
 
 What the headless suite cannot see — the workbench activating, every toolbar button backed by

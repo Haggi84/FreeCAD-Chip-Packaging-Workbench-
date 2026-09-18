@@ -69,6 +69,22 @@ Check rows and click <b>Place Bumps</b> to place at both endpoints.<br>
 <b>Created objects:</b> <code>WireBump_{shape}_{n}</code>
 </div>
 
+<h3>Import KiCad</h3>
+<div class="card">
+<b>Purpose:</b> Bring a KiCad board's components, pads and nets into the assembly.<br><br>
+<b>Input files:</b> <code>.kicad_pcb</code> (required), <code>.net</code> (optional — the board is checked against it and any disagreement reported before anything is built)<br><br>
+<b>Bodies:</b> the footprint's STEP model where it can be found (KiCad's <code>${KICAD*_3DMODEL_DIR}</code> is honoured, and a folder can be given), otherwise a stand-in body the size of the courtyard.<br>
+<b>Pads:</b> ordinary contact points carrying <code>PadName</code> (<code>R1.2</code>), <code>ComponentRef</code> and <code>NetName</code>, placed on the plane the components stand on.<br><br>
+KiCad's Y axis points down the page and FreeCAD's points up, so positions are mirrored and rotations negated on the way in.
+</div>
+
+<h3>Nets / Update Ratsnest</h3>
+<div class="card">
+<b>Purpose:</b> Show what is still to route.<br><br>
+A rubber line is drawn for every connection a net still needs — pads already joined count as one, so n groups need n−1 lines. Route a connection and its line disappears by itself; move a component and the lines follow.<br><br>
+The <b>Nets</b> panel lists each net with its pads, open connections and routed ones; clicking a row selects that net. <b>Update Ratsnest</b> redraws on demand.
+</div>
+
 <h3>Stack Die</h3>
 <div class="card">
 <b>Purpose:</b> Put one die on another, with the die attach between them.<br><br>
