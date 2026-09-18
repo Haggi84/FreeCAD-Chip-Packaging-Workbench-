@@ -480,6 +480,17 @@ def _clean_pts2d(pts2d):
     return cleaned
 
 
+def _update_ratsnest(doc):
+    """Redraw the rubber lines, if this document has any: the connection just
+    routed is one the ratsnest no longer has to show (see core.ratsnest)."""
+    try:
+        from core import ratsnest
+        ratsnest.refresh_if_present(doc)
+    except Exception as exc:
+        FreeCAD.Console.PrintWarning(
+            f"[InteractiveRoute] the ratsnest was not updated: {exc}\n")
+
+
 def bake_trace(obj_name, face_index, pts2d, width_mm, thickness_mm, clearance_mm):
     """
     Create the real Trace_NNN solid. Called from the deferred commit, so it
@@ -551,6 +562,7 @@ def bake_trace(obj_name, face_index, pts2d, width_mm, thickness_mm, clearance_mm
 
     _traces_group(doc).addObject(obj)
     doc.recompute()
+    _update_ratsnest(doc)
     FreeCAD.Console.PrintMessage(
         f"[InteractiveRoute] Created {obj.Name} with {len(waypoints)} waypoint(s).\n"
     )
@@ -700,6 +712,7 @@ def bake_body_trace(obj_name, segments, width_mm, thickness_mm, clearance_mm):
 
     _traces_group(doc).addObject(obj)
     doc.recompute()
+    _update_ratsnest(doc)
 
     # Say plainly whether the trace came out in one piece. A trace that is
     # broken at an edge looks almost right in the 3-D view — the gap is a

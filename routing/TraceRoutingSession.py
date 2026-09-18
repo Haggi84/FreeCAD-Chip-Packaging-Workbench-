@@ -563,6 +563,13 @@ class TraceRoutingSession:
             obj.ViewObject.LineColor  = _TRACE_COLOR
 
         _add_to_traces_group(doc, obj)
+        # A rubber line for this connection has just become unnecessary.
+        try:
+            from core import ratsnest
+            ratsnest.refresh_if_present(doc)
+        except Exception as exc:
+            FreeCAD.Console.PrintWarning(
+                f"[TraceRouting] the ratsnest was not updated: {exc}\n")
         return obj
 
     def _remove_objects(self, names) -> None:
