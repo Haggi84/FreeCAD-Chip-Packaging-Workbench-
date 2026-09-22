@@ -71,6 +71,7 @@ try:
     from gds import DiesPanelCommand   # noqa: F401
     from kicad import KicadImportCommand   # noqa: F401
     from kicad import NetlistCommands   # noqa: F401
+    from ports import PortCommand   # noqa: F401
 
     FreeCAD.Console.PrintMessage("Commands loaded successfully\n")
 except Exception as e:
@@ -178,6 +179,7 @@ class MyWorkbench(FreeCADGui.Workbench):
         "Trace Routing Session":    "Confirm / Abort / End",
         "Batch Route Session":      "Route All / Cancel",
         "Contact Point Pattern":    "Confirm / Undo / Abort",
+        "Ports":                    "Ports",
         "Netlist":                  "Netlist",
         "Design Rule Check":        "DRC",
         "Thermal Simulation":       "Thermal",
@@ -320,6 +322,14 @@ class MyWorkbench(FreeCADGui.Workbench):
                     "ConfirmPatternCommand",
                     "UndoPatternCommand",
                     "AbortPatternCommand",
+                ],
+            )
+
+            # ── Ports (simulation ports drawn on the layout) ─────────────
+            self.appendToolbar(
+                "Ports",
+                [
+                    "DefinePortCommand",
                 ],
             )
 
