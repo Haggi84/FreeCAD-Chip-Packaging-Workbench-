@@ -69,6 +69,15 @@ Check rows and click <b>Place Bumps</b> to place at both endpoints.<br>
 <b>Created objects:</b> <code>WireBump_{shape}_{n}</code>
 </div>
 
+<h3>Define Port</h3>
+<div class="card">
+<b>Purpose:</b> Draw simulation ports on the layout — rectangles with no volume, standing on an edge.<br><br>
+<b>Three clicks:</b> click an edge where the port starts; click again along it to set the length; move the mouse up or down and click to set the height and the direction (+Z / −Z).<br>
+It then starts the next port and keeps going. <b>Esc</b> abandons the port being drawn, <b>Esc</b> again or <b>Finish</b> ends the session.<br><br>
+A height typed into the panel is used instead of the cursor's, so the third click only picks the direction. The panel also carries the reference impedance.<br><br>
+<b>Created objects:</b> <code>Port_{n}</code> in a <b>Ports</b> group inside <code>GDS_Die</code>. They are parametric — length, direction and height stay editable — they move with the chip, and they are ignored by the design rule check and the thermal export.
+</div>
+
 <h3>Import KiCad</h3>
 <div class="card">
 <b>Purpose:</b> Bring a KiCad board's components, pads and nets into the assembly.<br><br>

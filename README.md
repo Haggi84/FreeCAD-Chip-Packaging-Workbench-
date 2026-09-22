@@ -5,7 +5,7 @@
 ![Python](https://img.shields.io/badge/Python-3.11-yellow?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-lightgrey?style=flat-square)
 ![Semantic Versioning](https://img.shields.io/badge/semver-2.0.0-informational?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-1373%20checks-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-1402%20checks-brightgreen?style=flat-square)
 
 **An open-source FreeCAD workbench for chip-packaging design, developed as part of the BMBF research project DI-PASSIONATE.**
 
@@ -30,6 +30,7 @@ bonds and bumps, and saving the result as a native FreeCAD document.
 - [PCB Integration](#pcb-integration)
 - [Wire Bonding](#wire-bonding)
 - [Contact Point System](#contact-point-system)
+- [Ports](#ports)
 - [KiCad boards and nets](#kicad-boards-and-nets)
 - [Multi-die and stacked assemblies](#multi-die-and-stacked-assemblies)
 - [Materials and Thermal Export](#materials-and-thermal-export)
@@ -136,6 +137,12 @@ caption (Tech, Import, Render, Package, Bonding, Routing, Workbench).
 | Tool | Description |
 |---|---|
 | **Design Rule Check** | Checks routed traces and bond wires for clearance, trace width, wire-to-wire spacing, crossings in plan view, wire length, bond angle, clearance over the die edge and headroom under the lid — see [Checking bond wires](#checking-bond-wires). Click a finding to select the offending objects. |
+
+### Ports
+
+| Tool | Description |
+|---|---|
+| **Define Port** | Draw simulation ports on the layout's own edges, one after another — see [Ports](#ports). |
 
 ### Netlist
 
@@ -1153,6 +1160,60 @@ routing tools snap to.
 
 ---
 
+## Ports
+
+A port is where a simulation feeds the structure: a rectangle standing on an edge of the
+imported layout. It is a **surface, not a body** — give it thickness and it stops being a
+port — so it is built as a face with no volume at all.
+
+### Drawing one
+
+**Define Port** takes three clicks:
+
+1. **click an edge** of the geometry, where the port starts;
+2. **click again along that edge** — the two points give the port its length;
+3. **move the mouse up or down and click** — the height follows the cursor, and which way you
+   move decides whether the port reaches in +Z or −Z.
+
+Then it starts again on the next port, and keeps going until you finish. **Esc** abandons the
+port being drawn; **Esc** again, or **Finish**, ends the session.
+
+The height follows the cursor on the vertical plane through the two points, so what you see
+while moving is the face that will be built. Type a height into the panel instead and the
+third click only picks the direction. The panel also carries the reference impedance, which
+is recorded on the port for the solver and changes no geometry.
+
+The second click need not hit the edge exactly: it is put back onto the edge the port started
+on. A curved edge is spanned by the straight chord between the two points, which is what a
+port is meant to be, and an edge that climbs in Z still gives a flat port — two points and
+the Z direction always span a plane.
+
+### What a port remembers
+
+Ports are parametric. The face is rebuilt from its properties, so a port drawn roughly by hand
+is corrected by typing the number rather than being deleted and drawn again:
+
+| Property | Meaning |
+|---|---|
+| `StartPoint`, `EndPoint` | The two points on the edge; changing one changes the length |
+| `Direction` | `+Z` or `-Z` — flipping it turns the port over |
+| `Height` | How far it reaches; a magnitude, with the direction saying which way |
+| `Width` | The length along the edge, following from the two points (read only) |
+| `Impedance` | Reference impedance in ohms, for the solver |
+| `SourceObject`, `SourceSubElement` | The object and edge it was drawn on, for when someone asks later what it belongs to |
+
+### Where they belong
+
+Ports live in a **Ports** group inside the imported layout's own `GDS_Die` group, so they are
+part of the chip rather than loose in the document: they are saved with it, and **Move / Rotate
+Chip** carries them along with the geometry they were drawn on.
+
+They are not copper and not material: the design rule check ignores them — otherwise every
+port would be flagged against the traces it sits among — and the thermal export leaves them
+out, since a surface has no volume to give a material to.
+
+---
+
 ## KiCad boards and nets
 
 A module is not only dies: it carries the components a schematic defines, and those come from
@@ -1465,6 +1526,7 @@ DI-PASSIONATE-FreeCAD/
 │   ├── kicad.py                Reading KiCad boards, netlists and model paths
 │   ├── components.py           KiCad components as bodies with their pads
 │   ├── ratsnest.py             The connections a net still needs
+│   ├── ports.py                Simulation ports: parametric faces on an edge
 │   ├── bonding_diagram.py      Bonding diagram SVG and wire table
 │   ├── TechConfig.py           Active PDK profile
 │   ├── theme.py                Chip skin palette and stylesheet generation
@@ -1481,6 +1543,7 @@ DI-PASSIONATE-FreeCAD/
 ├── routing/                Interactive and grid routers
 ├── drc/                    Design Rule Check panel
 ├── kicad/                  KiCad import, Nets panel and ratsnest commands
+├── ports/                  Drawing simulation ports in the 3-D view
 ├── thermal/                Assign Materials and thermal export commands
 ├── session/                Document state save and restore
 ├── ui/                     Dialogs and dock panels
@@ -1503,11 +1566,11 @@ tests need a live FreeCAD and OCCT:
 & "C:\Program Files\FreeCAD 1.1\bin\freecadcmd.exe" tests\run_all.py
 ```
 
-1373 checks across 38 modules covering geometry construction, GDS import, level-of-detail
+1402 checks across 39 modules covering geometry construction, GDS import, level-of-detail
 state, routing, obstacle handling, design rule checks, material assignment, thermal export,
-die identity and stacking, bond-finger detection, KiCad import and the ratsnest, netlist
-proposal and import, the bonding diagram, agreement between chip proxy and full import,
-session state, theme generation and shortcut creation. A check that needs a file or tool the machine
+simulation ports, die identity and stacking, bond-finger detection, KiCad import and the
+ratsnest, netlist proposal and import, the bonding diagram, agreement between chip proxy and
+full import, session state, theme generation and shortcut creation. A check that needs a file or tool the machine
 does not have is reported as `[SKIP]` with the reason, never counted as a pass.
 
 What the headless suite cannot see — the workbench activating, every toolbar button backed by
