@@ -186,11 +186,11 @@ class _PortSession:
     def _on_move(self, position):
         if position is None:
             return
-        if self.state == _PICK_END and self.start is not None:
+        if self.state == _PICK_END and self.start_point is not None:
             point = self._point_on_edge(position)
             if point is not None:
-                self.end = point
-                self._preview_line(self.start, self.end)
+                self.end_point = point
+                self._preview_line(self.start_point, self.end_point)
                 self._report()
         elif self.state == _PICK_HEIGHT:
             self.height = self._height_at(position)
@@ -207,19 +207,19 @@ class _PortSession:
                     "[Port] That is not an edge — click an edge of the "
                     "geometry to start a port on it.\n")
                 return
-            self.owner, self.sub, self.edge, self.start = picked
+            self.owner, self.sub, self.edge, self.start_point = picked
             self.state = _PICK_END
         elif self.state == _PICK_END:
             point = self._point_on_edge(position)
             if point is None:
                 return
             from core import ports
-            if (point - self.start).Length < ports.MIN_EXTENT_MM:
+            if (point - self.start_point).Length < ports.MIN_EXTENT_MM:
                 FreeCAD.Console.PrintWarning(
                     "[Port] The two points are the same — click further along "
                     "the edge to give the port a length.\n")
                 return
-            self.end = point
+            self.end_point = point
             self.state = _PICK_HEIGHT
         elif self.state == _PICK_HEIGHT:
             self.height = self._height_at(position)
@@ -276,19 +276,19 @@ class _PortSession:
         except Exception:
             return self.height
         if fixed is not None:
-            below = cursor.z < self.start.z
+            below = cursor.z < self.start_point.z
             return -fixed if below else fixed
 
-        along = self.end - self.start
+        along = self.end_point - self.start_point
         normal = along.cross(FreeCAD.Vector(0, 0, 1))
         if normal.Length < 1e-9:                    # the edge itself is vertical
             normal = FreeCAD.Vector(0, 1, 0)
         normal.normalize()
         denominator = direction.dot(normal)
         if abs(denominator) < 1e-6:
-            return cursor.z - self.start.z
-        distance = (self.start - cursor).dot(normal) / denominator
-        return (cursor + direction * distance).z - self.start.z
+            return cursor.z - self.start_point.z
+        distance = (self.start_point - cursor).dot(normal) / denominator
+        return (cursor + direction * distance).z - self.start_point.z
 
     # ── preview and creation ───────────────────────────────────────────
 
@@ -313,7 +313,7 @@ class _PortSession:
     def _preview_face(self):
         from core import ports
         try:
-            face = ports.port_face(self.start, self.end, abs(self.height),
+            face = ports.port_face(self.start_point, self.end_point, abs(self.height),
                                    "+Z" if self.height >= 0 else "-Z")
         except ValueError:
             return
@@ -333,7 +333,7 @@ class _PortSession:
         impedance = self.panel.impedance.value() if self.panel else 50.0
         self.doc.openTransaction("Define Port")
         try:
-            ports.make_port(self.doc, self.start, self.end, abs(self.height),
+            ports.make_port(self.doc, self.start_point, self.end_point, abs(self.height),
                             "+Z" if self.height >= 0 else "-Z",
                             source=(self.owner.Name if self.owner else "", self.sub),
                             impedance=impedance)
@@ -356,15 +356,15 @@ class _PortSession:
         self.owner = None
         self.sub = ""
         self.edge = None
-        self.start = None
-        self.end = None
+        self.start_point = None
+        self.end_point = None
         self.height = 0.0
 
     def _report(self):
         if self.panel is None:
             return
-        length = ((self.end - self.start).Length
-                  if self.start is not None and self.end is not None else None)
+        length = ((self.end_point - self.start_point).Length
+                  if self.start_point is not None and self.end_point is not None else None)
         self.panel.update(self.state, length, self.height,
                           "+Z" if self.height >= 0 else "-Z")
 

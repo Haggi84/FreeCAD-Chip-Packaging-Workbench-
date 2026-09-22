@@ -33,6 +33,7 @@ def run():
     _check_object(tc)
     _check_parametric(tc)
     _check_belongs_to_the_chip(tc)
+    _check_the_session_is_callable(tc)
     return tc.results
 
 
@@ -212,3 +213,35 @@ def _check_belongs_to_the_chip(tc):
                   str(port.Shape.BoundBox.XMin))
     finally:
         FreeCAD.closeDocument(doc.Name)
+
+
+def _check_the_session_is_callable(tc):
+    """The drawing session lost its own start() once, and only in the GUI.
+
+    _reset() cleared the port's first point with ``self.start = None``, which
+    is also the name of the method that begins a session — so the command
+    died with "'NoneType' object is not callable" before anything was drawn.
+    Nothing headless called it, so nothing caught it. This does.
+    """
+    try:
+        command = load_module_from_file("port_command_test",
+                                        "ports/PortCommand.py")
+    except ImportError as exc:                 # no GUI libraries in this build
+        tc.skip("the port command imports without a GUI", str(exc))
+        return
+
+    session = command._PortSession()
+    for name in ("start", "finish", "cancel_current", "action"):
+        tc.check(f"a fresh session still has its {name}() method",
+                  callable(getattr(session, name, None)),
+                  repr(getattr(session, name, None)))
+
+    session._reset()
+    for name in ("start", "finish", "cancel_current", "action"):
+        tc.check(f"...and abandoning a port does not take {name}() with it",
+                  callable(getattr(session, name, None)),
+                  repr(getattr(session, name, None)))
+
+    tc.check("reset does clear the port being drawn",
+              session.start_point is None and session.end_point is None
+              and session.state == command._PICK_EDGE)

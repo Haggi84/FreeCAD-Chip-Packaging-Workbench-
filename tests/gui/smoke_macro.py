@@ -115,6 +115,22 @@ def _run():
         _check("toolbar category captions were injected",
                "Thermal Simulation" in labelled, labelled)
 
+        # Define Port is a click-by-click session, so the command only
+        # shows what it is worth in a running GUI: it opens a panel and
+        # listens to the 3-D view.
+        FreeCADGui.runCommand("DefinePortCommand")
+        QtWidgets.QApplication.processEvents()
+        from ports import PortCommand as _port_command
+        _check("Define Port starts a drawing session",
+               _port_command.session.active,
+               _port_command.session.state)
+        _check("...and it opens its panel",
+               _port_command.session.panel is not None)
+        _port_command.session.finish()
+        QtWidgets.QApplication.processEvents()
+        _check("...and Finish ends it",
+               not _port_command.session.active)
+
         report = _report_view_text(QtWidgets)
         bad = [line for line in report.splitlines()
                if any(marker in line for marker in (
