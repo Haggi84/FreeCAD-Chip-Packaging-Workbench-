@@ -66,6 +66,7 @@ import test_package_pads
 import test_netlist_propose
 import test_dies
 import test_kicad
+import test_ports
 
 MODULES = [
     test_wirebond_geometry,
@@ -106,6 +107,7 @@ MODULES = [
     test_netlist_propose,
     test_dies,
     test_kicad,
+    test_ports,
 ]
 
 RESULTS_LOG = os.path.join(_THIS_DIR, "results.log")

@@ -154,6 +154,10 @@ def _gds_objects(doc):
         or getattr(o, "IsChipProxy", False)
         or getattr(o, "IsContactPoint", False)
         or getattr(o, "IsDieBody", False)
+        # Ports are drawn on the layout's own edges, so they belong to the
+        # chip and have to travel with it — matched by property for the same
+        # reason as the die body above.
+        or getattr(o, "IsPort", False)
     ]
 
     # Pull in every frame object from the Substrate_Frames group.

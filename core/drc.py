@@ -219,6 +219,8 @@ def _copper_candidates(doc, exclude_names, max_footprint_area_mm2=None):
             continue
         if getattr(o, "IsContactPoint", False):
             continue
+        if getattr(o, "IsPort", False):
+            continue        # a port is a surface for a solver, not copper
         if getattr(o, "IsGridPoint", False) or getattr(o, "IsRoutingGridPoint", False):
             continue
         if not _has_geometry(o):
