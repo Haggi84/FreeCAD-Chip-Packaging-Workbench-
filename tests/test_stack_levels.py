@@ -64,6 +64,9 @@ def run():
     _check_sky130_datatypes(tc)
     _check_shift(tc, stackup)
     _check_build(tc, stackup)
+    _check_overlapping_levels(tc, stackup)
+    _check_no_slab_is_inside_another(tc, stackup)
+    _check_lanes_leave_room_for_used_levels(tc, stackup)
     _check_not_a_part(tc, stackup)
     return tc.results
 
@@ -191,9 +194,16 @@ def _check_build(tc, stackup):
 
         tc.check("one slab per empty level", len(made) == len(empty),
                  f"{len(made)} vs {len(empty)}")
-        tc.check("each spans the die outline",
+        sharing = {name for level in empty
+                   for name in [level["name"]]
+                   if stack_levels.shares_height_with(
+                       level, stack_levels.levels(stackup))}
+        tc.check("each spans the die outline, except the ones that share a "
+                 "height and stand beside each other instead",
                  all(abs(o.Shape.BoundBox.XLength - 2.0) < 1e-9
-                     and abs(o.Shape.BoundBox.YLength - 3.0) < 1e-9 for o in made))
+                     and abs(o.Shape.BoundBox.YLength - 3.0) < 1e-9
+                     for o in made if o.StackLevelName not in sharing),
+                 str(sorted(sharing)))
 
         by_name = {o.StackLevelName: o for o in made}
         metal3 = by_name["Metal3"]
@@ -277,5 +287,127 @@ def _check_not_a_part(tc, stackup):
                  or {e["name"] for e in stack_levels.unused(stackup, keys)}
                  == {o.StackLevelName for o in made},
                  str(sorted(e["name"] for e in stack_levels.unused(stackup, keys))))
+    finally:
+        FreeCAD.closeDocument(doc.Name)
+
+def _check_overlapping_levels(tc, stackup):
+    """
+    A stackup is not a simple pile, and slabs built as though it were are
+    inside one another.
+
+    On SG13G2 the MIM capacitor sits within TopVia1's span: TopVia1 runs
+    5.5800 to 6.4303 µm, MIM occupies 5.6043 to 5.7540 and Vmim carries on to
+    6.4303. Across the whole die, all three would interpenetrate.
+    """
+    all_levels = stack_levels.levels(stackup)
+    by_name = {level["name"]: level for level in all_levels}
+
+    tc.check("a level that sits inside another's span overlaps it",
+             stack_levels.overlaps(by_name["TopVia1"], by_name["MIM"])
+             and stack_levels.overlaps(by_name["TopVia1"], by_name["Vmim"]))
+    tc.check("touching is not overlapping — MIM ends exactly where Vmim "
+             "begins, which is a shared face, not a shared volume",
+             not stack_levels.overlaps(by_name["MIM"], by_name["Vmim"]))
+    tc.check("...nor are two metals with a via between them",
+             not stack_levels.overlaps(by_name["Metal1"], by_name["Metal2"]))
+
+    lane_of = stack_levels.lanes(all_levels)
+    tc.check("a level that overlaps nothing keeps the die to itself",
+             all(lane_of[name] == (0, 1) for name in
+                 ("Activ", "Metal1", "Metal5", "TopMetal1", "TopMetal2")),
+             str({n: lane_of[n] for n in ("Activ", "Metal5", "TopMetal2")}))
+    tc.check("the three that share a height are split two ways, not three — "
+             "MIM and Vmim only touch, so they can share a lane",
+             lane_of["TopVia1"][1] == 2 and lane_of["MIM"][1] == 2
+             and lane_of["Vmim"][1] == 2,
+             str({n: lane_of[n] for n in ("TopVia1", "MIM", "Vmim")}))
+    tc.check("...with TopVia1 on one side and MIM and Vmim on the other, as "
+             "the PDK's own stackup drawing lays them out",
+             lane_of["TopVia1"][0] != lane_of["MIM"][0]
+             and lane_of["MIM"][0] == lane_of["Vmim"][0],
+             str({n: lane_of[n] for n in ("TopVia1", "MIM", "Vmim")}))
+
+    tc.check("each of them says which levels it shares its height with",
+             sorted(stack_levels.shares_height_with(by_name["MIM"], all_levels))
+             == ["TopVia1"],
+             str(stack_levels.shares_height_with(by_name["MIM"], all_levels)))
+
+
+def _check_no_slab_is_inside_another(tc, stackup):
+    """The point of the lanes, measured on the solids themselves."""
+    doc = new_document("StackLevelsOverlap")
+    try:
+        empty = stack_levels.unused(stackup, {(134, 0), (126, 0)})
+        made = stack_levels.build(doc, (0.0, 0.0, 2.0, 3.0), empty, stackup)
+        doc.recompute()
+
+        clashes = []
+        for i, a in enumerate(made):
+            for b in made[i + 1:]:
+                try:
+                    shared = a.Shape.common(b.Shape).Volume
+                except Exception:
+                    shared = 0.0
+                if shared > 1e-12:
+                    clashes.append(f"{a.StackLevelName}/{b.StackLevelName}"
+                                   f"={shared:.6g}")
+        tc.check("no two slabs occupy the same volume, although three of the "
+                 "levels share heights",
+                 not clashes, ", ".join(clashes))
+
+        by_name = {o.StackLevelName: o for o in made}
+        tc.check("the levels that share a height stand side by side across "
+                 "the die",
+                 abs(by_name["MIM"].Shape.BoundBox.XLength
+                     - by_name["TopVia1"].Shape.BoundBox.XLength) < 1e-9
+                 and by_name["MIM"].Shape.BoundBox.XMin
+                 > by_name["TopVia1"].Shape.BoundBox.XMax,
+                 f"TopVia1 {by_name['TopVia1'].Shape.BoundBox.XMin:.4f}.."
+                 f"{by_name['TopVia1'].Shape.BoundBox.XMax:.4f}  "
+                 f"MIM {by_name['MIM'].Shape.BoundBox.XMin:.4f}.."
+                 f"{by_name['MIM'].Shape.BoundBox.XMax:.4f}")
+        tc.check("...while a level with the height to itself still spans the "
+                 "whole die",
+                 abs(by_name["Metal3"].Shape.BoundBox.XLength - 2.0) < 1e-9
+                 and abs(by_name["Metal3"].Shape.BoundBox.YLength - 3.0) < 1e-9,
+                 str(by_name["Metal3"].Shape.BoundBox))
+        tc.check("every slab keeps its own height, whichever lane it is in",
+                 abs(by_name["MIM"].Shape.BoundBox.ZMin - 5.6043 / 1000.0) < 1e-9
+                 and abs(by_name["TopVia1"].Shape.BoundBox.ZMin - 5.58 / 1000.0) < 1e-9,
+                 f"{by_name['MIM'].Shape.BoundBox.ZMin} / "
+                 f"{by_name['TopVia1'].Shape.BoundBox.ZMin}")
+        tc.check("...and says on the part which level it stands beside",
+                 by_name["MIM"].SharesHeightWith == "TopVia1",
+                 by_name["MIM"].SharesHeightWith)
+    finally:
+        FreeCAD.closeDocument(doc.Name)
+
+
+def _check_lanes_leave_room_for_used_levels(tc, stackup):
+    """
+    A level the layout does draw on still needs the room its own geometry
+    occupies, so the lanes are worked out over the whole stackup and not
+    only over the levels being built. Otherwise a layout that uses TopVia1
+    but not MIM would get a MIM slab straight through TopVia1's vias.
+    """
+    doc = new_document("StackLevelsUsedLane")
+    try:
+        keys = {(134, 0), (126, 0), (125, 0)}        # TopMetal2/1 and TopVia1
+        empty = stack_levels.unused(stackup, keys)
+        tc.check("TopVia1 counts as drawn and is not rebuilt",
+                 "TopVia1" not in {e["name"] for e in empty})
+
+        made = stack_levels.build(doc, (0.0, 0.0, 2.0, 3.0), empty, stackup)
+        by_name = {o.StackLevelName: o for o in made}
+        lane_of = stack_levels.lanes(stack_levels.levels(stackup))
+        reserved = lane_of["TopVia1"]
+
+        x0, lane_width = stack_levels._lane_span(0.0, 2.0, *reserved)
+        mim = by_name["MIM"].Shape.BoundBox
+        tc.check("the MIM slab stands beside the lane TopVia1's own vias "
+                 "occupy, not through it",
+                 mim.XMin >= x0 + lane_width - 1e-9,
+                 f"MIM starts at {mim.XMin:.4f}, TopVia1's lane ends at "
+                 f"{x0 + lane_width:.4f}")
     finally:
         FreeCAD.closeDocument(doc.Name)

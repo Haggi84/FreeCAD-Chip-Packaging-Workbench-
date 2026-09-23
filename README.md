@@ -497,6 +497,29 @@ For SG13G2, a layout that draws on the top metals only gets:
 | MIM | 5.6043 → 5.7540 µm | 0.15 µm |
 | Vmim | 5.7540 → 6.4303 µm | 0.68 µm |
 
+**Levels that share a height stand side by side.** A stackup is not a simple pile: on SG13G2
+the MIM capacitor sits *inside* TopVia1's span — TopVia1 runs 5.5800 → 6.4303 µm, MIM occupies
+5.6043 → 5.7540 and Vmim carries on to 6.4303 — so three slabs drawn across the whole die
+would be inside one another. Levels that overlap are given neighbouring strips of the die
+instead, the way the PDK's own stackup drawing gives them their own column:
+
+| Level | Z range | Across the die |
+|---|---|---|
+| Metal5 | 5.0900 → 5.5800 µm | the whole die |
+| TopVia1 | 5.5800 → 6.4303 µm | left half |
+| MIM | 5.6043 → 5.7540 µm | right half |
+| Vmim | 5.7540 → 6.4303 µm | right half |
+| TopMetal1 | 6.4303 → 8.4303 µm | the whole die |
+
+Two here, not three: MIM ends exactly where Vmim begins, which is a shared face and not a
+shared volume, so they can share a strip. Every level keeps its own height whichever strip it
+is in, and each says which levels it stands beside under **StackLevel ▸ SharesHeightWith**.
+
+The strips are worked out over the whole stackup, not only over the levels being built — a
+level the layout *does* draw on still needs the room its own geometry occupies. On a layout
+that uses TopVia1 but not MIM, the MIM slab takes the strip beside TopVia1's vias rather than
+the one through them.
+
 They are **ghosted and labelled `[not in the layout]`**, the same way the LOD manager marks a
 layer that is in the file but not yet loaded — a die-sized box carrying a layer's name is
 otherwise indistinguishable from that layer imported and collapsed to its bounding box.

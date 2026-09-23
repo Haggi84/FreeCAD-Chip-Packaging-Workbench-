@@ -165,6 +165,103 @@ def stack_shift_mm(stack_mm, stackup_data):
     return 0.0
 
 
+# Two levels that share a height must not share the same ground, or their
+# slabs interpenetrate. Side by side they need a little air between them to
+# read as two things — a fraction of the lane, so it scales with the die.
+_LANE_GAP_FRACTION = 0.04
+
+
+def overlaps(a, b, tol_mm=1e-9):
+    """
+    Whether two levels occupy the same heights.
+
+    Touching is not overlapping: MIM ends at 5.7540 um and Vmim begins there,
+    which is a shared face, not a shared volume.
+    """
+    return (a["z0_mm"] < b["z0_mm"] + b["t_mm"] - tol_mm
+            and b["z0_mm"] < a["z0_mm"] + a["t_mm"] - tol_mm)
+
+
+def lanes(level_list, tol_mm=1e-9):
+    """
+    Where each level sits across the die: {name: (lane, lanes_in_its_group)}.
+
+    A stackup is not a simple pile. On SG13G2 the MIM capacitor sits inside
+    TopVia1's span — TopVia1 runs 5.5800 to 6.4303 um while MIM occupies
+    5.6043 to 5.7540 and Vmim carries on from there to 6.4303 — so slabs
+    built across the whole die for all three would be inside one another.
+    The PDK's own stackup drawing answers this by giving levels that share a
+    height their own column, and this is the same answer: levels that overlap
+    are given neighbouring strips of the die instead of the whole of it.
+
+    Levels that overlap nothing keep the die to themselves, so the ordinary
+    case is unchanged. Within a group the lanes come from a greedy pass in
+    height order, which for intervals uses no more lanes than the deepest
+    overlap — two here, not three, because MIM and Vmim only touch.
+    """
+    ordered = sorted(level_list, key=lambda e: (e["z0_mm"], e["name"]))
+    lane_of = {}
+    active = []                      # (z_top, lane) still overlapping
+    for level in ordered:
+        top = level["z0_mm"] + level["t_mm"]
+        active = [a for a in active if a[0] > level["z0_mm"] + tol_mm]
+        taken = {lane for _, lane in active}
+        lane = 0
+        while lane in taken:
+            lane += 1
+        lane_of[level["name"]] = lane
+        active.append((top, lane))
+
+    # How many lanes each level has to share with: everything it is
+    # transitively bound to by an overlap, so a level in a chain of three is
+    # split three ways and one on its own is not split at all.
+    groups = _overlap_groups(ordered, tol_mm)
+    out = {}
+    for group in groups:
+        count = max(lane_of[level["name"]] for level in group) + 1
+        for level in group:
+            out[level["name"]] = (lane_of[level["name"]], count)
+    return out
+
+
+def _overlap_groups(ordered, tol_mm=1e-9):
+    """The levels split into sets that are linked by overlapping."""
+    parent = {level["name"]: level["name"] for level in ordered}
+
+    def find(name):
+        while parent[name] != name:
+            parent[name] = parent[parent[name]]
+            name = parent[name]
+        return name
+
+    for i, a in enumerate(ordered):
+        for b in ordered[i + 1:]:
+            if b["z0_mm"] >= a["z0_mm"] + a["t_mm"] - tol_mm:
+                break                # sorted by height: nothing later touches it
+            if overlaps(a, b, tol_mm):
+                parent[find(b["name"])] = find(a["name"])
+
+    grouped = {}
+    for level in ordered:
+        grouped.setdefault(find(level["name"]), []).append(level)
+    return list(grouped.values())
+
+
+def shares_height_with(level, level_list):
+    """The names of the levels *level* overlaps — for saying so on the part."""
+    return [other["name"] for other in level_list
+            if other["name"] != level["name"] and overlaps(level, other)]
+
+
+def _lane_span(xmin, width, lane, count):
+    """(x0, width) of one lane across the die."""
+    if count <= 1:
+        return xmin, width
+    slice_width = width / float(count)
+    gap = slice_width * _LANE_GAP_FRACTION
+    return xmin + lane * slice_width + gap / 2.0, slice_width - gap
+
+
 # ── geometry ───────────────────────────────────────────────────────────────
 
 def _colour(stackup_data, material):
@@ -209,12 +306,21 @@ def shift_from_objects(objects, stackup_data, placement=None):
 
 
 def build(doc, footprint_mm, entries, stackup_data=None, group=None,
-          shift_mm=0.0, name_prefix="GDS", placement=None):
+          shift_mm=0.0, name_prefix="GDS", placement=None, lane_levels=None):
     """
-    Build one die-sized slab per level in *entries*. Returns the objects.
+    Build one slab per level in *entries*. Returns the objects.
 
-    Each slab spans the die outline in XY and the level's own Z range, so the
-    stack reads at a glance the way the PDK's own stackup drawing does.
+    Each slab covers the die outline in XY and the level's own Z range, so
+    the stack reads at a glance the way the PDK's own stackup drawing does —
+    except where levels share a height, which get neighbouring strips of the
+    die rather than the whole of it, so that no two slabs are inside one
+    another. See lanes().
+
+    Lanes are worked out over *lane_levels*, the whole stackup by default and
+    not merely the levels being built: a level the layout does draw on still
+    has to be left the room its own geometry occupies. So on a layout that
+    uses TopVia1 but not MIM, the MIM slab takes the strip beside TopVia1's
+    rather than the strip through it.
 
     *footprint_mm* is in the chip's own coordinates and *placement* is where
     that chip sits, so a stack completed after the die has been placed on a
@@ -222,6 +328,10 @@ def build(doc, footprint_mm, entries, stackup_data=None, group=None,
     """
     if not entries:
         return []
+
+    if lane_levels is None:
+        lane_levels = levels(stackup_data) if stackup_data else list(entries)
+    lane_of = lanes(lane_levels)
 
     xmin, ymin, xmax, ymax = (float(v) for v in footprint_mm)
     width, length = xmax - xmin, ymax - ymin
@@ -233,10 +343,12 @@ def build(doc, footprint_mm, entries, stackup_data=None, group=None,
     created = []
     for entry in entries:
         z0 = entry["z0_mm"] - shift_mm
+        lane, lane_count = lane_of.get(entry["name"], (0, 1))
+        x0, lane_width = _lane_span(xmin, width, lane, lane_count)
         obj = doc.addObject("Part::Feature",
                             f"{name_prefix}_Level_{entry['name']}")
-        obj.Shape = Part.makeBox(width, length, entry["t_mm"],
-                                 FreeCAD.Vector(xmin, ymin, z0))
+        obj.Shape = Part.makeBox(lane_width, length, entry["t_mm"],
+                                 FreeCAD.Vector(x0, ymin, z0))
         if placement is not None:
             obj.Placement = placement
         # Say in the label that this level is empty in THIS design. A
@@ -244,6 +356,7 @@ def build(doc, footprint_mm, entries, stackup_data=None, group=None,
         # indistinguishable from that layer imported and simplified to its
         # bounding box, which is exactly the confusion the LOD manager's
         # "[not loaded]" suffix exists to prevent.
+        sharing = shares_height_with(entry, lane_levels)
         obj.Label = (f"{entry['name']} ({entry['t_mm'] * 1000.0:.3f} µm)"
                      f"  [not in the layout]")
 
@@ -252,6 +365,9 @@ def build(doc, footprint_mm, entries, stackup_data=None, group=None,
                  "A level the PDK defines that this layout does not draw on — "
                  "its position and thickness, not geometry of the design"),
                 (LEVEL_NAME, entry["name"], "The stackup's name for this level"),
+                ("SharesHeightWith", ", ".join(sharing),
+                 "Levels that occupy the same heights as this one, and "
+                 "therefore stand beside it rather than across the whole die"),
                 ("StackMaterial", entry["material"],
                  "Material named for this level in the stackup XML")):
             kind = ("App::PropertyBool" if isinstance(value, bool)
