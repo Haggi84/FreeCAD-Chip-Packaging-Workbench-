@@ -25,6 +25,7 @@ bonds and bumps, and saving the result as a native FreeCAD document.
 - [Feature Reference](#feature-reference)
 - [Typical Workflow](#typical-workflow)
 - [GDSII Import](#gdsii-import)
+- [Technologies and contact areas](#technologies-and-contact-areas)
 - [Trace Routing](#trace-routing)
 - [Symmetric Placement](#symmetric-placement)
 - [PCB Integration](#pcb-integration)
@@ -83,7 +84,7 @@ caption (Tech, Import, Render, Package, Bonding, Routing, Workbench).
 
 | Tool | Description |
 |---|---|
-| **Technology Configuration** | Select the active PDK profile (`.lyp` / `.map` / stackup `.xml`) once and reuse it across all import dialogs. The status bar shows which files resolved. Two PDKs ship with the workbench — see [Bundled PDKs](#bundled-pdks). |
+| **Technology Configuration** | Keep named PDK profiles (`.lyp` / `.map` / stackup `.xml`). The active one is what each import starts from; the technology is then chosen per GDS and recorded on the chip — see [Technologies and contact areas](#technologies-and-contact-areas). The status bar shows which files resolved. Two PDKs ship with the workbench — see [Bundled PDKs](#bundled-pdks). |
 
 ### Import
 
@@ -96,6 +97,7 @@ caption (Tech, Import, Render, Package, Bonding, Routing, Workbench).
 | **View in GDS3D** | Open the selected chip's full layout in the external GDS3D viewer, generating its process file from the active PDK. Requires GDS3D installed separately. |
 | **Texture Chip Proxy** | Paint a proxy with a picture of its own layout so several proxies stay tellable apart — optional, purely visual. |
 | **Import Chip Proxy** | Create a lightweight stand-in for a die — footprint, real stack thickness and bond-pad positions only. Loads in well under a second on full-chip layouts that take minutes to tessellate in full. |
+| **Define Pads from GDS** | Pick the top contact areas out of the chip's own GDS — by the layer they are drawn on, or the cell the padframe places — and put them on the chip as bondable contact points. For layouts whose pads automatic detection does not find, SKY130 among them — see [Technologies and contact areas](#technologies-and-contact-areas). |
 
 ### Rendering
 
@@ -266,8 +268,9 @@ by then is usually an empty folder nobody looks at.
 
 | Step | Tool | Purpose |
 |---|---|---|
-| 1 | Technology Configuration | Select the PDK profile once |
+| 1 | Technology Configuration | Set up the PDK profiles; each import then confirms which one that chip is from |
 | 2 | Load GDSII *or* Import Chip Proxy | Bring in the die — full geometry, or a fast stand-in for layout work |
+| 2a | Define Pads from GDS *(if no pads were found)* | Point at the layer or cell the contact areas are on |
 | 3 | Leadframe Library *or* Leadframe Configurator | Import or generate the package |
 | 4 | Center Leadframe | Align package to die |
 | 5 | Move / Rotate Chip, or Stack Die for a second tier | Fine-tune die placement |
@@ -898,6 +901,85 @@ turns up in SG13G2 exports too. It is tried *last*, after `EdgeSeal` (39/4): an 
 carrying both keeps using its seal ring, while a SKY130 layout gets a real outline instead of
 the raw bounding box. Verified on `samples/PassionateSocRing.gds`, a genuine sky130 layout,
 which measures 2.1500 × 2.1500 mm from `235/4`.
+
+---
+
+## Technologies and contact areas
+
+Two things a package with more than one die runs into immediately: the dies are
+not all from the same process, and not every layout's pads can be found by rule.
+
+### One technology per chip
+
+**Technology Configuration** holds the PDK profiles. What changed is where the
+answer is kept: the active profile is now only the *starting point*, and every
+import — **Load GDSII** and **Import Chip Proxy** alike — confirms which
+technology that particular chip is made in.
+
+The chosen `.lyp` / `.map` / `.xml` are recorded on what the import creates: on
+the die block for a proxy, on the `GDS_Die` group for a full import. Everything
+inside inherits from there, so a pad marker answers for its die and a layer
+answers for its import, without each one being tagged.
+
+It is visible in the property editor under **ChipProxy ▸ TechProfile**, and in
+the **Dies** panel, which has a Technology column.
+
+What it buys:
+
+- **Assign Materials** classifies each die's layers with *that die's* stackup.
+  Before, a SKY130 die sitting next to an SG13G2 die was described by whichever
+  PDK happened to be configured last — its top metal simply came out with no
+  material, and a thermal model built from it was missing that metal.
+- A chip that was imported on a machine where the PDK is installed elsewhere
+  still says which files it was built from.
+- Correcting a chip imported with the wrong PDK is a matter of re-tagging it,
+  not re-importing.
+
+A document from an earlier release records nothing, and everything falls back to
+the session's configuration exactly as it did before.
+
+### When no pads are found
+
+Automatic pad detection recognises the conventions it knows: `bondpad_*` /
+`*IOPad*` library cells, then the Cadence/IHP datatype-2 PIN marker, then the
+top drawing layers. Every one of those is a house style, and a layout that
+shares none of them imports with **no pads at all** — with no error, because a
+file with no pad cells and a file with no pads look the same from the outside.
+
+SKY130 is exactly that case. It draws on datatype 20, so neither the datatype-2
+nor the datatype-0 rule sees anything, and its pad opening (`pad.drawing`,
+76/20) is typed `LEFOBS` rather than `PIN`, so the map-driven rule skips it too.
+The pads are plainly in the file; no rule in this workbench happens to describe
+them.
+
+**Define Pads from GDS** asks the layout instead of guessing. It shows the
+file's own structure — and both imports offer it straight away when they find
+nothing, so the chip is not left with nothing to bond to:
+
+| Branch | What picking it gives |
+|---|---|
+| **Layers** | One pad per opening drawn on that layer. Touching polygons are unioned first, so a pad drawn as three overlapping rectangles is one pad, not three. |
+| **Cells (structure)** | One pad per placement of that cell — array references included, so a bump field placed as one AREF gives a pad per bump. |
+
+Both can be picked at once; they usually describe the same pads, and pads landing
+on the same spot are counted once rather than doubled.
+
+The **Pad-sized** column counts the shapes that fall inside the size bounds at
+the bottom of the dialog (10 to 500 µm by default, which is wire-bond pad
+territory — move the lower bound down for micro-bumps). The layer with pad-sized
+shapes highest in the stack is ticked for you, since pads are the top of the
+stack by definition.
+
+Each pad takes its name from the layout's own text label where one sits on it,
+and the markers are ordinary contact points: wire bonding, the netlist, the
+ratsnest and the design rule check treat a pad picked by hand exactly like a
+detected one. Picking again adds to what is there — for a second pad ring — or
+replaces it, which is the tick box for a correction.
+
+Reading the structure of a full-chip layout is counted from the reference graph
+rather than by flattening its geometry: 1.3 million placed polygons are
+described in about a second, where flattening the same file one layer at a time
+took over three minutes and flattening it whole cost gigabytes.
 
 ---
 

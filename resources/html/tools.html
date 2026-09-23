@@ -78,6 +78,27 @@ A height typed into the panel is used instead of the cursor's, so the third clic
 <b>Created objects:</b> <code>Port_{n}</code> in a <b>Ports</b> group inside <code>GDS_Die</code>. They are parametric — length, direction and height stay editable — they move with the chip, and they are ignored by the design rule check and the thermal export.
 </div>
 
+<h3>Define Pads from GDS</h3>
+<div class="card">
+<b>Purpose:</b> Pick the chip's top contact areas out of its own GDS when automatic detection finds none.<br><br>
+<b>Why it is needed:</b> pad detection knows <code>bondpad_*</code>/<code>*IOPad*</code> cells, the datatype-2 PIN marker and the top drawing layers. A layout following none of them imports with no pads and no error — SKY130 draws on datatype 20 and types its pad opening (76/20) <code>LEFOBS</code>, so every rule misses it.<br><br>
+<b>Two branches:</b>
+<table>
+<tr><th>Branch</th><th>Gives</th></tr>
+<tr><td>Layers</td><td>One pad per opening on that layer; touching polygons are unioned first</td></tr>
+<tr><td>Cells (structure)</td><td>One pad per placement of that cell, array references included</td></tr>
+</table>
+The <b>Pad-sized</b> column counts shapes inside the size bounds (10–500 µm by default); the most pad-like layer is ticked for you. Both imports offer this dialog straight away when they detect nothing.<br><br>
+<b>Created objects:</b> <code>{chip}_Pad_{n}</code> — ordinary contact points, treated the same as detected pads by wire bonding, the netlist and the design rule check. Each takes its name from the layout's own label where one sits on it.
+</div>
+
+<h3>Technology per import</h3>
+<div class="card">
+<b>Purpose:</b> Let each chip in a package be from its own PDK.<br><br>
+Technology Configuration's active profile is the <i>starting point</i>; every GDS import confirms which technology that chip is made in, and records the <code>.lyp</code>/<code>.map</code>/<code>.xml</code> on what it creates — the die block for a proxy, the <code>GDS_Die</code> group for a full import. Pads and layers inherit from there.<br><br>
+Shown in the property editor under <b>ChipProxy &#9656; TechProfile</b> and in the <b>Dies</b> panel's Technology column. <b>Assign Materials</b> then classifies each die's layers with that die's own stackup, instead of whichever PDK was configured last.
+</div>
+
 <h3>Import KiCad</h3>
 <div class="card">
 <b>Purpose:</b> Bring a KiCad board's components, pads and nets into the assembly.<br><br>
