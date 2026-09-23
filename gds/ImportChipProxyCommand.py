@@ -14,6 +14,10 @@ needs the LYP for its layer-selection/colour pipeline): footprint comes
 straight from the raw GDS, and pad detection degrades gracefully without
 a map file — LYP and MAP only sharpen pad naming/detection strategy, XML
 only sharpens the thickness estimate.
+
+The technology is chosen per import and recorded on the chip (core.gds_tech),
+so several dies from different PDKs can sit in one package and each still
+answers for itself.
 """
 
 import os
@@ -27,7 +31,6 @@ root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, root_path)
 
 from core.chip_proxy import extract_chip_proxy, build_chip_proxy_object
-from gds.GDSCommand import _resolve_tech_file
 from Get_Path import get_icon
 
 
@@ -51,19 +54,17 @@ class ImportChipProxyCommand:
         if not gds_path or not os.path.exists(gds_path):
             return
 
-        from core.TechConfig import tech_config
-        lyp_path = _resolve_tech_file(
-            tech_config, "lyp", "Select LYP File (optional — sharpens pad naming)",
-            "LYP Files (*.lyp *.LYP)", optional=True,
-        )
-        map_path = _resolve_tech_file(
-            tech_config, "map", "Select IHP MAP (optional — sharpens pad detection)",
-            "MAP Files (*.map *.MAP)", optional=True,
-        )
-        xml_path = _resolve_tech_file(
-            tech_config, "xml", "Select Stackup XML (optional — sharpens thickness estimate)",
-            "XML Files (*.xml *.XML)", optional=True,
-        )
+        # Which PDK this chip is made in is asked per import, not taken from
+        # the session: the next die in the same package is routinely from a
+        # different process, and the answer is recorded on the chip.
+        from ui.TechnologyDialog import choose_technology
+        technology = choose_technology(FreeCADGui.getMainWindow(), gds_path)
+        if technology is None:
+            FreeCAD.Console.PrintMessage("[ChipProxy] Import cancelled.\n")
+            return
+        lyp_path = technology["lyp_path"] or None
+        map_path = technology["map_path"] or None
+        xml_path = technology["xml_path"] or None
 
         doc = FreeCAD.activeDocument()
         if doc is None:
@@ -86,6 +87,8 @@ class ImportChipProxyCommand:
             proxy_data = dlg.apply_to(proxy_data)
 
             block = build_chip_proxy_object(doc, proxy_data, name=name)
+            import core.gds_tech as gds_tech
+            gds_tech.tag(block, technology)
         except Exception as exc:
             import traceback
             FreeCAD.Console.PrintError(
@@ -114,6 +117,26 @@ class ImportChipProxyCommand:
             f"\nThickness: {proxy_data.get('thickness_source', 'unknown')}"
         )
         QtWidgets.QMessageBox.information(None, "Chip Proxy Imported", msg)
+
+        # No pads means nothing to bond to, and it is not always a broken
+        # file: a layout whose pads follow none of the conventions automatic
+        # detection knows (SKY130's, for one) imports clean and empty. The
+        # layout still knows where its pads are, so offer to point at them
+        # now rather than leaving the chip unusable until someone works out
+        # that a separate command exists.
+        if not proxy_data.get("pads"):
+            answer = QtWidgets.QMessageBox.question(
+                None, "No bond pads found",
+                "No bond pads were detected in this layout.\n\n"
+                "That happens when its pads are not drawn the way automatic "
+                "detection expects — SKY130 layouts, for instance, keep their "
+                "pad openings on a layer it does not recognise.\n\n"
+                "Pick them out of the file now?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.Yes)
+            if answer == QtWidgets.QMessageBox.Yes:
+                from gds.PadPickerCommand import define_pads
+                define_pads(doc, block, gds_path)
 
     def IsActive(self):
         return True

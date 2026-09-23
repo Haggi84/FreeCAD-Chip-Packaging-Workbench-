@@ -138,33 +138,6 @@ def _setup_property_panel(doc, ihp_map, map_path, gds_path,
     return pp
 
 
-# ── Resolve technology file ───────────────────────────────────────────────────
-
-def _resolve_tech_file(tech_config, kind: str, title: str,
-                        file_filter: str, optional: bool = False):
-    """Returns path from tech_config or file dialog."""
-    has_fn = getattr(tech_config, f"has_{kind}")
-    get_fn = getattr(tech_config, f"get_{kind}")
-
-    if has_fn():
-        p = get_fn()
-        FreeCAD.Console.PrintMessage(f"TechConfig: {kind.upper()}  {p}\n")
-        return p
-
-    p, _ = QtWidgets.QFileDialog.getOpenFileName(None, title, "", file_filter)
-    if not p:
-        if optional:
-            FreeCAD.Console.PrintWarning(f"No {kind.upper()} selected — skipping.\n")
-            return None
-        QtWidgets.QMessageBox.critical(None, "Error",
-                                       f"{kind.upper()} file not found.")
-        return None
-
-    kw = {"map_": p} if kind == "map" else {kind: p}
-    tech_config.set_local(**kw)
-    return p
-
-
 # ── Import with progress display ──────────────────────────────────────────────
 
 def _run_import(gds_path, selected_layers, load_kwargs):
@@ -289,7 +262,8 @@ def _add_die_body(doc, gds_path, stackup_data, options, stack_mm=None):
 
 def _post_import(doc, gds_path, ihp_map, selected_layers,
                  auto_pin_contacts, before_objs,
-                 stackup_data=None, options=None, stack_mm=None):
+                 stackup_data=None, options=None, stack_mm=None,
+                 technology=None):
     """
     After the actual import:
     - Display GDS cells named "pin" as flat 2D shapes
@@ -326,6 +300,14 @@ def _post_import(doc, gds_path, ihp_map, selected_layers,
     for o in list(doc.Objects):
         if o.Name not in before_objs and o.Name != grp.Name:
             grp.addObject(o)
+
+    # The technology goes on the group, and everything in it inherits from
+    # there (core.gds_tech.technology_of) — one tag per import rather than
+    # one per layer, so a second chip imported from another PDK into the
+    # same document keeps its own.
+    if technology:
+        import core.gds_tech as gds_tech
+        gds_tech.tag(grp, technology)
 
     return cp_count
 
@@ -398,43 +380,24 @@ def load_gds_layers():
             QtWidgets.QMessageBox.critical(None, "Error", "GDS file not found.")
             return (None,) * 8
 
-        # ── Technology configuration ───────────────────────────────────────
-        from core.TechConfig import tech_config
+        # ── Technology configuration ───────────────────────
+        # Asked per import rather than taken from the session: a package
+        # holds dies from more than one process, and the answer is recorded
+        # on what this import creates (core.gds_tech), so each die keeps
+        # saying which PDK it is from. The LYP is required here — the whole
+        # layer-selection and colour pipeline below is built on it.
+        from ui.TechnologyDialog import choose_technology
 
-        if not tech_config.is_configured():
-            msg = QtWidgets.QMessageBox(None)
-            msg.setWindowTitle("Technology Configuration")
-            msg.setText("No technology profile configured.")
-            msg.setInformativeText(
-                "Use the built-in IHP SG13G2 configuration, "
-                "or select files manually?"
-            )
-            btn_std = msg.addButton("Default (IHP SG13G2)",
-                                    QtWidgets.QMessageBox.ButtonRole.AcceptRole)
-            msg.addButton("Select Manually",
-                          QtWidgets.QMessageBox.ButtonRole.ActionRole)
-            msg.addButton(QtWidgets.QMessageBox.StandardButton.Cancel)
-            msg.setDefaultButton(btn_std)
-            msg.exec_()
-            clicked = msg.clickedButton()
-            if clicked is None or clicked == msg.button(
-                    QtWidgets.QMessageBox.StandardButton.Cancel):
-                return (None,) * 8
-            if clicked == btn_std:
-                tech_config.apply_builtin_to_local()
-
-        lyp_path = _resolve_tech_file(tech_config, "lyp", "Select LYP File",
-                                      "LYP Files (*.lyp *.LYP)")
-        if lyp_path is None:
+        technology = choose_technology(None, gds_path, require_lyp=True)
+        if technology is None:
             return (None,) * 8
 
-        map_path = _resolve_tech_file(tech_config, "map", "Select IHP MAP (optional)",
-                                      "MAP Files (*.map *.MAP)", optional=True)
-        ihp_map  = Core_Functionality.parse_map(map_path) if map_path else {}
-
-        xml_path = _resolve_tech_file(tech_config, "xml", "Select Stackup XML (optional)",
-                                      "XML Files (*.xml *.XML)", optional=True)
-        stackup_data = Core_Functionality.parse_stackup_xml(xml_path) if xml_path else {}
+        lyp_path = technology["lyp_path"]
+        map_path = technology["map_path"] or None
+        xml_path = technology["xml_path"] or None
+        ihp_map = Core_Functionality.parse_map(map_path) if map_path else {}
+        stackup_data = (Core_Functionality.parse_stackup_xml(xml_path)
+                        if xml_path else {})
 
         layers_with_colors = Core_Functionality.parse_lyp(lyp_path)
         if not layers_with_colors:
@@ -529,7 +492,8 @@ def load_gds_layers():
         cp_count = _post_import(doc, gds_path, ihp_map, layers_to_load,
                                 aux["auto_pin_contacts"], before_objs,
                                 stackup_data=stackup_data, options=options,
-                                stack_mm=aux.get("stack_mm"))
+                                stack_mm=aux.get("stack_mm"),
+                                technology=technology)
 
         if aux["auto_pin_contacts"]:
             if cp_count:
@@ -539,11 +503,29 @@ def load_gds_layers():
                     "Ready for wire bonding.",
                 )
             else:
-                QtWidgets.QMessageBox.warning(
+                # An empty result is not necessarily a broken file: a layout
+                # whose pads follow none of the conventions auto-PIN knows
+                # (SKY130's, for one) imports with nothing to bond to.
+                answer = QtWidgets.QMessageBox.question(
                     None, "Auto-PIN",
-                    "No PIN pads found.\n"
-                    "Tip: load an IHP .map file for best results.",
-                )
+                    "No PIN pads were found.\n\n"
+                    "That happens when the pads are not drawn the way "
+                    "automatic detection expects \u2014 SKY130 layouts, for "
+                    "instance, keep their pad openings on a layer it does "
+                    "not recognise.\n\n"
+                    "Pick them out of the file now?",
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                    QtWidgets.QMessageBox.Yes)
+                if answer == QtWidgets.QMessageBox.Yes:
+                    try:
+                        from gds.PadPickerCommand import define_pads
+                        import core.gds_pads as _gds_pads
+                        targets = _gds_pads.chips_in(doc)
+                        if targets:
+                            define_pads(doc, targets[-1], gds_path)
+                    except Exception as exc:
+                        FreeCAD.Console.PrintError(
+                            f"[Pads] could not open the pad picker: {exc}\n")
 
         # Stash the raw source-file inputs on aux so the LOD manager's
         # workbench-state save-provider can persist and reconstruct it

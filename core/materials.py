@@ -294,10 +294,31 @@ def set_material(obj, name, source=SOURCE_USER):
     setattr(obj, SOURCE_PROPERTY, source)
 
 
+def _stackup_for(obj, fallback):
+    """
+    The stackup that describes *obj* — its own chip's, or the one passed in.
+
+    A layer is made of whatever its PDK says it is made of, and in a package
+    holding dies from two processes there is no single answer for the
+    document. Each chip records the technology it was imported with
+    (core.gds_tech), so the layer is asked about its own die before falling
+    back to the caller's stackup, which is what a document imported before
+    technologies were recorded still has.
+    """
+    try:
+        import core.gds_tech as gds_tech
+        return gds_tech.stackup_of(obj) or fallback
+    except Exception:
+        return fallback
+
+
 def assign_materials(doc, overwrite=False, stackup_data=None):
     """
     Tag every physical part in *doc* with a material. *stackup_data* is the
-    parsed stackup of the layout, used for GDS layers.
+    parsed stackup to fall back on; a part belonging to a chip that records
+    its own technology is classified with that chip's stackup instead, so
+    two dies from different PDKs in one package are each described by their
+    own process rather than by whichever was configured last.
 
     A material that is already set is kept unless *overwrite* — that is what
     makes a choice made by hand survive re-running this. Parts it cannot
@@ -317,7 +338,7 @@ def assign_materials(doc, overwrite=False, stackup_data=None):
             report["kept"].append((obj.Name, existing.name, source))
             continue
 
-        name, detail = classify(obj, stackup_data)
+        name, detail = classify(obj, _stackup_for(obj, stackup_data))
         if name is None:
             _ensure_properties(obj)
             setattr(obj, PROPERTY, UNASSIGNED)

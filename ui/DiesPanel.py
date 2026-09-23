@@ -54,9 +54,10 @@ class DiesPanel(QtWidgets.QDockWidget):
         row.addWidget(self._summary)
         layout.addLayout(row)
 
-        self._table = QtWidgets.QTableWidget(0, 7)
+        self._table = QtWidgets.QTableWidget(0, 8)
         self._table.setHorizontalHeaderLabels(
-            ["Die", "Tier", "On", "Size (mm)", "Thickness (mm)", "Pads", "Bonded"])
+            ["Die", "Tier", "On", "Technology", "Size (mm)", "Thickness (mm)",
+             "Pads", "Bonded"])
         self._table.verticalHeader().setVisible(False)
         self._table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self._table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
@@ -72,6 +73,10 @@ class DiesPanel(QtWidgets.QDockWidget):
 
     def populate(self):
         from core import dies as die_model
+        # Which PDK each die is from: in a package holding dies from more
+        # than one process, that is as much a property of the die as its
+        # tier, and the panel is where you look at the dies.
+        import core.gds_tech as gds_tech
 
         doc = FreeCAD.activeDocument()
         self._dies = []
@@ -98,10 +103,12 @@ class DiesPanel(QtWidgets.QDockWidget):
         self._table.setRowCount(len(self._dies))
         for row, die in enumerate(self._dies):
             pads = die_model.pads_of(doc, die)
+            technology = gds_tech.technology_of(die.block)
             cells = (
                 die.name,
                 str(die.tier),
                 die.below or "carrier",
+                (technology or {}).get("name") or "—",
                 f"{die.width_mm:.3f} × {die.length_mm:.3f}",
                 f"{die.thickness_mm:.3f}",
                 str(len(pads)),
