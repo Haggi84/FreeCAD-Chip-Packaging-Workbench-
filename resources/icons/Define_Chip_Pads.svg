@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- A die seen from above, with the GDS structure tree at its left and
+       the picked top contact areas marked along its upper edge. -->
+  <rect x="22" y="12" width="34" height="40" rx="2" fill="#c9d6e6" stroke="#2c4460" stroke-width="2"/>
+  <path d="M28,22 L50,22 M28,30 L50,30 M28,38 L50,38 M28,46 L50,46"
+        stroke="#7f92a8" stroke-width="1.2"/>
+  <!-- the picked pads -->
+  <rect x="26" y="8" width="8" height="8" fill="#e6a020" stroke="#7a5c10" stroke-width="1.5"/>
+  <rect x="38" y="8" width="8" height="8" fill="#e6a020" stroke="#7a5c10" stroke-width="1.5"/>
+  <rect x="50" y="8" width="8" height="8" fill="#e6a020" stroke="#7a5c10" stroke-width="1.5"/>
+  <!-- the structure tree -->
+  <path d="M8,16 L8,46 M8,24 L16,24 M8,34 L16,34 M8,44 L16,44"
+        stroke="#555555" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <rect x="4" y="10" width="9" height="7" rx="1" fill="#e8e8e8" stroke="#555555" stroke-width="1.5"/>
+  <rect x="15" y="21" width="6" height="6" rx="1" fill="#e8e8e8" stroke="#555555" stroke-width="1.5"/>
+  <rect x="15" y="31" width="6" height="6" rx="1" fill="#e6a020" stroke="#7a5c10" stroke-width="1.5"/>
+  <rect x="15" y="41" width="6" height="6" rx="1" fill="#e8e8e8" stroke="#555555" stroke-width="1.5"/>
+</svg>

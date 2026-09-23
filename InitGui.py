@@ -27,6 +27,7 @@ except Exception as e:
 try:
     from gds import GDSCommand
     from gds import ImportChipProxyCommand
+    from gds import PadPickerCommand   # noqa: F401  (Define Pads from GDS)
     from gds import ChipTransformCommand
     from gds import ShowLayerSliderCommand
     from gds import LayerDisplay   # noqa: F401  (per-layer display quality)
@@ -206,6 +207,7 @@ class MyWorkbench(FreeCADGui.Workbench):
                     "KicadImportCommand",
                     "GDSCommand",
                     "ImportChipProxyCommand",
+                    "DefineChipPadsCommand",
                     "ChipTextureCommand",
                     "ViewInGDS3DCommand",
                 ],

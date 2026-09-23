@@ -785,41 +785,16 @@ def build_chip_proxy_object(doc, proxy_data: dict, name: str = "Chip"):
     # the existing wire-bonding tool snaps to these completely unchanged —
     # resolve_snap_point() reads the ContactPoint property directly, never
     # the marker's own Shape, so this is safe regardless of marker shape.
+    # Built by core.gds_pads.pad_marker, which is also what the pad picker
+    # uses — a pad found automatically and a pad pointed at by hand have to
+    # be the same kind of object, or every tool downstream would need to know
+    # which way it was made.
     pad_t = max(min(t * 0.05, 0.01), 1e-4)   # thin — a visual pad thickness, not structural
+    from core.gds_pads import pad_marker
     for i, pad in enumerate(proxy_data.get("pads", []), start=1):
-        pad_w = pad.get("width_mm", _DEFAULT_PAD_SIZE_MM) or _DEFAULT_PAD_SIZE_MM
-        pad_h = pad.get("height_mm", _DEFAULT_PAD_SIZE_MM) or _DEFAULT_PAD_SIZE_MM
-
-        marker = doc.addObject("Part::Feature", f"{base_name}_Pad_{i:03d}")
-        marker.Shape = Part.makeBox(
-            pad_w, pad_h, pad_t,
-            Base.Vector(pad["x_mm"] - pad_w / 2.0, pad["y_mm"] - pad_h / 2.0, z0 + t),
-        )
+        marker = pad_marker(doc, f"{base_name}_Pad_{i:03d}", pad, z0 + t,
+                            pad_t, source_object=block.Name)
         marker.Label = f"{display_name} {pad.get('label') or pad.get('name', 'Pad')} {i}"
-
-        # Wire-bond snap point: the top face centre of the pad marker —
-        # same "top of the visible pad surface" convention ContactPointTool
-        # uses for real pad geometry.
-        pt = Base.Vector(pad["x_mm"], pad["y_mm"], z0 + t + pad_t)
-
-        marker.addProperty("App::PropertyVector", "ContactPoint", "Wirebond",
-                            "Snap point for wire bonding")
-        marker.addProperty("App::PropertyString", "SourceObject", "Wirebond",
-                            "Source object this point belongs to")
-        marker.addProperty("App::PropertyBool", "IsContactPoint", "Wirebond",
-                            "Wire-bond contact point marker")
-        marker.ContactPoint   = pt
-        marker.SourceObject   = block.Name
-        marker.IsContactPoint = True
-        marker.addProperty("App::PropertyString", "PadName", "Wirebond",
-                            "Pad name from the layout's text label")
-        marker.PadName = pad.get("label") or ""
-
-        if FreeCAD.GuiUp:
-            marker.ViewObject.ShapeColor   = (0.90, 0.30, 0.10)   # orange — die-side
-            marker.ViewObject.Transparency = 0
-            marker.ViewObject.DisplayMode  = "Flat Lines"
-
         grp.addObject(marker)
 
     doc.recompute()

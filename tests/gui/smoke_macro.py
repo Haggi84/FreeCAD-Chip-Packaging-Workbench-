@@ -51,6 +51,30 @@ def _report_view_text(QtWidgets):
     return "\n".join(texts)
 
 
+def _sky_like_gds():
+    """
+    A small SKY130-flavoured GDS: pad openings on 76/20, nothing on the
+    datatypes automatic detection looks at. Written to a temporary file so
+    the pad picker can be opened on something real.
+    """
+    import tempfile
+    import gdstk
+
+    lib = gdstk.Library(unit=1e-6, precision=1e-9)
+    pad = lib.new_cell("pad_70")
+    pad.add(gdstk.rectangle((-35.0, -35.0), (35.0, 35.0), layer=76, datatype=20))
+    top = lib.new_cell("chip_top")
+    top.add(gdstk.rectangle((0.0, 0.0), (2000.0, 2000.0), layer=235, datatype=4))
+    for x, y in ((200.0, 200.0), (1800.0, 200.0),
+                 (200.0, 1800.0), (1800.0, 1800.0)):
+        top.add(gdstk.Reference(pad, (x, y)))
+        top.add(gdstk.Label("PAD", (x, y), layer=76, texttype=5))
+
+    path = os.path.join(tempfile.mkdtemp(prefix="dip_smoke_gds_"), "sky.gds")
+    lib.write_gds(path)
+    return path
+
+
 def _run():
     try:
         from PySide import QtWidgets
@@ -130,6 +154,49 @@ def _run():
         QtWidgets.QApplication.processEvents()
         _check("...and Finish ends it",
                not _port_command.session.active)
+
+        # ── the technology chooser and the pad picker ────────────
+        # Both are Qt, so headless tests cannot reach them at all; what is
+        # checked here is that they build, read a real file, and that the
+        # pads they produce end up on the chip.
+        from ui.TechnologyDialog import TechnologyDialog
+        from ui.PadPickerDialog import PadPickerDialog
+        import core.chip_proxy as chip_proxy
+        import core.gds_pads as gds_pads
+        import core.gds_tech as gds_tech
+
+        tech_dialog = TechnologyDialog(mw, "some_chip.gds")
+        QtWidgets.QApplication.processEvents()
+        chosen = tech_dialog.technology()
+        _check("the technology chooser starts on a configured PDK",
+               bool(chosen["name"]), str(chosen))
+        _check("...and offers the bundled ones to choose between",
+               tech_dialog._combo.count() >= 3, tech_dialog._combo.count())
+        tech_dialog.close()
+
+        gds = _sky_like_gds()
+        proxy_data = chip_proxy.extract_chip_proxy(gds)
+        _check("a SKY130-style layout still imports with no pads detected",
+               not proxy_data["pads"], str(len(proxy_data["pads"])))
+        block = chip_proxy.build_chip_proxy_object(doc, proxy_data, name="SmokeChip")
+        gds_tech.tag(block, chosen)
+
+        picker = PadPickerDialog(gds, block.Label, mw)
+        QtWidgets.QApplication.processEvents()
+        _check("the pad picker suggests the layer the pad openings are on",
+               picker.layer_keys() == [(76, 20)], str(picker.layer_keys()))
+        min_mm, max_mm = picker.size_bounds_mm()
+        pads = gds_pads.pick_pads(gds, picker.layer_keys(), picker.cell_names(),
+                                  min_mm, max_mm)
+        picker.close()
+        _check("...and picking it finds the four pads", len(pads) == 4,
+               str(len(pads)))
+
+        markers = gds_pads.attach_pads(doc, block, pads)
+        _check("the picked pads become contact points on the chip",
+               len(markers) == 4 and all(m.IsContactPoint for m in markers))
+        _check("...which know the technology of the die they are on",
+               (gds_tech.technology_of(markers[0]) or {}).get("name") == chosen["name"])
 
         report = _report_view_text(QtWidgets)
         bad = [line for line in report.splitlines()
