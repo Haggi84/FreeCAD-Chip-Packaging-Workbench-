@@ -52,6 +52,7 @@ class LayerSelector(QtWidgets.QDialog):
             "add_die_body":       True,
             "drop_to_die_surface": False,
             "fill_dielectric_gap": True,
+            "show_unused_levels": True,
             "klayout_exact":      False,
             "layer_bbox":         set(),
         })
@@ -140,6 +141,24 @@ class LayerSelector(QtWidgets.QDialog):
             "the die surface, so there is no gap to fill."
         )
 
+        self.check_levels = QtWidgets.QCheckBox(
+            "Show the PDK levels this layout does not use")
+        self.check_levels.setChecked(
+            bool(self.options.get("show_unused_levels", True)))
+        self.check_levels.setToolTip(
+            "A PDK defines more levels than any one design draws on. An\n"
+            "SG13G2 layout routing on the top metals still has Activ, the\n"
+            "contacts, Metal1-5, the vias, MIM and Vmim beneath it in the\n"
+            "process — empty in this chip, but part of the stack.\n\n"
+            "On: each empty level gets a die-sized slab at the height and\n"
+            "thickness the stackup states, so the model reads like the\n"
+            "PDK's own stackup drawing. They are ghosted, labelled\n"
+            "\"[not in the layout]\", and left out of the material\n"
+            "assignment, the thermal export and the design rule check —\n"
+            "nothing is drawn there in the real die.\n\n"
+            "Off: only the levels the layout actually draws on are built."
+        )
+
         self.check_exact = QtWidgets.QCheckBox(
             "Exactly as KLayout draws it (no simplification — can be very slow)")
         self.check_exact.setChecked(bool(self.options.get("klayout_exact", False)))
@@ -165,7 +184,8 @@ class LayerSelector(QtWidgets.QDialog):
 
         for w in (self.check_match, self.check_hl, self.check_3d,
                   self.check_auto_pin, self.check_vias, self.check_body,
-                  self.check_drop, self.check_fill, self.check_exact,
+                  self.check_drop, self.check_fill, self.check_levels,
+                  self.check_exact,
                   self.lbl_exact):
             opt_top.addWidget(w)
 
@@ -411,6 +431,7 @@ class LayerSelector(QtWidgets.QDialog):
         self.options["add_die_body"]       = self.check_body.isChecked()
         self.options["drop_to_die_surface"] = self.check_drop.isChecked()
         self.options["fill_dielectric_gap"] = self.check_fill.isChecked()
+        self.options["show_unused_levels"] = self.check_levels.isChecked()
         self.options["klayout_exact"]      = self.check_exact.isChecked()
         # mesh_3d and contacts_only_3d no longer in dialog — set internally
         self.options["mesh_3d"]          = False

@@ -78,6 +78,17 @@ A height typed into the panel is used instead of the cursor's, so the third clic
 <b>Created objects:</b> <code>Port_{n}</code> in a <b>Ports</b> group inside <code>GDS_Die</code>. They are parametric — length, direction and height stay editable — they move with the chip, and they are ignored by the design rule check and the thermal export.
 </div>
 
+<h3>Complete Stack from PDK</h3>
+<div class="card">
+<b>Purpose:</b> Show the process levels this layout leaves empty.<br><br>
+A PDK defines more levels than any one design draws on. An SG13G2 layout routing on TopMetal1/2 leaves Activ, Cont, Metal1&ndash;5, Via1&ndash;4, MIM and Vmim empty &mdash; real levels of the process that the import never built, leaving metal floating 6.4&nbsp;&micro;m above bare silicon.<br><br>
+Each empty level gets a die-sized slab at the height and thickness the stackup states. <b>Ghosted</b> and labelled <code>[not in the layout]</code>, so it is never mistaken for an imported layer collapsed to its bounding box.<br><br>
+<b>Left out on purpose:</b> levels below the die surface (SUBGND, BACKSIDEGND &mdash; simulation reference planes, already modelled as epi and silicon) and dielectrics (the oxide is the dielectric fill's business).<br><br>
+They are not parts: a level nothing is drawn on is not metal in the real die, so they stay out of Assign Materials, the thermal export and the design rule check. They do move with the chip.<br><br>
+<b>Also at import:</b> "Show the PDK levels this layout does not use", on by default. This command is for a chip already imported; run it again to rebuild or remove.<br><br>
+<b>Created objects:</b> <code>GDS_Level_{name}</code>
+</div>
+
 <h3>Define Pads from GDS</h3>
 <div class="card">
 <b>Purpose:</b> Pick the chip's top contact areas out of its own GDS when automatic detection finds none.<br><br>

@@ -158,6 +158,9 @@ def _gds_objects(doc):
         # chip and have to travel with it — matched by property for the same
         # reason as the die body above.
         or getattr(o, "IsPort", False)
+        # The empty PDK levels drawn under and between the real ones belong
+        # to the die as much as its silicon does (core.stack_levels).
+        or getattr(o, "IsUnusedStackLayer", False)
     ]
 
     # Pull in every frame object from the Substrate_Frames group.

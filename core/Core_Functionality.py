@@ -415,6 +415,10 @@ def parse_stackup_xml(xml_path):
             gds_dt_str = layer.get("Datatype", "")
             gds_dt = int(gds_dt_str) if gds_dt_str.strip().isdigit() else None
             entry = {
+                # The stackup's own spelling of the name. The dict keys it is
+                # stored under are upper-cased for lookup, so without this
+                # there is no way back to "TopMetal2" for a label.
+                "name":         name,
                 "zmin_um":      zmin_um,
                 "zmax_um":      zmax_um,
                 "thickness_um": abs(zmax_um - zmin_um),

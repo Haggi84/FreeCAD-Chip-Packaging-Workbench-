@@ -260,6 +260,39 @@ def _add_die_body(doc, gds_path, stackup_data, options, stack_mm=None):
         return []
 
 
+def _add_unused_levels(doc, gds_path, stackup_data, options, stack_mm=None):
+    """
+    Build a slab for every PDK level this layout does not draw on.
+
+    The import only ever builds what the GDS contains, which leaves the
+    model unlike the stack the PDK describes: on a layout that routes on the
+    top metals, everything from Activ up to Vmim is simply absent, and the
+    metal appears to float 6.4 um above the silicon with nothing in between.
+
+    Which levels are empty is decided against the whole GDS rather than the
+    layers loaded immediately — a layer waiting to be loaded on demand is one
+    the layout draws on, and filling it in as empty would be wrong and would
+    collide with it the moment it loaded.
+    """
+    if not bool(options.get("show_unused_levels", True)) or not stackup_data:
+        return []
+    try:
+        import core.stack_levels as stack_levels
+        from core.chip_proxy import describe_die_footprint
+
+        keys = stack_levels.keys_in_gds(gds_path)
+        empty = stack_levels.unused(stackup_data, keys)
+        if not empty:
+            return []
+        outline = describe_die_footprint(gds_path)
+        return stack_levels.build(
+            doc, outline["footprint_mm"], empty, stackup_data,
+            shift_mm=stack_levels.stack_shift_mm(stack_mm or {}, stackup_data))
+    except Exception as exc:
+        FreeCAD.Console.PrintWarning(f"[Stack] unused levels not built: {exc}\n")
+        return []
+
+
 def _post_import(doc, gds_path, ihp_map, selected_layers,
                  auto_pin_contacts, before_objs,
                  stackup_data=None, options=None, stack_mm=None,
@@ -293,6 +326,10 @@ def _post_import(doc, gds_path, ihp_map, selected_layers,
     # Die body — built before the group is formed, so the slabs are swept
     # into GDS_Die with everything else the import produced.
     _add_die_body(doc, gds_path, stackup_data, options or {}, stack_mm)
+
+    # Built before the group is formed, like the die body, so the empty
+    # levels are swept into GDS_Die with everything else.
+    _add_unused_levels(doc, gds_path, stackup_data, options or {}, stack_mm)
 
     # GDS_Die group
     grp = doc.addObject("App::DocumentObjectGroup", "GDS_Die")

@@ -198,6 +198,47 @@ def _run():
         _check("...which know the technology of the die they are on",
                (gds_tech.technology_of(markers[0]) or {}).get("name") == chosen["name"])
 
+        # ── the empty PDK levels ─────────────────────────────
+        # The colours and ghosting are ViewObject work, which does not exist
+        # headlessly — so building them is checked here, on a stand-in
+        # import that draws on one level of the PDK.
+        import core.stack_levels as stack_levels
+        from gds import StackLevelsCommand
+        import Part as _Part
+
+        levels_group = doc.addObject("App::DocumentObjectGroup", "GDS_Die")
+        top_metal = doc.addObject("Part::Feature", "Layer_TopMetal2_134")
+        top_metal.Shape = _Part.makeBox(0.2, 0.2, 0.003,
+                                        FreeCAD.Vector(0, 0, 0.0112303))
+        for prop, value in (("GDSLayerID", 134), ("GDSDatatype", 0)):
+            top_metal.addProperty("App::PropertyInteger", prop, "LOD", prop)
+            setattr(top_metal, prop, value)
+        levels_group.addObject(top_metal)
+        doc.recompute()
+
+        stackup = StackLevelsCommand._stackup_for(levels_group, mw)
+        _check("the bundled PDK's stackup is available to build levels from",
+               bool(stackup))
+        if stackup:
+            footprint = StackLevelsCommand._footprint(levels_group)
+            keys = stack_levels.keys_in_document(doc, list(levels_group.Group))
+            empty = stack_levels.unused(stackup, keys)
+            _check("the levels this layout does not draw on are found",
+                   len(empty) >= 10, str(len(empty)))
+            built = stack_levels.build(doc, footprint, empty, stackup,
+                                       group=levels_group)
+            QtWidgets.QApplication.processEvents()
+            _check("...and are built as ghosted slabs, not solid geometry",
+                   all(o.ViewObject.Transparency == 80 for o in built),
+                   str([o.ViewObject.Transparency for o in built][:3]))
+            _check("...in the colour their material has in the stackup",
+                   built[0].ViewObject.ShapeColor is not None)
+            _check("...and they say in the tree that nothing is drawn there",
+                   all("[not in the layout]" in o.Label for o in built))
+            _check("removing them again leaves the imported layer alone",
+                   stack_levels.remove(doc) == len(built)
+                   and doc.getObject(top_metal.Name) is not None)
+
         report = _report_view_text(QtWidgets)
         bad = [line for line in report.splitlines()
                if any(marker in line for marker in (

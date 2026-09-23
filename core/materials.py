@@ -156,7 +156,10 @@ def is_physical_part(obj):
     except Exception:
         return False
     for flag in ("IsContactPoint", "IsGridPoint", "IsRoutingGridPoint",
-                 "IsLayerPlaceholder"):
+                 # A level the PDK defines but this layout never draws on is
+                 # a statement about where that level sits, not metal in the
+                 # real die — see core.stack_levels.
+                 "IsLayerPlaceholder", "IsUnusedStackLayer"):
         if getattr(obj, flag, False):
             return False
     if obj.Name.startswith(("TracePreview_", "_Snap")):

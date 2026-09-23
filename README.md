@@ -97,6 +97,7 @@ caption (Tech, Import, Render, Package, Bonding, Routing, Workbench).
 | **View in GDS3D** | Open the selected chip's full layout in the external GDS3D viewer, generating its process file from the active PDK. Requires GDS3D installed separately. |
 | **Texture Chip Proxy** | Paint a proxy with a picture of its own layout so several proxies stay tellable apart — optional, purely visual. |
 | **Import Chip Proxy** | Create a lightweight stand-in for a die — footprint, real stack thickness and bond-pad positions only. Loads in well under a second on full-chip layouts that take minutes to tessellate in full. |
+| **Complete Stack from PDK** | Build the process levels this layout leaves empty, at the heights the stackup states — see [The levels a layout leaves empty](#the-levels-a-layout-leaves-empty). |
 | **Define Pads from GDS** | Pick the top contact areas out of the chip's own GDS — by the layer they are drawn on, or the cell the padframe places — and put them on the chip as bondable contact points. For layouts whose pads automatic detection does not find, SKY130 among them — see [Technologies and contact areas](#technologies-and-contact-areas). |
 
 ### Rendering
@@ -473,6 +474,56 @@ the lowest drawn layer:
 
 No seams and no overlaps between them. On a full import there is nothing to fill — Activ
 already sits at z = 0 — and the slab is not built at all.
+
+### The levels a layout leaves empty
+
+Filling the gap *below* the lowest used layer is only half of it. A PDK defines more levels
+than any one design draws on, and the ones a design skips are not all below it: an SG13G2
+layout routing on TopMetal1 and TopMetal2 leaves Activ, Cont, Metal1–5, Via1–4, MIM and Vmim
+empty, and those are real levels of the process — the chip simply draws nothing on them.
+
+The import builds geometry only for what the GDS contains, so none of them appeared in the
+model at all. **Show the PDK levels this layout does not use** (on by default) builds a
+die-sized slab for each one, at the height and thickness the stackup states, so the 3-D model
+reads like the PDK's own stackup drawing instead of metal floating above bare silicon.
+
+For SG13G2, a layout that draws on the top metals only gets:
+
+| Level | Z range | Thickness |
+|---|---|---|
+| Activ | 0.0000 → 0.4000 µm | 0.40 µm |
+| Cont | 0.4000 → 1.0400 µm | 0.64 µm |
+| Metal1 … Metal5, Via1 … Via4 | 1.0400 → 5.5800 µm | as the stackup states |
+| MIM | 5.6043 → 5.7540 µm | 0.15 µm |
+| Vmim | 5.7540 → 6.4303 µm | 0.68 µm |
+
+They are **ghosted and labelled `[not in the layout]`**, the same way the LOD manager marks a
+layer that is in the file but not yet loaded — a die-sized box carrying a layer's name is
+otherwise indistinguishable from that layer imported and collapsed to its bounding box.
+
+They are representations of empty process levels, not parts, so they are left out of
+**Assign Materials**, the **thermal export** and the **design rule check**: a level the layout
+does not draw on is not metal in the real die, and putting it in a thermal model as metal
+would be a fabrication. They do belong to the die, so they move with it.
+
+What is deliberately *not* included:
+
+- **Levels below the die surface.** SG13G2's `SUBGND` (−3.75 → 0 µm) and `BACKSIDEGND`
+  (−190 → −183.75 µm) are simulation reference planes, and that volume is already modelled as
+  epi and silicon by the die body.
+- **Dielectrics.** The oxide between the levels is the dielectric fill's business, above.
+
+"Used" means *drawn anywhere in the GDS*, not *loaded now* — a layer waiting to be loaded on
+demand is one the layout draws on, and filling it in as empty would collide with it the moment
+it loaded. On SG13G2, which states no datatypes, any datatype on the layer counts: Metal1 is
+drawn as 8/0, its pin as 8/2 and its label as 8/25, and all three mean the level is in use. On
+SKY130, which shares layer numbers between a metal and the via above it (`met1` 68/20, its via
+68/44), the datatype is what tells them apart.
+
+**Complete Stack from PDK** does the same thing to a chip that is already imported — a full
+GDS import is expensive enough that finding the box unticked should not mean doing it again.
+Run it a second time to rebuild (after correcting the chip's technology, say) or to remove
+them.
 
 ### Closing the gap by moving the stack instead
 

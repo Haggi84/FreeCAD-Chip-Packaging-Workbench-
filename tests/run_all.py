@@ -69,6 +69,7 @@ import test_kicad
 import test_ports
 import test_gds_tech
 import test_gds_pads
+import test_stack_levels
 
 MODULES = [
     test_wirebond_geometry,
@@ -112,6 +113,7 @@ MODULES = [
     test_ports,
     test_gds_tech,
     test_gds_pads,
+    test_stack_levels,
 ]
 
 RESULTS_LOG = os.path.join(_THIS_DIR, "results.log")
