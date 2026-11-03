@@ -17,7 +17,7 @@ freecadcmd has no GUI: ``FreeCAD.GuiUp`` is False, ``obj.ViewObject`` is
 always None, and ``FreeCADGui.addCommand`` does not exist at all.  Every
 command file in this plugin calls ``FreeCADGui.addCommand(...)`` at import
 time, and several packages' ``__init__.py`` transitively import command
-files — so plain ``import gds.ToggleViaDetailCommand`` (etc.) fails
+files — so plain ``import gds.TogglePerformanceModeCommand`` (etc.) fails
 before reaching the target code.  ``load_module_from_file()`` below loads a
 single .py file directly, bypassing its package's ``__init__.py`` and any
 sibling command-registration side effects.
@@ -34,12 +34,10 @@ if REPO_ROOT not in sys.path:
 
 
 class TestResult:
-    def __init__(self, name: str, passed: bool, message: str = "",
-                 skipped: bool = False):
+    def __init__(self, name: str, passed: bool, message: str = ""):
         self.name = name
         self.passed = passed
         self.message = message
-        self.skipped = skipped
 
 
 class TestCase:
@@ -53,18 +51,6 @@ class TestCase:
         ok = bool(condition)
         self.results.append(TestResult(f"{self.prefix}: {name}", ok, message))
         return ok
-
-    def skip(self, name: str, reason: str) -> None:
-        """
-        Record a check that could not run here — a sample file or tool that
-        is not present on this machine.
-
-        Reported as SKIP and never counted as a pass. A test that simply
-        returned early used to look exactly like one that had run and
-        passed, which is how a check can go missing in CI unnoticed.
-        """
-        self.results.append(
-            TestResult(f"{self.prefix}: {name}", True, reason, skipped=True))
 
     def check_raises_nothing(self, name: str, fn) -> bool:
         try:

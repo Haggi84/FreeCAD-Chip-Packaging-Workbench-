@@ -31,9 +31,11 @@ from _harness import TestResult
 import test_wirebond_geometry
 import test_leadframe_build
 import test_gds_import
+import test_performance_mode
 import test_pin_numbering
 import test_via_clustering
 import test_housing_build
+import test_perf_mode_sync
 import test_workbench_state
 import test_lod_state
 import test_add_lid
@@ -41,42 +43,15 @@ import test_chip_proxy
 import test_chip_transform_proxy
 import test_leadframe_library_chip_proxy
 import test_trace_routing
-import test_trace_walkaround
-import test_trace_obstacles
-import test_routing_frame
-import test_drc
-import test_batch_route
-import test_face_symmetry
-import test_point_pattern
-import test_body_routing
-import test_chip_texture
-import test_gds3d_process
-import test_theme
-import test_desktop_shortcut
-import test_tech_profiles
-import test_via_detail
-import test_substrate
-import test_klayout_exact
-import test_materials
-import test_thermal_export
-import test_package_guard
-import test_bonding
-import test_proxy_vs_full
-import test_package_pads
-import test_netlist_propose
-import test_dies
-import test_kicad
-import test_ports
-import test_gds_tech
-import test_gds_pads
-import test_stack_levels
 
 MODULES = [
     test_wirebond_geometry,
     test_leadframe_build,
     test_gds_import,
+    test_performance_mode,
     test_pin_numbering,
     test_via_clustering,
+    test_perf_mode_sync,
     test_housing_build,
     test_workbench_state,
     test_lod_state,
@@ -85,35 +60,6 @@ MODULES = [
     test_chip_transform_proxy,
     test_leadframe_library_chip_proxy,
     test_trace_routing,
-    test_trace_walkaround,
-    test_trace_obstacles,
-    test_routing_frame,
-    test_drc,
-    test_batch_route,
-    test_face_symmetry,
-    test_point_pattern,
-    test_body_routing,
-    test_chip_texture,
-    test_gds3d_process,
-    test_theme,
-    test_desktop_shortcut,
-    test_tech_profiles,
-    test_via_detail,
-    test_substrate,
-    test_klayout_exact,
-    test_materials,
-    test_thermal_export,
-    test_package_guard,
-    test_bonding,
-    test_proxy_vs_full,
-    test_package_pads,
-    test_netlist_propose,
-    test_dies,
-    test_kicad,
-    test_ports,
-    test_gds_tech,
-    test_gds_pads,
-    test_stack_levels,
 ]
 
 RESULTS_LOG = os.path.join(_THIS_DIR, "results.log")
@@ -131,19 +77,14 @@ def main() -> int:
                 f"{exc}\n{traceback.format_exc()}"
             ))
 
-    skipped = [r for r in all_results if getattr(r, "skipped", False)]
-    passed = [r for r in all_results if r.passed and not getattr(r, "skipped", False)]
+    passed = [r for r in all_results if r.passed]
     failed = [r for r in all_results if not r.passed]
 
     lines = []
     lines.append("=" * 70)
-    lines.append(f"RESULTS: {len(passed)} passed, {len(failed)} failed, "
-                 f"{len(skipped)} skipped, {len(all_results)} total")
+    lines.append(f"RESULTS: {len(passed)} passed, {len(failed)} failed, {len(all_results)} total")
     lines.append("=" * 70)
     for r in all_results:
-        if getattr(r, "skipped", False):
-            lines.append(f"[SKIP] {r.name} — {r.message}")
-            continue
         mark = "PASS" if r.passed else "FAIL"
         lines.append(f"[{mark}] {r.name}")
         if not r.passed and r.message:

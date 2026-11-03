@@ -86,99 +86,6 @@ def categorize_layers(all_layers: list, ihp_map: dict) -> dict:
     return categories
 
 
-# Layer names that mean "vertical connection" across the PDKs this workbench
-# handles, matched against the part of the name before the first '.'.
-#
-# A plain substring test, deliberately: prefix/suffix matching missed
-# "TopVia1" and "TopVia2" — the exact two layers in the report that started
-# this — because they neither start nor end with "via". None of the metal,
-# implant or boundary layer names in either bundled PDK contains one of these
-# tokens, which is what the tests pin.
-_VIA_NAME_TOKENS = ("via", "licon", "mcon", "vmim")
-
-# Kept separate: "cont" would also match nothing harmful in the bundled PDKs,
-# but it is short enough to be risky in a PDK we have not seen, so it must
-# match the whole base name rather than appear anywhere in it.
-_VIA_NAME_EXACT = ("cont", "contact")
-
-
-def _name_says_via(name: str) -> bool:
-    base = str(name or "").split(".")[0].strip().lower()
-    if not base:
-        return False
-    if base in _VIA_NAME_EXACT:
-        return True
-    return any(token in base for token in _VIA_NAME_TOKENS)
-
-
-def boundary_layer_keys(all_layers: list) -> set:
-    """
-    Layers that are ANNOTATION, not material — the ".boundary" purpose.
-
-    EdgeSeal.boundary, prBoundary.boundary, Metal1.boundary and the rest mark
-    an extent; they describe where something is, not a film that exists at a
-    height. None of them appear in the stackup XML, so they were being given
-    a rank-based fallback Z and extruded into a 0.2 um slab floating at some
-    arbitrary height — 0.0-0.2 um in one file and 1.6-1.8 um in another,
-    interleaved among real metals.
-
-    Returning them here makes the loader build a zero-thickness face at
-    z = 0 instead: flat, on the die surface, directly above the epi. That is
-    also how KLayout draws them, since they are 2-D annotation there too.
-    """
-    out = set()
-    for layer in all_layers or []:
-        name = str(layer.get("name") or "").strip().lower()
-        if name.endswith(".boundary"):
-            out.add((layer.get("layer_id", 0), layer.get("datatype", 0)))
-    return out
-
-
-def via_layer_keys(all_layers: list, ihp_map: dict, stackup_data: dict) -> set:
-    """
-    The (layer, datatype) keys that are VIA layers.
-
-    Three independent sources, because no PDK reliably provides all three:
-
-      1. the stackup XML's Type="via"      — most authoritative when present
-      2. the stream map's VIA type         — IHP's .map carries this
-      3. the layer's own name              — the only signal for a PDK
-                                              configured with neither
-
-    Checked by (layer, datatype) BEFORE bare layer number: SKY130 puts met1
-    on 68/20 and the via above it on 68/44, so a lookup by number alone
-    reports the metal and every sky130 via would go unprotected.
-    """
-    keys = set()
-    stack = stackup_data or {}
-    mapping = ihp_map or {}
-    for layer in all_layers or []:
-        key = (layer.get("layer_id", 0), layer.get("datatype", 0))
-
-        entry = stack.get(key)
-        if entry is None:
-            entry = stack.get(key[0])
-        if isinstance(entry, dict) and entry.get("type") == "via":
-            keys.add(key)
-            continue
-
-        # "VIA" alone is NOT enough: IHP's sg13g2.map lists VIA among the
-        # types for every routing metal too ("Metal1 NET,SPNET,PIN,LEFPIN,VIA"),
-        # because a metal layer can carry via shapes in the EDI stream. Taking
-        # that at face value marked Metal1..Metal5 and both TopMetals as vias.
-        # What separates them is NET/SPNET, which only a real routing layer has.
-        m = mapping.get(key)
-        if m:
-            types = {t.upper() for t in m.get("edi_types", set())}
-            if "VIA" in types and not (types & {"NET", "SPNET"}):
-                keys.add(key)
-                continue
-
-        if _name_says_via(layer.get("name")):
-            keys.add(key)
-    return keys
-
-
 def initial_load_layers(all_layers: list, categories: dict) -> list:
     """
     Returns the subset that is loaded immediately on import:
@@ -214,35 +121,11 @@ def build_lod_import_params(
     lod_mode           = bool(options.get("lod_mode",           True))
     user_bbox_keys     = set(options.get("layer_bbox",          set()))
 
-    # "Exactly as KLayout draws it" — every polygon built as drawn, nothing
-    # collapsed, filtered or deferred.
-    #
-    # It forces lod_mode off rather than merely disabling the collapse rules:
-    # LOD mode does not simplify a layer, it declines to LOAD it, folding
-    # every non-contact layer into one body box and leaving the rest for the
-    # detail panel. A document showing a box where a layer should be does not
-    # match KLayout no matter how faithfully the loaded layers are built.
-    exact_geometry = bool(options.get("klayout_exact", False))
-    if exact_geometry and lod_mode:
-        lod_mode = False
-        FreeCAD.Console.PrintMessage(
-            "[LOD] Exact KLayout geometry requested — level-of-detail loading "
-            "disabled so every selected layer is built in full.\n")
-
     categories = categorize_layers(all_layers, ihp_map)
 
     fill_layer_keys = {k for k, c in categories.items() if c == "fill"}
     flat_layer_keys = {k for k, c in categories.items() if c == "pin_flat"}
     contact_keys    = {k for k, c in categories.items() if c == "contact"}
-
-    # Boundary/annotation layers are drawn flat on the die surface rather
-    # than extruded to a fabricated thickness — see boundary_layer_keys().
-    _boundary = boundary_layer_keys(all_layers)
-    if _boundary:
-        flat_layer_keys = set(flat_layer_keys) | _boundary
-        FreeCAD.Console.PrintMessage(
-            f"[LOD] Boundary layers drawn flat at the die surface: "
-            + ", ".join(f"{l}/{d}" for l, d in sorted(_boundary)) + "\n")
 
     if lod_mode:
         # Load only contact layers + PIN-Flat immediately
@@ -262,10 +145,8 @@ def build_lod_import_params(
         # Full import — all selected layers immediately
         layers_to_load = all_layers
         extrude_3d     = bool(options.get("extrude_3d", False)) or mesh_3d
-        # Exact mode never filters by area or decimates outlines: a polygon
-        # KLayout draws must appear, at the vertices it was drawn with.
-        min_area       = 0.0 if (match_klayout or exact_geometry) else 0.0004
-        decimate       = 0.0 if (match_klayout or exact_geometry) else 0.002
+        min_area       = 0.0 if match_klayout else 0.0004
+        decimate       = 0.0 if match_klayout else 0.002
         max_polys      = None
 
     stack_mm = None
@@ -273,38 +154,9 @@ def build_lod_import_params(
         stack_mm = Core_Functionality.build_stack_mm_from_xml(
             all_layers, ihp_map, stackup_data   # always across the full stack
         )
-        # Close the gap a partial import leaves under the loaded stack.
-        #
-        # Measured over all_layers — which is LYP-intersect-GDS, i.e. the
-        # layers this FILE actually contains, not the whole PDK. That is the
-        # right set: a file holding only the top of the stack has nothing
-        # below Metal5 to sit on, while a file holding Activ already reaches
-        # the die surface and the shift comes out as zero. Using it also
-        # means a layer promoted later from the detail panel lands
-        # consistently with the ones imported immediately.
-        if bool(options.get("drop_to_die_surface", False)):
-            from core.tech.stackup import drop_stack_to_die_surface
-            stack_mm, shift_mm = drop_stack_to_die_surface(stack_mm)
-            if shift_mm:
-                FreeCAD.Console.PrintMessage(
-                    f"[LOD] Layer stack dropped {shift_mm * 1000.0:.4f} µm so "
-                    f"its lowest layer sits on the die surface. Substrate and "
-                    f"epi are unaffected.\n")
 
     all_keys  = {(l["layer_id"], l["datatype"]) for l in all_layers}
     excl_bbox = all_keys - user_bbox_keys
-
-    # VIA layers are protected from automatic simplification unless the user
-    # turns that off, or has explicitly asked for THIS layer as a bounding box
-    # (force_bbox wins — an explicit choice must beat a blanket protection).
-    keep_via_detail = bool(options.get("keep_via_detail", True))
-    via_keys = (via_layer_keys(all_layers, ihp_map, stackup_data) - user_bbox_keys
-                 if keep_via_detail else set())
-    if via_keys:
-        FreeCAD.Console.PrintMessage(
-            f"[LOD] VIA detail protected on {len(via_keys)} layer(s): "
-            + ", ".join(f"{l}/{d}" for l, d in sorted(via_keys)) + "\n"
-        )
 
     load_kwargs = dict(
         transform               = None,
@@ -318,8 +170,6 @@ def build_lod_import_params(
         flat_layer_keys         = flat_layer_keys,
         force_bbox_keys         = user_bbox_keys,
         exclude_auto_bbox_keys  = excl_bbox,
-        protect_via_keys        = via_keys,
-        exact_geometry          = exact_geometry,
         ihp_map                 = ihp_map,
         stack_mm                = stack_mm,
         contacts_only_3d        = lod_mode,
@@ -346,8 +196,6 @@ def build_lod_import_params(
         mesh_3d            = mesh_3d,
         ihp_map            = ihp_map,
         stackup_data       = stackup_data,
-        via_keys           = via_keys,
-        exact_geometry     = exact_geometry,
     )
 
     return load_kwargs, aux
@@ -380,11 +228,6 @@ def get_lazy_load_params(layer_dict: dict, gds_path: str, aux: dict,
         flat_layer_keys         = flat_layer_keys,
         force_bbox_keys         = set(),
         exclude_auto_bbox_keys  = {key},
-        # Promoting a via layer from the detail panel is the main way vias
-        # reach the document at all — LOD mode folds every non-contact layer
-        # into one body box at import time. Without this the micro-area scan
-        # still flattens the layer the user just asked to see.
-        protect_via_keys        = {key} & set(aux.get("via_keys") or ()),
         ihp_map                 = aux.get("ihp_map", {}),
         stack_mm                = single_stack,
         contacts_only_3d        = False,

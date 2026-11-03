@@ -11,10 +11,9 @@ This guide explains how to get the **DI-PASSIONATE FreeCAD Workbench** running f
 3. [Install Python Dependencies](#3-install-python-dependencies)
 4. [Install the Workbench](#4-install-the-workbench)
 5. [Verify the Installation](#5-verify-the-installation)
-6. [Developer Setup (VS Code)](#6-developer-setup-vs-code) — including [running the tests](#64-running-the-test-suite)
+6. [Developer Setup (VS Code)](#6-developer-setup-vs-code)
 7. [Remote Debugging with debugpy](#7-remote-debugging-with-debugpy)
 8. [Troubleshooting](#8-troubleshooting)
-9. [Updating the Workbench](#updating-the-workbench)
 
 ---
 
@@ -24,13 +23,10 @@ This guide explains how to get the **DI-PASSIONATE FreeCAD Workbench** running f
 |---|---|---|
 | **FreeCAD** | 1.1 | See section 2 |
 | **Python** | 3.11 | Bundled with FreeCAD — no separate install needed |
-| **gdstk** | any recent | Only external dependency; see section 3 |
-| **Draft workbench** | bundled | Ships with FreeCAD; used by the Interactive Router for live preview and snapping |
 | **git** | any recent | To clone the repository |
-| **Internet access** | — | Only required for the Leadframe Online Library |
+| **Internet access** | — | Required for the Leadframe Online Library |
 
-No separate Python installation is needed — FreeCAD ships with its own embedded Python 3.11
-interpreter, and `gdstk` is the only package you have to add.
+No separate Python installation is needed — FreeCAD ships with its own embedded Python 3.11 interpreter.
 
 ---
 
@@ -148,18 +144,10 @@ If you downloaded a ZIP archive instead of using git, extract it so that the fol
 1. Start FreeCAD.
 2. Open the **Workbench selector** (the drop-down at the top of the screen that shows the active workbench name).
 3. Select **Chip-Packaging Workbench** from the list.
-4. Several toolbars should appear, each with a short caption underneath:
-   **Tech**, **Import**, **Render**, **Package**, **Bonding**, **Routing**, **DRC** and
-   **Workbench**. Four further toolbars — *Wire Bonding Session*, *Trace Routing Session*,
-   *Batch Route Session* and *Contact Point Pattern* — stay hidden until the corresponding
-   session is running; that is intentional.
-5. Check the **Report View** (`View → Panels → Report View`). On a healthy start you should see
-   `Commands loaded successfully` and `Toolbars initialized`.
-6. To confirm GDS import works, use **Load GDSII** and select the sample file at
-   `resources/gds/ALL_LNA.gds` inside the workbench folder.
+4. A toolbar labelled **GDSII Tools** should appear with icons for all tools.
+5. To confirm the GDS import works, use **Load GDSII** and select the sample file at `resources/gds/ALL_LNA.gds` inside the workbench folder.
 
-If the workbench does not appear, check the Report View for error messages — most problems are
-caused by a missing `gdstk` install or an incorrect folder name.
+If the workbench does not appear, check the FreeCAD **Report View** panel (`View → Panels → Report View`) for error messages — most problems are caused by a missing `gdstk` install or an incorrect folder name.
 
 ---
 
@@ -211,39 +199,6 @@ Create `.vscode/settings.json` inside the project folder so that the VS Code Pyt
 | **Python** (Microsoft) | Linting, IntelliSense, debugging |
 | **Pylance** | Fast type checking for the FreeCAD stubs |
 | **GitLens** | Enhanced git history view |
-
----
-
-### 6.4 Running the test suite
-
-The workbench ships a headless test suite that runs inside FreeCAD's own interpreter. It
-deliberately does not use pytest: the tests need a live FreeCAD and OCCT, and FreeCAD's
-bundled Python may not have pytest available.
-
-**Windows**
-
-```powershell
-& "C:\Program Files\FreeCAD 1.1\bin\freecadcmd.exe" tests\run_all.py
-```
-
-**Linux**
-
-```bash
-freecadcmd tests/run_all.py
-```
-
-The runner prints a summary, writes the same report to `tests/results.log`, and exits
-non-zero if any check fails — so it can be dropped straight into CI. Expect output ending in:
-
-```
-RESULTS: 703 passed, 0 failed, 703 total
-All checks passed.
-```
-
-Each test module exposes a single `run()` function returning a list of results; add new
-modules to the `MODULES` list in `tests/run_all.py`. Algorithmic code lives in `core/` and is
-Qt-free precisely so it can be covered here — GUI command files cannot be, since `freecadcmd`
-has no GUI.
 
 ---
 
@@ -329,79 +284,6 @@ Some commands require an open FreeCAD document. Use **File → New** to create a
 - Confirm that your `.lyp` file was exported from the same KLayout version/technology as the `.gds` file.
 - The layer IDs in the `.lyp` must match those in the `.gds`. Open the `.gds` in KLayout and compare.
 
-### Interactive Route says "Select the face to route on"
-
-The router needs to know which surface to work on. Select a face in the 3-D view — any face
-of any body, flat or curved — before starting the tool. Selecting a whole object instead
-falls back to its uppermost horizontal face.
-
-### Interactive Route reports "No way through to the cursor"
-
-The head is blocked by copper at the current clearance. This is normal feedback, not an
-error: move the cursor, press `/` to flip the corner, or reduce the clearance. The router
-deliberately refuses to draw a trace that would violate clearance.
-
-### Batch Auto-Route reports "could not be routed and were skipped"
-
-Some pairs genuinely cannot be routed on a single layer at the requested clearance.
-Things to try, in order: enable **Reroute existing traces when a pair is blocked** (on by
-default) so the router may move one existing trace aside; reduce the clearance or the
-trace spacing; queue the hardest pairs *first*, since earlier pairs get the free space;
-or route the remaining connection by hand with **Interactive Route**. The pairs are always
-listed by name — nothing is dropped silently.
-
-### "Center on face" or Contact Point Symmetry says no face is selected
-
-Both need an actual **face** — click the face itself in the 3-D view, not an edge, a vertex
-or the whole object in the tree. They refuse rather than falling back to a different
-reference, because a silently different answer is worse than a clear refusal. Ctrl+click to
-add more faces; both tools accept several at once. In either dialog, remember to press
-*↺ Read current FreeCAD selection* after changing the selection.
-
-### Contact Point Pattern will not start
-
-It needs at least one **face** selected — Ctrl+click the faces to place points on.
-Selecting an existing contact point as well is optional: it copies that point's position
-onto the other faces, and its own face is a valid target too (select it to extend that
-point into a row on the same face).
-
-### Mirrored contact points were "skipped"
-
-Points whose mirror image falls outside the face are reported and skipped rather than
-created off the part. This happens when the pattern is not symmetric with respect to the
-face's own outline — for example points near one edge of a face that is not itself
-symmetric about the mirror axis.
-
-### View in GDS3D asks for an executable
-
-GDS3D is a separate program and is **not bundled** — it is GPL-2 (because of the Gmsh code
-it contains), which cannot be combined with this workbench's GPL-3-or-later into one work.
-Launching it as its own process is fine, so you install it yourself:
-
-- **Prebuilt (all platforms):** <https://sourceforge.net/projects/gds3d/files/> →
-  `GDS3D_1.8.zip`
-- **From source:** <https://github.com/trilomix/GDS3D> — Windows: open `win32/GDS3D.sln` in
-  Visual Studio and build. Linux: `make -C linux` (needs G++, GL, GLU, GLX and X11 dev
-  packages). macOS: `mac/GDS3D.xcodeproj` in Xcode.
-
-The command asks for the executable once and remembers it. Note the SourceForge 1.8 build
-is the original University of Twente release; the Gmsh export (`F` key) and the
-`Material` / `MinSpace` fields are documented in the active forks, so build a fork if the
-export is missing.
-
-### 3-D Route says the pads are not on one body
-
-It connects two pads on **different faces of the same body**, following the surface across
-the shared edges. Pads on two separate objects are refused deliberately — there is no
-surface between them to route along. If a route across one body still fails, raise
-**Max faces crossed**, or increase the clearance.
-
-### Trace routing finds no path on a dense board
-
-The grid-based **Trace Routing** tool searches between two fixed points and can legitimately
-fail where a board is congested. Reduce the clearance, loosen the maximum bend angle, or use
-the **Interactive Route** tool instead and steer around the obstruction yourself.
-
 ### Online library shows no packages / loads slowly
 
 The library fetches data from the MirrorSemi website. Check your internet connection. A corporate proxy or firewall may block the requests.
@@ -414,38 +296,6 @@ Install it into FreeCAD's Python:
 "C:\Program Files\FreeCAD 1.1\bin\python.exe" -m pip install debugpy
 ```
 
-### The desktop shortcut opens FreeCAD but not the workbench
-
-The shortcut passes FreeCAD a generated macro
-(`resources/DI-PASSIONATE_Launch.FCMacro`) that activates the workbench once the GUI is
-up. Open the Report view (**View → Panels → Report view**) and look for a `[Launcher]`
-line:
-
-- *"Chip-Packaging workbench active"* — it worked; nothing to do.
-- *"did not register in time"* — the workbench was not discovered within about ten
-  seconds. Confirm it appears in the workbench dropdown at all; if it does not, that is
-  the real problem (see *Workbench does not appear in the selector* above).
-- No `[Launcher]` line at all — FreeCAD did not run the macro. Check the shortcut's
-  **Target** in its Properties dialog: it should be `FreeCAD.exe` with the macro path in
-  quotes as its argument. Re-run **Create Desktop Shortcut** to regenerate it.
-
-### The desktop shortcut was created but is nowhere on the desktop
-
-On managed Windows 11 the Desktop is usually redirected to OneDrive, and the shortcut is
-written there. The command reports the full path it used in the confirmation dialog and
-in the Report view — check that path before assuming nothing happened.
-
-### The interface stays light / the theme does not apply
-
-The chip skin is applied only while this workbench is the active one, and only if it has
-not been switched off. Choose an accent from **Chip Theme ▾** in the Workbench toolbar; a
-`[ChipTheme]` line in the Report view confirms it. Selecting **Off** there disables it
-permanently, and the choice is remembered between sessions.
-
-If the 3-D background stays dark after switching the theme off, FreeCAD may not have
-reloaded the viewport parameters — reopening the document restores them. The original
-colours are stashed before they are replaced, so they are not lost.
-
 ### FreeCAD crashes on startup after installing the workbench
 
 A syntax error in a workbench file can crash the FreeCAD Python loader. Check the FreeCAD log file:
@@ -457,21 +307,11 @@ A syntax error in a workbench file can crash the FreeCAD Python loader. Check th
 
 ## Updating the Workbench
 
-If you installed via git, pull the latest changes.
-
-**Windows (PowerShell):**
-
-```powershell
-cd "$env:APPDATA\FreeCAD\Mod\DI-PASSIONATE-FreeCAD"
-git pull
-```
-
-**Linux / macOS:**
+If you installed via git, pull the latest changes:
 
 ```bash
-cd ~/.local/share/FreeCAD/Mod/DI-PASSIONATE-FreeCAD
+cd "%APPDATA%\FreeCAD\Mod\DI-PASSIONATE-FreeCAD"
 git pull
 ```
 
-Restart FreeCAD after updating. If an update adds a new dependency, re-run the pip command
-from [section 3](#3-install-python-dependencies).
+Restart FreeCAD after updating.

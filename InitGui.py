@@ -10,35 +10,18 @@ if os.environ.get("FREECAD_DEBUGPY") == "1":
     debugpy.wait_for_client()
     FreeCAD.Console.PrintMessage("debugpy: attached.\n")
 
-# ── Module-name clash check ────────────────────────────────────────────────────
-# Runs before any workbench module is imported, so a clash is reported even
-# when it is the thing that breaks the imports below (see dip_package_guard.py).
-try:
-    import sys as _sys
-    import dip_package_guard as _guard
-    _guard_root = _guard.workbench_root()
-    _guard_msg = _guard.describe(_guard.find_conflicts(_guard_root, _sys.path), _guard_root)
-    if _guard_msg:
-        FreeCAD.Console.PrintError(_guard_msg)
-except Exception as e:
-    FreeCAD.Console.PrintWarning(f"Module-name clash check failed: {e}\n")
-
 # ── Command imports ────────────────────────────────────────────────────────────
 try:
     from gds import GDSCommand
     from gds import ImportChipProxyCommand
-    from gds import PadPickerCommand   # noqa: F401  (Define Pads from GDS)
-    from gds import StackLevelsCommand   # noqa: F401  (Complete Stack from PDK)
     from gds import ChipTransformCommand
     from gds import ShowLayerSliderCommand
-    from gds import LayerDisplay   # noqa: F401  (per-layer display quality)
+    from gds import TogglePerformanceModeCommand
     from gds import ToggleViaDetailCommand
-    from gds import ClearGDSCacheCommand   # noqa: F401
-    from gds import ChipTextureCommand   # noqa: F401
-    from gds import ViewInGDS3DCommand   # noqa: F401
     from ui import LODManager as _LODManager  # noqa: F401  (side-effect: registers WorkbenchState provider)
     from gds import ShowDetailLayerPanelCommand
     from leadframe import LeadframeCommand
+    from leadframe import PackageConfiguratorCommand
     from leadframe import LeadframeLibraryCommand
     from leadframe import PinNumberingCommand
     from housing import HousingCommand
@@ -47,33 +30,15 @@ try:
     from wirebond import WirebondCommand
     from wirebond import SetContactPointsOnFaceCommand
     from wirebond import InteractiveContactPointCommand
-    from wirebond import ContactPointSymmetryCommand   # noqa: F401
-    from wirebond import ContactPointPatternCommand   # noqa: F401
     from help import HelpGuideCommand
     from help import AboutCommand
     from session import SaveSessionCommand
     from session import LoadSessionCommand
     from session import SessionMenuCommand
     from ui import TechConfigDialog  # noqa: F401  (side-effect: registers TechConfigCommand)
-    from ui import ChipTheme   # noqa: F401
-    from ui import DesktopShortcutCommand   # noqa: F401
     from pcb import PCBImportCommand      # noqa: F401
     from pcb import PCBPlacementCommand   # noqa: F401
     from routing import TraceRoutingCommand   # noqa: F401
-    from routing import InteractiveRouterCommand   # noqa: F401
-    from routing import BatchRouteCommand   # noqa: F401
-    from routing import TraceDragCommand   # noqa: F401
-    from routing import BodyRouteCommand   # noqa: F401
-    from drc import DRCCommand   # noqa: F401
-    from thermal import MaterialsCommand   # noqa: F401
-    from thermal import ThermalExportCommand   # noqa: F401
-    from wirebond import NetlistCommands   # noqa: F401
-    from wirebond import PackagePadsCommand   # noqa: F401
-    from gds import StackDieCommand   # noqa: F401
-    from gds import DiesPanelCommand   # noqa: F401
-    from kicad import KicadImportCommand   # noqa: F401
-    from kicad import NetlistCommands   # noqa: F401
-    from ports import PortCommand   # noqa: F401
 
     FreeCAD.Console.PrintMessage("Commands loaded successfully\n")
 except Exception as e:
@@ -85,8 +50,8 @@ except Exception as e:
 # runs the first time this specific workbench is activated — a document may
 # be opened before that ever happens). This makes native FreeCAD save/open
 # automatically capture and restore the handful of workbench state values
-# that live in Python module-level globals (VIA detail mode, LOD manager)
-# rather than on a DocumentObject — see session/WorkbenchState.py.
+# that live in Python module-level globals (fast-mesh mode, VIA detail mode,
+# LOD manager) rather than on a DocumentObject — see session/WorkbenchState.py.
 try:
     from session import WorkbenchState
     FreeCAD.addDocumentObserver(WorkbenchState.SaveObserver())
@@ -114,8 +79,6 @@ class AdvancedMenuCommand:
         ("Layer on Leadframe",       "LayeronLeadframe",           "Layer on Leadframe.png"),
         ("Define Contact Points",    "DefineContactPointsCommand", "Define_Contact_Points.svg"),
         ("Pin Numbering",            "PinNumberingCommand",        "Pin_Numbering.svg"),
-        ("Clear GDSII Import Cache", "ClearGDSCacheCommand",       "Clear_Cache.svg"),
-        ("Create Desktop Shortcut",  "CreateDesktopShortcutCommand", "Desktop_Shortcut.svg"),
     ]
 
     def GetResources(self):
@@ -127,7 +90,7 @@ class AdvancedMenuCommand:
         }
 
     def Activated(self):
-        from compat import QtWidgets, QtGui
+        from compat import QtWidgets, QtGui, exec_menu
         import FreeCADGui
         from Get_Path import get_icon
 
@@ -141,7 +104,7 @@ class AdvancedMenuCommand:
                 act = menu.addAction(label)
             actions.append((act, cmd_name))
 
-        chosen = menu.exec_(QtGui.QCursor.pos())
+        chosen = exec_menu(menu, QtGui.QCursor.pos())
         for act, cmd_name in actions:
             if chosen == act:
                 FreeCADGui.runCommand(cmd_name)
@@ -179,12 +142,6 @@ class MyWorkbench(FreeCADGui.Workbench):
         "Wire Bonding Session":     "Confirm / Abort",
         "Trace Routing":            "Routing",
         "Trace Routing Session":    "Confirm / Abort / End",
-        "Batch Route Session":      "Route All / Cancel",
-        "Contact Point Pattern":    "Confirm / Undo / Abort",
-        "Ports":                    "Ports",
-        "Netlist":                  "Netlist",
-        "Design Rule Check":        "DRC",
-        "Thermal Simulation":       "Thermal",
         "Session and Help":         "Workbench",
     }
 
@@ -205,13 +162,8 @@ class MyWorkbench(FreeCADGui.Workbench):
                 [
                     "PCBImportCommand",
                     "PCBPlacementCommand",
-                    "KicadImportCommand",
                     "GDSCommand",
                     "ImportChipProxyCommand",
-                    "DefineChipPadsCommand",
-                    "CompleteStackCommand",
-                    "ChipTextureCommand",
-                    "ViewInGDS3DCommand",
                 ],
             )
 
@@ -219,6 +171,7 @@ class MyWorkbench(FreeCADGui.Workbench):
             self.appendToolbar(
                 "Rendering",
                 [
+                    "TogglePerformanceModeCommand",
                     "ToggleViaDetailCommand",
                     "ShowDetailLayerPanelCommand",
                     "ShowLayerSliderCommand",
@@ -229,15 +182,11 @@ class MyWorkbench(FreeCADGui.Workbench):
             self.appendToolbar(
                 "Package Assembly",
                 [
+                    "PackageConfiguratorCommand",
                     "ChipTransformCommand",
                     "LeadframeLibraryCommand",
                     "SetContactPointsOnFaceCommand",
                     "InteractiveContactPointCommand",
-                    "DetectPackagePadsCommand",
-                    "StackDieCommand",
-                    "ShowDiesPanelCommand",
-                    "ContactPointSymmetryCommand",
-                    "ContactPointPatternCommand",
                     "ShowContactPointPanelCommand",
                 ],
             )
@@ -248,9 +197,6 @@ class MyWorkbench(FreeCADGui.Workbench):
                 [
                     "WirebondCommand",
                     "WireBumpConfiguratorCommand",
-                    "ProposeNetlistCommand",
-                    "ImportNetlistCommand",
-                    "ExportBondingDiagramCommand",
                 ],
             )
 
@@ -273,11 +219,7 @@ class MyWorkbench(FreeCADGui.Workbench):
             self.appendToolbar(
                 "Trace Routing",
                 [
-                    "InteractiveRouteCommand",
                     "TraceRoutingCommand",
-                    "StartBatchRouteCommand",
-                    "DragTraceCommand",
-                    "BodyRouteCommand",
                 ],
             )
 
@@ -298,71 +240,6 @@ class MyWorkbench(FreeCADGui.Workbench):
                 ],
             )
 
-            # ── Batch Route Session (contextual) ────────────────────────
-            # Route All executes the whole queue and ends the session; Cancel
-            # ends it without routing anything still queued. Hidden at
-            # startup by _hide_batch_route_session_toolbar below; shown/
-            # hidden dynamically by
-            # routing.BatchRouteSession._set_session_toolbar_visible() —
-            # same contextual-toolbar pattern as "Trace Routing Session".
-            self.appendToolbar(
-                "Batch Route Session",
-                [
-                    "RouteAllCommand",
-                    "CancelBatchRouteCommand",
-                ],
-            )
-
-            # ── Contact Point Pattern (contextual) ──────────────────────
-            # Confirm keeps the placed points, Undo drops the last one,
-            # Abort removes them all. Hidden at startup by
-            # _hide_contact_point_pattern_toolbar below; shown/hidden
-            # dynamically by
-            # wirebond.ContactPointPatternCommand._set_session_toolbar_visible
-            # — same contextual-toolbar pattern as the routing sessions.
-            self.appendToolbar(
-                "Contact Point Pattern",
-                [
-                    "ConfirmPatternCommand",
-                    "UndoPatternCommand",
-                    "AbortPatternCommand",
-                ],
-            )
-
-            # ── Ports (simulation ports drawn on the layout) ─────────────
-            self.appendToolbar(
-                "Ports",
-                [
-                    "DefinePortCommand",
-                ],
-            )
-
-            # ── Netlist (KiCad nets and the ratsnest) ────────────────────
-            self.appendToolbar(
-                "Netlist",
-                [
-                    "ShowNetsPanelCommand",
-                    "UpdateRatsnestCommand",
-                ],
-            )
-
-            # ── Design Rule Check ────────────────────────────────────────
-            self.appendToolbar(
-                "Design Rule Check",
-                [
-                    "ShowDRCPanelCommand",
-                ],
-            )
-
-            # ── Thermal Simulation ───────────────────────────────────────
-            self.appendToolbar(
-                "Thermal Simulation",
-                [
-                    "AssignMaterialsCommand",
-                    "ThermalExportCommand",
-                ],
-            )
-
             # ── Session and Help ─────────────────────────────────────────
             # NOTE: deliberately NOT named "Workbench" — FreeCAD's own
             # built-in workbench-selector widget already uses that exact
@@ -374,7 +251,6 @@ class MyWorkbench(FreeCADGui.Workbench):
                 [
                     "SessionMenuCommand",
                     "AdvancedMenuCommand",
-                    "ChipThemeCommand",
                     "HelpGuideCommand",
                     "AboutCommand",
                 ],
@@ -390,8 +266,6 @@ class MyWorkbench(FreeCADGui.Workbench):
             _QtCore.QTimer.singleShot(400, self._inject_tech_status_label)
             _QtCore.QTimer.singleShot(400, self._hide_wirebond_session_toolbar)
             _QtCore.QTimer.singleShot(400, self._hide_trace_routing_session_toolbar)
-            _QtCore.QTimer.singleShot(400, self._hide_batch_route_session_toolbar)
-            _QtCore.QTimer.singleShot(400, self._hide_contact_point_pattern_toolbar)
 
             _FreeCAD.Console.PrintMessage("Toolbars initialized\n")
         except Exception as e:
@@ -436,45 +310,6 @@ class MyWorkbench(FreeCADGui.Workbench):
             import FreeCAD as _FC
             _FC.Console.PrintWarning(
                 f"Trace Routing Session toolbar hide failed: {exc}\n"
-            )
-
-    def _hide_batch_route_session_toolbar(self):
-        """Hide the contextual Batch Route Session toolbar at startup — it
-        only becomes visible while a batch route session is actually active
-        (see routing.BatchRouteSession._set_session_toolbar_visible)."""
-        try:
-            from compat import QtWidgets as _QW
-            import FreeCAD as _FC
-            import FreeCADGui as _FCGui
-
-            mw = _FCGui.getMainWindow()
-            for tb in mw.findChildren(_QW.QToolBar):
-                if tb.windowTitle() == "Batch Route Session":
-                    tb.setVisible(False)
-                    break
-        except Exception as exc:
-            import FreeCAD as _FC
-            _FC.Console.PrintWarning(
-                f"Batch Route Session toolbar hide failed: {exc}\n"
-            )
-
-    def _hide_contact_point_pattern_toolbar(self):
-        """Hide the contextual Contact Point Pattern toolbar at startup — it
-        only becomes visible while a pattern session is actually active (see
-        wirebond.ContactPointPatternCommand._set_session_toolbar_visible)."""
-        try:
-            from compat import QtWidgets as _QW
-            import FreeCADGui as _FCGui
-
-            mw = _FCGui.getMainWindow()
-            for tb in mw.findChildren(_QW.QToolBar):
-                if tb.windowTitle() == "Contact Point Pattern":
-                    tb.setVisible(False)
-                    break
-        except Exception as exc:
-            import FreeCAD as _FC
-            _FC.Console.PrintWarning(
-                f"Contact Point Pattern toolbar hide failed: {exc}\n"
             )
 
     _TOOLBAR_LABEL_MAX_RETRIES = 15   # ~15 s — see _inject_toolbar_labels
@@ -572,7 +407,13 @@ class MyWorkbench(FreeCADGui.Workbench):
 
                 lbl = _QW.QLabel(self._TOOLBAR_LABELS[name])
                 lbl.setAlignment(_QC.Qt.AlignCenter)
-                lbl.setStyleSheet(self._caption_style())
+                lbl.setStyleSheet(
+                    "QLabel {"
+                    "  color: #546e7a;"
+                    "  font-size: 9px;"
+                    "  font-weight: bold;"
+                    "}"
+                )
                 outer.addWidget(lbl)
 
                 tb.clear()   # detaches the actions from this toolbar's own
@@ -623,7 +464,15 @@ class MyWorkbench(FreeCADGui.Workbench):
             )
 
             # Style: subtle inset look
-            lbl.setStyleSheet(self._status_label_style())
+            lbl.setStyleSheet(
+                "QLabel {"
+                "  background: #F5F5F5;"
+                "  border: 1px solid #BDBDBD;"
+                "  border-radius: 3px;"
+                "  padding: 2px 6px;"
+                "  margin: 2px 4px;"
+                "}"
+            )
 
             target_tb.addSeparator()
             target_tb.addWidget(lbl)
@@ -637,81 +486,17 @@ class MyWorkbench(FreeCADGui.Workbench):
                 f"TechConfig: status label injection failed: {exc}\n"
             )
 
-    # ── Chip skin ─────────────────────────────────────────────────────────
-    # Both widgets below set an explicit per-widget stylesheet, which beats
-    # anything inherited from the main window — so they have to ask for the
-    # themed colours rather than receive them. Their light-theme originals
-    # stay as the fallback for anyone who switches the skin off; a near-white
-    # status label on a dark FreeCAD was exactly the problem.
-
-    def _caption_style(self):
-        try:
-            from ui import ChipTheme
-            flavour = ChipTheme.active_flavour()
-            if flavour:
-                import core.theme as _theme
-                return _theme.caption_style(flavour)
-        except Exception:
-            pass
-        return ("QLabel {"
-                "  color: #546e7a;"
-                "  font-size: 9px;"
-                "  font-weight: bold;"
-                "}")
-
-    def _status_label_style(self):
-        try:
-            from ui import ChipTheme
-            flavour = ChipTheme.active_flavour()
-            if flavour:
-                import core.theme as _theme
-                return _theme.status_label_style(flavour)
-        except Exception:
-            pass
-        return ("QLabel {"
-                "  background: #F5F5F5;"
-                "  border: 1px solid #BDBDBD;"
-                "  border-radius: 3px;"
-                "  padding: 2px 6px;"
-                "  margin: 2px 4px;"
-                "}")
-
-    def Activated(self):
-        """
-        Put the chip skin on when this workbench comes to the front.
-
-        Scoped to the workbench on purpose: leaving it restores whatever
-        FreeCAD theme the user had, so installing this workbench never
-        changes how the rest of FreeCAD looks.
-        """
-        try:
-            from ui import ChipTheme
-            # One-shot: the skin used to be on unless switched off. Anyone
-            # carrying a flavour from that era is switched back to FreeCAD's
-            # own colours here, once.
-            ChipTheme.migrate_to_opt_in()
-            if ChipTheme.is_enabled():
-                ChipTheme.apply_theme()
-            else:
-                # Off, but a previous session may have left our viewport
-                # colours behind — the stylesheet goes with the window, the
-                # background does not.
-                ChipTheme.ensure_native_background()
-        except Exception as exc:
-            import FreeCAD as _FC
-            _FC.Console.PrintWarning(f"Chip theme not applied: {exc}\n")
-
-    def Deactivated(self):
-        try:
-            from ui import ChipTheme
-            ChipTheme.remove_theme()
-        except Exception as exc:
-            import FreeCAD as _FC
-            _FC.Console.PrintWarning(f"Chip theme not removed: {exc}\n")
-
     def GetClassName(self):
         return "Gui::PythonWorkbench"
 
 
-FreeCADGui.addWorkbench(MyWorkbench())
+try:
+    _registered_workbenches = FreeCADGui.listWorkbenches()
+except AttributeError:
+    _registered_workbenches = {}
+
+if "MyWorkbench" not in _registered_workbenches:
+    FreeCADGui.addWorkbench(MyWorkbench())
+else:
+    FreeCAD.Console.PrintMessage("GDSII Workbench already registered\n")
 FreeCAD.Console.PrintMessage("GDSII Workbench registration attempted\n")

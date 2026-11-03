@@ -82,70 +82,18 @@ _IOPAD_NAME_SUBSTRINGS  = ("IOPAD",)
 
 # ── footprint ──────────────────────────────────────────────────────────────────
 
-# Layers that state the die outline explicitly, most authoritative first.
-# The raw bounding box of everything in a cell is NOT the die: labels,
-# alignment marks, dummy fill and P&R markers all routinely stick out past
-# the physical edge. A layout that draws its outline says so on one of these.
-#
-#   EdgeSeal.boundary  — the seal ring, i.e. the physical edge of the diced
-#                        die. This is what a package actually contains, so it
-#                        wins over the design-side boundary below.
-#   prBoundary.boundary — the place-and-route boundary: design intent, and on
-#                        a real layout a fraction of a micron larger.
-#
-# (layer, datatype, name). IHP SG13G2 numbering; harmless on other PDKs,
-# where these layers simply are not present and the bounding box is used.
-#
-# Deliberately an EXPLICIT list, not a rule like "any layer with datatype 4".
-# Datatype 4 is this PDK's generic *boundary purpose*, not a die-outline
-# marker: Metal1.boundary is 8/4, Activ.boundary and GatPoly.boundary follow
-# the same pattern. Treating /4 as "the die outline" would let a metal layer
-# define the die.
-#
-# 235/4 is listed last and deliberately: it is SKY130's prBoundary AND the
-# layer Cadence Virtuoso writes a prBoundary on by default, which is why it
-# turns up in SG13G2 exports too. Ordering matters there — an SG13G2 layout
-# carrying both keeps using its own EdgeSeal, while a SKY130 layout, which
-# has no seal-ring layer, gets 235/4 instead of the raw bounding box.
-DIE_OUTLINE_LAYERS = (
-    (39, 4, "EdgeSeal.boundary"),            # IHP SG13G2
-    (189, 4, "prBoundary.boundary"),         # IHP SG13G2
-    (235, 4, "prBoundary.boundary"),         # SKY130, and Cadence's default
-)
-
-# An outline layer is only believed if it accounts for at least this much of
-# the overall bounding box area. Guards against a lone stray marker sitting
-# on an outline layer being mistaken for the whole die — which would make the
-# proxy far too small, a much worse error than being a micron too big.
-_OUTLINE_MIN_AREA_RATIO = 0.80
-
-
-def is_artifact_cell(name: str) -> bool:
+def get_die_footprint_mm(gds_path) -> tuple:
     """
-    Whether a cell is tooling metadata rather than layout.
+    Return (xmin, ymin, xmax, ymax) in mm — the true top-cell bounding box,
+    via gdstk's native Cell.bounding_box(). Fast: no OCCT, no tessellation,
+    independent of how many polygons the GDS actually contains.
 
-    Cadence Virtuoso writes a '$$$CONTEXT_INFO$$$' cell into exported GDS to
-    record the library context. It carries no geometry of its own but it does
-    reference others, so it appears in top_level() and has a bounding box —
-    which is how it ends up silently enlarging a die that was measured by
-    unioning every top cell.
+    Raises ValueError if the GDS has no top-level geometry to measure.
     """
-    return str(name).startswith("$$$")
+    lib   = gdstk.read_gds(str(gds_path))
+    scale = (lib.unit * 1000.0) if getattr(lib, "unit", None) else 0.001
+    cells = lib.top_level() or lib.cells
 
-
-def die_cells(lib):
-    """
-    The real top-level cells of *lib*, artifact cells removed.
-
-    Falls back to the unfiltered list rather than returning nothing, so a
-    library consisting only of oddly-named cells still measures.
-    """
-    tops = lib.top_level() or lib.cells
-    real = [c for c in tops if not is_artifact_cell(c.name)]
-    return real or list(tops)
-
-
-def _bbox_of(cells):
     xmin = ymin = float("inf")
     xmax = ymax = float("-inf")
     found = False
@@ -157,86 +105,11 @@ def _bbox_of(cells):
         xmin = min(xmin, x0); ymin = min(ymin, y0)
         xmax = max(xmax, x1); ymax = max(ymax, y1)
         found = True
-    return (xmin, ymin, xmax, ymax) if found else None
 
+    if not found:
+        raise ValueError(f"No geometry found in '{gds_path}' to derive a footprint from.")
 
-def _outline_extent(cells, layer, datatype):
-    """Extent of one layer across *cells*, in library units, or None."""
-    xmin = ymin = float("inf")
-    xmax = ymax = float("-inf")
-    found = False
-    for cell in cells:
-        # Filtered in gdstk's C++ side, so this does not materialise the
-        # millions of polygons a full layout contains.
-        for poly in cell.get_polygons(depth=None, layer=layer,
-                                       datatype=datatype):
-            (x0, y0), (x1, y1) = poly.bounding_box()
-            xmin = min(xmin, x0); ymin = min(ymin, y0)
-            xmax = max(xmax, x1); ymax = max(ymax, y1)
-            found = True
-    return (xmin, ymin, xmax, ymax) if found else None
-
-
-def _area(box):
-    return (box[2] - box[0]) * (box[3] - box[1])
-
-
-def describe_die_footprint(gds_path) -> dict:
-    """
-    The die outline, and where it came from.
-
-    Returns {"footprint_mm", "source", "cell", "candidates"} where
-    "candidates" lists every outline layer found with its own extent, so the
-    import dialog can show what was considered and not just what was chosen.
-
-    Raises ValueError if there is no geometry to measure.
-    """
-    lib = gdstk.read_gds(str(gds_path))
-    scale = (lib.unit * 1000.0) if getattr(lib, "unit", None) else 0.001
-    cells = die_cells(lib)
-
-    box = _bbox_of(cells)
-    if box is None:
-        raise ValueError(
-            f"No geometry found in '{gds_path}' to derive a footprint from.")
-
-    def to_mm(b):
-        return (b[0] * scale, b[1] * scale, b[2] * scale, b[3] * scale)
-
-    chosen, source = box, "bounding box of all geometry"
-    candidates = []
-    bbox_area = _area(box)
-    for layer, datatype, name in DIE_OUTLINE_LAYERS:
-        ext = _outline_extent(cells, layer, datatype)
-        if ext is None:
-            continue
-        ratio = (_area(ext) / bbox_area) if bbox_area > 0 else 0.0
-        candidates.append({"name": name, "layer": layer, "datatype": datatype,
-                            "footprint_mm": to_mm(ext), "area_ratio": ratio})
-        if chosen is box and ratio >= _OUTLINE_MIN_AREA_RATIO:
-            chosen = ext
-            source = f"{name} layer ({layer}/{datatype})"
-
-    return {
-        "footprint_mm": to_mm(chosen),
-        "source": source,
-        "cell": cells[0].name if len(cells) == 1 else
-                 max(cells, key=lambda c: _area(c.bounding_box() or (0, 0, 0, 0))).name,
-        "candidates": candidates,
-    }
-
-
-def get_die_footprint_mm(gds_path) -> tuple:
-    """
-    Return (xmin, ymin, xmax, ymax) in mm — the die outline.
-
-    Prefers an explicit outline layer when the layout draws one (see
-    DIE_OUTLINE_LAYERS); otherwise the bounding box of the real top-level
-    cells. Fast either way: no OCCT, no tessellation.
-
-    Raises ValueError if the GDS has no geometry to measure.
-    """
-    return describe_die_footprint(gds_path)["footprint_mm"]
+    return (xmin * scale, ymin * scale, xmax * scale, ymax * scale)
 
 
 # ── thickness ──────────────────────────────────────────────────────────────────
@@ -410,7 +283,9 @@ def get_named_pad_positions_mm(gds_path, name_prefixes=(), name_substrings=()) -
 
     lib   = gdstk.read_gds(str(gds_path))
     scale = (lib.unit * 1000.0) if getattr(lib, "unit", None) else 0.001
-    top_cells = die_cells(lib)
+    top_cells = [c for c in (lib.top_level() or lib.cells) if not c.name.startswith("$$$")]
+    if not top_cells:
+        top_cells = lib.top_level() or lib.cells
 
     cache: dict = {}
     pads = []
@@ -503,7 +378,7 @@ def get_pad_positions_mm(gds_path, ihp_map: dict, selected_layers=None, top_n: i
         return []
 
     scale     = (lib.unit * 1000.0) if getattr(lib, "unit", None) else 0.001
-    top_cells = die_cells(lib)
+    top_cells = lib.top_level() or lib.cells
 
     pads = []
     for lid, dt, edi_name in candidates:
@@ -612,16 +487,11 @@ def extract_chip_proxy(gds_path, lyp_path=None, map_path=None, xml_path=None,
         selected_layers = layers
     stackup_data = parse_stackup_xml(xml_path) if xml_path else {}
 
-    outline = describe_die_footprint(gds_path)
-    xmin, ymin, xmax, ymax = outline["footprint_mm"]
+    xmin, ymin, xmax, ymax = get_die_footprint_mm(gds_path)
     thickness_mm, z0_mm, thickness_source = get_die_thickness_mm(
         stackup_data, substrate_thickness_um
     )
     pads = get_bond_pad_positions_mm(gds_path, ihp_map, selected_layers, top_n_pad_layers)
-    from core.pad_names import read_labels_from_file, label_for_pad
-    labels = read_labels_from_file(gds_path)
-    for pad in pads:
-        pad["label"] = label_for_pad(labels, pad)
 
     return {
         "source_gds": str(gds_path),
@@ -629,46 +499,11 @@ def extract_chip_proxy(gds_path, lyp_path=None, map_path=None, xml_path=None,
         "source_map": str(map_path) if map_path else None,
         "source_xml": str(xml_path) if xml_path else None,
         "footprint_mm": (xmin, ymin, xmax, ymax),
-        "footprint_source": outline["source"],
-        "footprint_candidates": outline["candidates"],
-        "die_cell": outline["cell"],
         "thickness_mm": thickness_mm,
         "z0_mm": z0_mm,
         "thickness_source": thickness_source,
         "pads": pads,
-        "labels_found": len(labels),
     }
-
-
-def apply_dimension_overrides(proxy_data: dict, width_mm=None, length_mm=None,
-                               thickness_mm=None) -> dict:
-    """
-    Replace the measured outline with values the user typed, in place.
-
-    Resizing keeps the footprint's ORIGIN and grows/shrinks towards +X/+Y
-    rather than re-centring. The pad positions in proxy_data were measured in
-    the same coordinates, so moving the origin would slide every pad off the
-    die — and the pads are the one thing on a proxy that has to stay put.
-
-    A None leaves that dimension as measured; each override records itself in
-    the corresponding *_source so the provenance stays honest.
-    """
-    x0, y0, x1, y1 = proxy_data["footprint_mm"]
-    changed = []
-    if width_mm is not None and float(width_mm) > 0:
-        x1 = x0 + float(width_mm)
-        changed.append("width")
-    if length_mm is not None and float(length_mm) > 0:
-        y1 = y0 + float(length_mm)
-        changed.append("length")
-    if changed:
-        proxy_data["footprint_mm"] = (x0, y0, x1, y1)
-        proxy_data["footprint_source"] = f"entered by hand ({', '.join(changed)})"
-
-    if thickness_mm is not None and float(thickness_mm) > 0:
-        proxy_data["thickness_mm"] = float(thickness_mm)
-        proxy_data["thickness_source"] = "entered_by_hand"
-    return proxy_data
 
 
 # ── FreeCAD object construction ─────────────────────────────────────────────────
@@ -741,26 +576,6 @@ def build_chip_proxy_object(doc, proxy_data: dict, name: str = "Chip"):
         "App::PropertyString", "ThicknessSource", "ChipProxy",
         "How the die thickness was derived — see core.chip_proxy.get_die_thickness_mm",
     )
-    block.addProperty(
-        "App::PropertyString", "FootprintSource", "ChipProxy",
-        "How the die outline was derived — an outline layer, the overall "
-        "bounding box, or values entered by hand",
-    )
-    # The outline as built, so it survives the block being moved. Shape
-    # .BoundBox includes the Placement and therefore stops reporting the die's
-    # own size the moment a chip is positioned on a carrier.
-    block.addProperty(
-        "App::PropertyFloat", "DieWidth", "ChipProxy",
-        "Die width (X) in mm, as built",
-    )
-    block.addProperty(
-        "App::PropertyFloat", "DieLength", "ChipProxy",
-        "Die length (Y) in mm, as built",
-    )
-    block.addProperty(
-        "App::PropertyFloat", "DieThickness", "ChipProxy",
-        "Die thickness (Z) in mm, as built",
-    )
 
     block.IsChipProxy     = True
     block.SourceGDS       = proxy_data.get("source_gds") or ""
@@ -768,10 +583,6 @@ def build_chip_proxy_object(doc, proxy_data: dict, name: str = "Chip"):
     block.SourceMAP       = proxy_data.get("source_map") or ""
     block.SourceXML       = proxy_data.get("source_xml") or ""
     block.ThicknessSource = proxy_data.get("thickness_source") or ""
-    block.FootprintSource = proxy_data.get("footprint_source") or ""
-    block.DieWidth     = float(w)
-    block.DieLength    = float(h)
-    block.DieThickness = float(t)
 
     grp.addObject(block)
 
@@ -785,16 +596,38 @@ def build_chip_proxy_object(doc, proxy_data: dict, name: str = "Chip"):
     # the existing wire-bonding tool snaps to these completely unchanged —
     # resolve_snap_point() reads the ContactPoint property directly, never
     # the marker's own Shape, so this is safe regardless of marker shape.
-    # Built by core.gds_pads.pad_marker, which is also what the pad picker
-    # uses — a pad found automatically and a pad pointed at by hand have to
-    # be the same kind of object, or every tool downstream would need to know
-    # which way it was made.
     pad_t = max(min(t * 0.05, 0.01), 1e-4)   # thin — a visual pad thickness, not structural
-    from core.gds_pads import pad_marker
     for i, pad in enumerate(proxy_data.get("pads", []), start=1):
-        marker = pad_marker(doc, f"{base_name}_Pad_{i:03d}", pad, z0 + t,
-                            pad_t, source_object=block.Name)
-        marker.Label = f"{display_name} {pad.get('label') or pad.get('name', 'Pad')} {i}"
+        pad_w = pad.get("width_mm", _DEFAULT_PAD_SIZE_MM) or _DEFAULT_PAD_SIZE_MM
+        pad_h = pad.get("height_mm", _DEFAULT_PAD_SIZE_MM) or _DEFAULT_PAD_SIZE_MM
+
+        marker = doc.addObject("Part::Feature", f"{base_name}_Pad_{i:03d}")
+        marker.Shape = Part.makeBox(
+            pad_w, pad_h, pad_t,
+            Base.Vector(pad["x_mm"] - pad_w / 2.0, pad["y_mm"] - pad_h / 2.0, z0 + t),
+        )
+        marker.Label = f"{display_name} {pad.get('name', 'Pad')} {i}"
+
+        # Wire-bond snap point: the top face centre of the pad marker —
+        # same "top of the visible pad surface" convention ContactPointTool
+        # uses for real pad geometry.
+        pt = Base.Vector(pad["x_mm"], pad["y_mm"], z0 + t + pad_t)
+
+        marker.addProperty("App::PropertyVector", "ContactPoint", "Wirebond",
+                            "Snap point for wire bonding")
+        marker.addProperty("App::PropertyString", "SourceObject", "Wirebond",
+                            "Source object this point belongs to")
+        marker.addProperty("App::PropertyBool", "IsContactPoint", "Wirebond",
+                            "Wire-bond contact point marker")
+        marker.ContactPoint   = pt
+        marker.SourceObject   = block.Name
+        marker.IsContactPoint = True
+
+        if FreeCAD.GuiUp:
+            marker.ViewObject.ShapeColor   = (0.90, 0.30, 0.10)   # orange — die-side
+            marker.ViewObject.Transparency = 0
+            marker.ViewObject.DisplayMode  = "Flat Lines"
+
         grp.addObject(marker)
 
     doc.recompute()

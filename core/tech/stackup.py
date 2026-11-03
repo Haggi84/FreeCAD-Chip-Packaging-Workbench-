@@ -100,12 +100,7 @@ def build_stack_mm_from_xml(selected_layers, ihp_map, stackup_data) -> dict:
         dt  = L.get("datatype",  0)
         key = (lid, dt)
 
-        # (layer, datatype) first: SKY130 draws met1 on 68/20 and the via
-        # above it on 68/44, so a bare number cannot tell them apart and one
-        # would silently inherit the other's Z position.
-        entry = stackup_data.get(key)
-        if entry is None:
-            entry = stackup_data.get(lid)
+        entry = stackup_data.get(lid)
         if entry is None:
             m = (ihp_map or {}).get(key)
             if m:
@@ -115,7 +110,6 @@ def build_stack_mm_from_xml(selected_layers, ihp_map, stackup_data) -> dict:
             out[key] = {
                 "t_mm":  entry["thickness_um"] / 1000.0,
                 "z0_mm": entry["zmin_um"]       / 1000.0,
-                "from_xml": True,      # see drop_stack_to_die_surface below
             }
         else:
             fallback_layers.append(L)
@@ -124,65 +118,3 @@ def build_stack_mm_from_xml(selected_layers, ihp_map, stackup_data) -> dict:
         out.update(build_stack_mm(fallback_layers, ihp_map))
 
     return out
-
-
-def lowest_real_layer_z0(stack_mm):
-    """
-    The z0 of the lowest layer whose height the stackup XML actually states,
-    or None if there is no such layer.
-
-    Marker layers are excluded deliberately: they are absent from the stackup
-    and carry rank-based fallback heights that mean nothing, so measuring
-    against one would measure against a number the PDK never supplied.
-    """
-    if not stack_mm:
-        return None
-    real = [v["z0_mm"] for v in stack_mm.values()
-            if isinstance(v, dict) and v.get("from_xml")]
-    return min(real) if real else None
-
-
-def drop_stack_to_die_surface(stack_mm):
-    """
-    Slide the loaded layer stack down so its lowest real layer starts at z=0 —
-    the die surface, i.e. the top of the epi.
-
-    Why this is needed: importing a subset of the layers leaves the loaded
-    stack floating. Selecting only the top of an SG13G2 stack puts Metal5 at
-    5.09 um with nothing beneath it, because Activ, the contacts and Metal1-4
-    were never built — a 4.89 um gap between the die surface and the lowest
-    thing in the document.
-
-    Two rules keep this from doing damage:
-
-      * Only layers whose height the stackup XML actually STATES are measured
-        and moved. Marker layers — EdgeSeal.boundary, prBoundary, Recog — are
-        absent from the stackup and are given rank-based fallback heights
-        that mean nothing; including them would measure the gap against a
-        number the PDK never supplied. They stay where they are, which is
-        where the die outline is drawn.
-      * It is a no-op for a full import. When Activ is loaded it already sits
-        at z=0, the shift computes to zero, and every layer keeps its true
-        PDK height.
-
-    Returns (shifted_stack, shift_mm). The substrate and epi are built
-    separately and are deliberately untouched.
-    """
-    if not stack_mm:
-        return dict(stack_mm or {}), 0.0
-
-    shift = lowest_real_layer_z0(stack_mm)
-    if shift is None:
-        return dict(stack_mm), 0.0
-    if abs(shift) < 1e-12:
-        return dict(stack_mm), 0.0
-
-    out = {}
-    for key, entry in stack_mm.items():
-        if isinstance(entry, dict) and entry.get("from_xml"):
-            moved = dict(entry)
-            moved["z0_mm"] = entry["z0_mm"] - shift
-            out[key] = moved
-        else:
-            out[key] = entry
-    return out, shift

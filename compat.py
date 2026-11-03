@@ -52,4 +52,14 @@ def qenum_int(value) -> int:
         return int(value.value)
 
 
-__all__ = ["QtWidgets", "QtCore", "QtGui", "_PYSIDE_VERSION", "qenum_int"]
+def exec_menu(menu, position):
+    """Execute a context menu on both PySide2 and PySide6."""
+    if _PYSIDE_VERSION == 6:
+        return menu.exec(position)
+    return menu.exec_(position)
+
+
+__all__ = [
+    "QtWidgets", "QtCore", "QtGui", "_PYSIDE_VERSION", "qenum_int",
+    "exec_menu",
+]
