@@ -21,9 +21,11 @@ directly if console output looks garbled or cut off (see note below).
 | `test_wirebond_geometry.py` | `create_bond_wire_3d()` — ball/wedge, cut/solid, spline/JEDEC profiles, degenerate stacked contacts |
 | `test_leadframe_build.py` | `core.leadframe.build_leadframe()` — QFN lead count, tags, paddle, contact points |
 | `test_gds_import.py` | `core.Core_Functionality.load_gds()` against a small sample file |
+| `test_performance_mode.py` | Fast-mesh baking (`_bake_layer_mesh`) — valid mesh output, idempotent re-bake |
 | `test_pin_numbering.py` | Perimeter-walk auto-numbering — full 1..N coverage, direction sensitivity |
 | `test_via_clustering.py` | `core.via_clustering.cluster_boxes()` — tightly packed vias merge into one block, well-separated arrays stay separate, gap parameter actually controls the behaviour |
 | `test_housing_build.py` | `core.housing.build_housing()` — outer shell, cavity cut, alignment posts, fused final housing, optional lid, with/without lid |
+| `test_perf_mode_sync.py` | Integration between the 4 GDS performance mechanisms — `sync_new_layer_display()` respects current fast-mesh state, via layers dispatch correctly, `invalidate_layer_mesh()`/`invalidate_via_block()` actually clear stale caches |
 
 ## Bugs this suite has already caught
 
@@ -45,24 +47,27 @@ directly if console output looks garbled or cut off (see note below).
   function that actually uses it (`_import_into_freecad`), so it's only
   evaluated when a real GUI session calls it.
 - **`ui/LODManager.py`**: newly-loaded layers always forced full B-rep
-  Detail mode (`set_layer_detail(existing, True)`), with no awareness of how
-  the rest of the document was being displayed — a lazily loaded via layer
-  would appear in full detail while every other via showed as a block. Fixed
-  by routing through `sync_new_layer_display()`, now in `gds/LayerDisplay.py`.
-- **`gds/ToggleViaDetailCommand.py`**:
-  `_build_via_block()` permanently reuses whatever block
-  already exists under a given name — it never checks whether
+  Detail mode (`set_layer_detail(existing, True)`), with no awareness of
+  whether the document was currently in fast-mesh mode. A layer lazily
+  loaded after the initial import would visually and performance-wise stick
+  out from an already-meshed document. Fixed by routing through the new
+  `sync_new_layer_display()` in `TogglePerformanceModeCommand.py`.
+- **`gds/TogglePerformanceModeCommand.py` / `gds/ToggleViaDetailCommand.py`**:
+  `_bake_layer_mesh()`/`_build_via_block()` permanently reuse whatever mesh
+  or block already exists under a given name — neither ever checks whether
   the source Shape has changed since baking. `ui/DetailLayerPanel.py`'s
   bbox-simplify toggle mutates a layer's Shape in place, so without
   invalidation the cached mesh/block would silently keep showing geometry
-  baked from the Shape's *previous* contents indefinitely. Fixed with a new
-  `invalidate_via_block()` function, called from
+  baked from the Shape's *previous* contents indefinitely. Fixed with new
+  `invalidate_layer_mesh()`/`invalidate_via_block()` functions, called from
   `_simplify_layer()`/`_restore_layer()`.
 - **`gds/ToggleViaDetailCommand.py`**: `sync_new_via_layer()` (written for
   the fix above) bailed out immediately if `obj.ViewObject` was `None`,
-  skipping block creation entirely, where it should let the block be built
-  and only its trailing visibility touch be skipped. Found by the
-  now-removed `test_perf_mode_sync.py`, immediately after being written.
+  skipping block creation entirely — inconsistent with the analogous
+  `sync_new_layer_display()`, which has no such guard and lets
+  `_bake_layer_mesh()`'s own internal try/except handle a missing
+  ViewObject gracefully while still creating the underlying object. Found
+  by `test_perf_mode_sync.py` itself, immediately after being written.
 
 ## Every command module is now importable headlessly
 
@@ -85,31 +90,12 @@ pads. None of that was caught until a human looked at a screenshot. These
 tests exist to catch the next regression in under a minute instead of a full
 manual FreeCAD session.
 
-## Skipped checks
-
-A check that needs a file or tool this machine does not have — the 63 MB SKY130 sample,
-Gmsh — is reported as `[SKIP]` with the reason, and counted separately. It never counts as a
-pass. Returning early from a test used to look exactly like having run and passed.
-
-## GUI smoke test
-
-The headless suite cannot see whether the workbench activates, whether every toolbar button
-is backed by a registered command, or whether the dock panels build. This can:
-
-```
-"C:\Program Files\FreeCAD 1.1\bin\python.exe" tests\run_gui_smoke.py
-```
-
-A FreeCAD window opens for a few seconds and closes itself. It runs with a throwaway user
-folder, so your preferences are untouched. Set `DIP_FREECAD_EXE` for a FreeCAD installed
-elsewhere; on a headless Linux machine run it under `xvfb-run`.
-
 ## Known quirks of `freecadcmd`
 
 - **No GUI at all.** `FreeCAD.GuiUp` is `False`, `obj.ViewObject` is always
   `None`, and `FreeCADGui.addCommand` doesn't exist. Production code that
   needs to stay headless-safe guards these with `if FreeCAD.GuiUp:` (see
-  `core/leadframe.py`, `gds/ToggleViaDetailCommand.py`,
+  `core/leadframe.py`, `gds/TogglePerformanceModeCommand.py`,
   `leadframe/PinNumberingCommand.py`).
 - **Command files can't be imported normally.** Every FreeCAD command file
   in this plugin calls `FreeCADGui.addCommand(...)` at import time. Even

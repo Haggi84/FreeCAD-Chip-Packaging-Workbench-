@@ -4,18 +4,6 @@ from FreeCAD import Base
 import FreeCAD, Part, Sketcher, FreeCADGui
 
 
-def _tag_housing_material(obj, material):
-    """Record the configured housing material on the finished body or lid —
-    the only trace of it otherwise is the outer sketch's name (see
-    core.materials)."""
-    if obj is None or not material:
-        return
-    if not hasattr(obj, "HousingMaterial"):
-        obj.addProperty("App::PropertyString", "HousingMaterial", "Housing",
-                        "Housing material chosen in the configurator")
-    obj.HousingMaterial = material
-
-
 def build_housing(config):
     """Create a transparent housing around a leadframe based on the provided configuration.
 
@@ -54,16 +42,6 @@ def build_housing(config):
     else:
         extra_clearance = 0
 
-    # The cavity floor is the plane the leadframe stands on: z = 0, where
-    # core.leadframe builds its body and leads — or the underside of the
-    # balls for a BGA, which hang below z = 0. The housing used to start AT
-    # z = 0 with its floor above that, so the floor occupied the same space
-    # as the bottom of the leadframe.
-    if frame_type == "BGA (Ball Grid Array)":
-        floor_z = -config.get("bga_ball_diameter", 0)
-    else:
-        floor_z = 0.0
-
     # Outer housing dimensions
     outer_length = leadframe_length + 2 * (wall_thickness + clearance + extra_clearance)
     outer_width = leadframe_width + 2 * (wall_thickness + clearance + extra_clearance)
@@ -76,8 +54,7 @@ def build_housing(config):
 
     # Outer shell sketch
     outer_sketch = doc.addObject("Sketcher::SketchObject", f"HousingOuter_{material}")
-    outer_sketch.Placement = Base.Placement(Base.Vector(0, 0, floor_z - wall_thickness),
-                                            Base.Rotation(0, 0, 0, 1))
+    outer_sketch.Placement = Base.Placement(Base.Vector(0, 0, 0), Base.Rotation(0, 0, 0, 1))
     outer_lines = [
         Part.LineSegment(Base.Vector(outer_x, outer_y, 0), Base.Vector(outer_x_end, outer_y, 0)),
         Part.LineSegment(Base.Vector(outer_x_end, outer_y, 0), Base.Vector(outer_x_end, outer_y_end, 0)),
@@ -105,7 +82,7 @@ def build_housing(config):
     inner_y_end = inner_y + inner_width
 
     inner_sketch = doc.addObject("Sketcher::SketchObject", "HousingInner")
-    inner_sketch.Placement = Base.Placement(Base.Vector(0, 0, floor_z), Base.Rotation(0, 0, 0, 1))
+    inner_sketch.Placement = Base.Placement(Base.Vector(0, 0, wall_thickness), Base.Rotation(0, 0, 0, 1))
     inner_lines = [
         Part.LineSegment(Base.Vector(inner_x, inner_y, 0), Base.Vector(inner_x_end, inner_y, 0)),
         Part.LineSegment(Base.Vector(inner_x_end, inner_y, 0), Base.Vector(inner_x_end, inner_y_end, 0)),
@@ -139,7 +116,7 @@ def build_housing(config):
     # "AlignmentPosts001" and any doc.getObject("AlignmentPosts") lookup
     # would get the flat sketch (zero volume) instead of the actual solid.
     post_sketch = doc.addObject("Sketcher::SketchObject", "AlignmentPostsSketch")
-    post_sketch.Placement = Base.Placement(Base.Vector(0, 0, floor_z), Base.Rotation(0, 0, 0, 1))
+    post_sketch.Placement = Base.Placement(Base.Vector(0, 0, wall_thickness), Base.Rotation(0, 0, 0, 1))
     post_positions = [
         (inner_x + post_size / 2, inner_y + post_size / 2),
         (inner_x_end - post_size / 2, inner_y + post_size / 2),
@@ -173,14 +150,11 @@ def build_housing(config):
     final_housing.Tool = post_extrusion
     if FreeCAD.GuiUp:
         final_housing.ViewObject.Transparency = int(transparency * 100)
-    _tag_housing_material(final_housing, material)
 
     # Optional lid
     if include_lid:
         lid_sketch = doc.addObject("Sketcher::SketchObject", "LidSketch")
-        lid_sketch.Placement = Base.Placement(
-            Base.Vector(0, 0, floor_z - wall_thickness + outer_height),
-            Base.Rotation(0, 0, 0, 1))
+        lid_sketch.Placement = Base.Placement(Base.Vector(0, 0, outer_height), Base.Rotation(0, 0, 0, 1))
         lid_lines = [
             Part.LineSegment(Base.Vector(outer_x, outer_y, 0), Base.Vector(outer_x_end, outer_y, 0)),
             Part.LineSegment(Base.Vector(outer_x_end, outer_y, 0), Base.Vector(outer_x_end, outer_y_end, 0)),
@@ -199,7 +173,6 @@ def build_housing(config):
         lid_extrusion.Solid = True
         if FreeCAD.GuiUp:
             lid_extrusion.ViewObject.Transparency = int(transparency * 100)
-        _tag_housing_material(lid_extrusion, material)
 
     doc.recompute()
     if FreeCAD.GuiUp:
@@ -308,7 +281,6 @@ def add_lid_to_housing(doc, lid_thickness, transparency=None, housing_obj=None):
     lid_extrusion.Solid = True
     if FreeCAD.GuiUp:
         lid_extrusion.ViewObject.Transparency = int(transparency * 100)
-    _tag_housing_material(lid_extrusion, getattr(housing, "HousingMaterial", ""))
 
     doc.recompute()
     FreeCAD.Console.PrintMessage(

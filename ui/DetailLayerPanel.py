@@ -36,20 +36,20 @@ Modes
   Cursor mode  — Z-slider controls which layer shows the detail view.
   Free mode    — each row is independently toggleable.
 
-Relationship to the other GDS display mechanisms
+Relationship to the other GDS performance mechanisms
 ------------------------------------------------------
 This panel's SOLID/LOADING/DETAIL state (above) is driven by
-ui.LODManager — see its module docstring for the full picture. The "Det."
-column here is a per-row front-end onto gds.LayerDisplay.set_layer_detail,
-which changes only how finely FreeCAD triangulates the layer for display;
-the solid is identical either way, so it is lossless. The "BBox" column is a
-*separate* mechanism — _simplify_layer()/_restore_layer() below — that
-destructively swaps an already-loaded layer's Shape for its own bounding
-box. Because a via-block companion is baked once and reused forever by name,
-swapping the source Shape without also invalidating it would leave it
-silently showing stale geometry baked from the Shape's *previous* contents —
-_simplify_layer/_restore_layer call _invalidate_perf_caches() for exactly
-this reason.
+ui.LODManager — see its module docstring for the full four-mechanism
+picture. The "Det." column here is a per-row front-end onto
+gds.TogglePerformanceModeCommand's fast-mesh toggle (same mechanism as the
+document-wide button, just scoped to one layer). The "BBox" column is a
+*separate*, fourth mechanism — _simplify_layer()/_restore_layer() below —
+that destructively swaps an already-loaded layer's Shape for its own
+bounding box. Because a fast-mesh/via-block companion is baked once and
+reused forever by name, swapping the source Shape without also invalidating
+those companions would leave them silently showing stale geometry baked
+from the Shape's *previous* contents — _simplify_layer/_restore_layer call
+_invalidate_perf_caches() for exactly this reason.
 """
 
 import os
@@ -57,7 +57,7 @@ import FreeCAD
 import FreeCADGui
 import Part
 from FreeCAD import Base
-from compat import QtWidgets, QtCore, QtGui
+from compat import QtWidgets, QtCore, QtGui, exec_menu
 from core.via_clustering import cluster_boxes, DEFAULT_CLUSTER_GAP_MM
 
 try:
@@ -128,17 +128,20 @@ _simplified_shapes: dict = {}
 
 def _invalidate_perf_caches(obj):
     """
-    Delete any via-block companion cached for *obj*, since its Shape is about
-    to be replaced in place. The block is baked once and reused forever by
-    name — without this it would silently keep showing geometry baked from
-    the Shape's contents *before* this swap, invisibly out of sync with the
-    layer it claims to represent.
-
-    Previously also dropped a fast-mesh companion; those no longer exist.
+    Delete any fast-mesh / via-block companion cached for *obj*, since its
+    Shape is about to be replaced in place.  Both companions are baked once
+    and reused forever by name — without this, they'd silently keep showing
+    geometry baked from the Shape's contents *before* this swap, invisibly
+    out of sync with the layer they claim to represent.
     """
     doc = getattr(obj, "Document", None)
     if doc is None:
         return
+    try:
+        from gds.TogglePerformanceModeCommand import invalidate_layer_mesh
+        invalidate_layer_mesh(doc, obj.Name)
+    except Exception:
+        pass
     try:
         from gds.ToggleViaDetailCommand import invalidate_via_block
         invalidate_via_block(doc, obj.Name)
@@ -535,19 +538,19 @@ class _LayerRow(QtWidgets.QWidget):
         if self._lod_state == "solid":
             act_preview = menu.addAction("Load Preview  (2D, fast)")
             act_volume  = menu.addAction("Load Volume   (3D, slow)")
-            chosen = menu.exec_(event.globalPos())
+            chosen = exec_menu(menu, event.globalPos())
             if chosen == act_preview:
                 self.preview_requested.emit()
             elif chosen == act_volume:
                 self.load_requested.emit()
         elif self._lod_state == "preview":
             act_volume = menu.addAction("Load Volume  (upgrade to 3D)")
-            chosen = menu.exec_(event.globalPos())
+            chosen = exec_menu(menu, event.globalPos())
             if chosen == act_volume:
                 self.load_requested.emit()
         elif self._lod_state == "detail":
             act_reset = menu.addAction("Reset to Placeholder")
-            chosen = menu.exec_(event.globalPos())
+            chosen = exec_menu(menu, event.globalPos())
             # reset is handled via simplify_toggled (BBox)
             if chosen == act_reset:
                 self.simplify_toggled.emit(True)
@@ -1106,7 +1109,7 @@ class DetailLayerPanel(QtWidgets.QDockWidget):
 
     def _on_row_toggled(self, obj, detail: bool):
         """Free-mode: user clicked a row toggle directly."""
-        from gds.LayerDisplay import set_layer_detail
+        from gds.TogglePerformanceModeCommand import set_layer_detail
         label  = obj.Label or obj.Name
         action = "Volume" if detail else "Wireframe"
         dlg    = self._make_progress(f"Switching '{label}' to {action}…", 1)
@@ -1162,7 +1165,7 @@ class DetailLayerPanel(QtWidgets.QDockWidget):
         Shows a progress dialog because every set_layer_detail call triggers
         an OCCT re-tessellation on the main thread.
         """
-        from gds.LayerDisplay import set_layer_detail
+        from gds.TogglePerformanceModeCommand import set_layer_detail
         from compat import QtWidgets as _QW
 
         n   = len(self._layers)
@@ -1213,7 +1216,7 @@ class DetailLayerPanel(QtWidgets.QDockWidget):
             self._set_all_detail()
 
     def _set_all_wireframe(self):
-        from gds.LayerDisplay import set_layer_detail
+        from gds.TogglePerformanceModeCommand import set_layer_detail
         n = len(self._layers)
         dlg = self._make_progress("Switching to Wireframe…", n)
         for idx, (_, _, obj, lbl, _) in enumerate(self._layers):
@@ -1231,7 +1234,7 @@ class DetailLayerPanel(QtWidgets.QDockWidget):
         self._update_status()
 
     def _set_all_detail(self):
-        from gds.LayerDisplay import set_layer_detail
+        from gds.TogglePerformanceModeCommand import set_layer_detail
         n = len(self._layers)
         dlg = self._make_progress("Switching to Detail…", n)
         for idx, (_, _, obj, lbl, _) in enumerate(self._layers):

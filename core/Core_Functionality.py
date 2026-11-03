@@ -28,15 +28,6 @@ except ImportError:
 # taking 30 minutes).  0 = disabled.
 AUTO_BBOX_POLY_THRESHOLD: int = 50_000
 
-# Cap on the TOTAL number of polygons built as real geometry, across all
-# layers. The per-layer threshold above says nothing about overall import
-# time; this does, because build time tracks the surviving polygon count
-# almost linearly. Measured on a real 46 MB, 3.2M-polygon layout: 82,000
-# surviving polygons took 51 s, 8,700 took 15 s. 25,000 keeps a large chip
-# comfortably inside half a minute while leaving ordinary layouts — which
-# never reach the cap — completely untouched.
-AUTO_POLY_BUDGET: int = 25_000
-
 # Layers whose MEDIAN polygon area (in µm²) is below this threshold are
 # auto-collapsed to a bounding box, regardless of polygon count.
 # This catches sub-micron Fill-Metal / Dummy-Metal layers (e.g. Layer 6/DT0
@@ -59,12 +50,6 @@ def _gds_cache_dir() -> Path:
     return base / "FreeCAD" / "DI-PASSIONATE" / "gds_cache"
 
 _GDS_CACHE_DIR = _gds_cache_dir()
-
-# Upper bound on the import cache. A single full-chip entry measured about
-# 115 MB, so an unbounded cache reaches gigabytes within a few imports —
-# not acceptable for something that is on by default. Oldest entries are
-# evicted once the total exceeds this.
-_GDS_CACHE_MAX_BYTES = 2 * 1024 ** 3
 
 
 # ── cache helpers ─────────────────────────────────────────────────────────────
@@ -117,96 +102,8 @@ def _save_cache(key: str, results: list):
         p = _GDS_CACHE_DIR / f"{key}.pkl"
         with open(p, "wb") as fh:
             pickle.dump(payload, fh, protocol=4)
-        prune_gds_cache()
     except Exception as exc:
         FreeCAD.Console.PrintWarning(f"GDS cache save failed: {exc}\n")
-
-
-def prune_gds_cache(max_bytes: int = None) -> int:
-    """
-    Evict least-recently-used entries until the cache fits its budget.
-    Returns the number of files removed.
-
-    Called after every save, so the cache being on by default cannot quietly
-    consume the disk — one full-chip entry is on the order of 100 MB.
-    """
-    limit = _GDS_CACHE_MAX_BYTES if max_bytes is None else int(max_bytes)
-    removed = 0
-    try:
-        files = []
-        total = 0
-        for p in _GDS_CACHE_DIR.glob("*.pkl"):
-            try:
-                st = p.stat()
-            except Exception:
-                continue
-            files.append((st.st_mtime, st.st_size, p))
-            total += st.st_size
-        if total <= limit:
-            return 0
-        files.sort()                    # oldest first
-        for _mtime, size, p in files:
-            if total <= limit:
-                break
-            try:
-                p.unlink()
-                total -= size
-                removed += 1
-            except Exception:
-                continue
-        if removed:
-            FreeCAD.Console.PrintMessage(
-                f"GDS cache: evicted {removed} old entr(y/ies) to stay under "
-                f"{limit / 1024 ** 3:.1f} GB.\n")
-    except Exception as exc:
-        FreeCAD.Console.PrintWarning(f"GDS cache prune failed: {exc}\n")
-    return removed
-
-
-def gds_cache_dir() -> Path:
-    """Where the import cache lives, for the UI to show."""
-    return _GDS_CACHE_DIR
-
-
-def gds_cache_size() -> tuple:
-    """(file_count, total_bytes) currently held in the import cache."""
-    n = 0
-    total = 0
-    try:
-        for p in _GDS_CACHE_DIR.glob("*.pkl"):
-            try:
-                total += p.stat().st_size
-                n += 1
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return n, total
-
-
-def clear_gds_cache() -> tuple:
-    """
-    Delete every cached import. Returns (files_removed, bytes_freed).
-
-    The cache key already folds in the GDS file's modification time and the
-    import options, so a stale entry cannot be served for a changed file —
-    clearing is for reclaiming disk space, or after a workbench update
-    changes how geometry is built.
-    """
-    removed = 0
-    freed = 0
-    try:
-        for p in _GDS_CACHE_DIR.glob("*.pkl"):
-            try:
-                size = p.stat().st_size
-                p.unlink()
-                removed += 1
-                freed += size
-            except Exception:
-                continue
-    except Exception as exc:
-        FreeCAD.Console.PrintWarning(f"GDS cache clear failed: {exc}\n")
-    return removed, freed
 
 
 # ── vectorised geometry helpers ───────────────────────────────────────────────
@@ -251,23 +148,6 @@ def _arr_to_tuples(arr) -> list:
 # KLayout LYP parsing (colors)
 # -------------------------------
 
-def _parse_lyp_source(source: str):
-    """
-    '68/20', '68/20@1' or '68/20@*' -> (68, 20).
-
-    KLayout appends '@n' to name the layout it applies to, and the official
-    SkyWater sky130A.lyp does so on every single entry. int('20@1') raises,
-    so without this the whole file parsed to zero layers — each one warned
-    about individually and then skipped, leaving an import with no geometry
-    and no obvious cause.
-    """
-    src = str(source).strip()
-    if "@" in src:
-        src = src.split("@", 1)[0]
-    layer_str, _, datatype_str = src.partition("/")
-    return int(layer_str), int(datatype_str)
-
-
 def parse_lyp(lyp_path, layer_map=None):
     """
     Parse a KLayout LYP file and return:
@@ -297,7 +177,7 @@ def parse_lyp(lyp_path, layer_map=None):
 
             if visible and source:
                 try:
-                    layer_id, datatype = _parse_lyp_source(source)
+                    layer_id, datatype = map(int, source.split("/"))
                     layer_dict["layer_id"] = layer_id
                     layer_dict["datatype"] = datatype
 
@@ -408,40 +288,17 @@ def parse_stackup_xml(xml_path):
                 continue
             gds_layer_str = layer.get("Layer", "")
             gds_layer = int(gds_layer_str) if gds_layer_str.isdigit() else -1
-            # Optional. SG13G2 gives every layer its own number, so a bare
-            # number identifies it. SKY130 does not: met1 is 68/20 and the
-            # via above it is 68/44, so without a datatype both collapse onto
-            # key 68 and one of them silently takes the other's Z position.
-            gds_dt_str = layer.get("Datatype", "")
-            gds_dt = int(gds_dt_str) if gds_dt_str.strip().isdigit() else None
             entry = {
-                # The stackup's own spelling of the name. The dict keys it is
-                # stored under are upper-cased for lookup, so without this
-                # there is no way back to "TopMetal2" for a label.
-                "name":         name,
                 "zmin_um":      zmin_um,
                 "zmax_um":      zmax_um,
                 "thickness_um": abs(zmax_um - zmin_um),
                 "gds_layer":    gds_layer,
-                "gds_datatype": gds_dt,
                 "type":         ltype,
-                # The <Material> this layer is made of — its name only; the
-                # material's own attributes are in result["_materials"].
-                "material":     (layer.get("Material") or "").strip(),
             }
             if name:
                 result[name.upper()] = entry
             if gds_layer >= 0:
-                if gds_dt is not None:
-                    result[(gds_layer, gds_dt)] = entry
-                # The bare number stays, for stackups without datatypes and
-                # for lookups that only know a number. Where several layers
-                # share one number, the conductor wins it: guessing "metal"
-                # is the better error than guessing "via".
-                prev = result.get(gds_layer)
-                if prev is None or (prev.get("type") != "conductor"
-                                    and ltype == "conductor"):
-                    result[gds_layer] = entry
+                result[gds_layer] = entry
 
         substrate = root.find(".//Substrate")
         if substrate is not None:
@@ -450,49 +307,9 @@ def parse_stackup_xml(xml_path):
             except (ValueError, TypeError):
                 pass
 
-        # Materials, for the colours the dielectric slabs are drawn in.
-        materials = {}
-        for mat in root.findall(".//Material"):
-            name = (mat.get("Name") or "").strip()
-            if not name:
-                continue
-            materials[name.upper()] = {
-                "name": name,
-                "type": (mat.get("Type") or "").strip().lower(),
-                "color": (mat.get("Color") or "").strip(),
-                # Not part of the KLayout/openEMS format: which bulk material
-                # a thermal model should use (see core.materials). Type says
-                # only "Conductor", which does not say which metal.
-                "thermal_material": (mat.get("ThermalMaterial") or "").strip(),
-            }
-        if materials:
-            result["_materials"] = materials
-
-        # Dielectrics, in document order (top of the stack first). The
-        # <Layer> elements describe only the interconnect; the physical body
-        # a die is actually made of — the epitaxial layer and the silicon
-        # substrate below it — is declared HERE and was being discarded, so
-        # nothing under the lowest metal was ever modelled.
-        dielectrics = []
-        for die in root.findall(".//Dielectric"):
-            name = (die.get("Name") or "").strip()
-            try:
-                thickness = float(die.get("Thickness", 0))
-            except (ValueError, TypeError):
-                continue
-            if not name or thickness <= 0.0:
-                continue
-            dielectrics.append({
-                "name": name,
-                "material": (die.get("Material") or name).strip(),
-                "thickness_um": thickness,
-            })
-        if dielectrics:
-            result["_dielectrics"] = dielectrics
-
         FreeCAD.Console.PrintMessage(
             f"Loaded stackup XML '{xml_path}': "
-            f"{sum(isinstance(k, str) and not k.startswith('_') for k in result)} layers.\n"
+            f"{sum(isinstance(k, str) and k != '_substrate_offset_um' for k in result)} layers.\n"
         )
         return result
     except FileNotFoundError:
@@ -648,11 +465,9 @@ def build_stack_mm_from_xml(selected_layers, ihp_map, stackup_data):
         (layer_id, datatype) -> {'t_mm': float, 'z0_mm': float}
 
     Lookup order for each layer:
-      1. By (GDS layer, datatype) — the only key that separates a metal from
-         the via drawn on the same layer number, as SKY130 does throughout.
-      2. By GDS layer number alone (stackups that carry no datatypes)
-      3. By EDI name from ihp_map (case-insensitive)
-      4. Fall back to build_stack_mm() heuristics for anything not found.
+      1. By GDS layer number (exact match in stackup_data)
+      2. By EDI name from ihp_map (case-insensitive)
+      3. Fall back to build_stack_mm() heuristics for anything not found.
     """
     if not stackup_data:
         return build_stack_mm(selected_layers, ihp_map)
@@ -665,14 +480,10 @@ def build_stack_mm_from_xml(selected_layers, ihp_map, stackup_data):
         dt  = L.get("datatype",  0)
         key = (lid, dt)
 
-        # 1. Match by layer AND datatype
-        entry = stackup_data.get(key)
+        # 1. Match by GDS layer number
+        entry = stackup_data.get(lid)
 
-        # 2. Match by GDS layer number
-        if entry is None:
-            entry = stackup_data.get(lid)
-
-        # 3. Match by EDI name
+        # 2. Match by EDI name
         if entry is None:
             m = ihp_map.get(key)
             if m:
@@ -682,12 +493,6 @@ def build_stack_mm_from_xml(selected_layers, ihp_map, stackup_data):
             out[key] = {
                 "t_mm":  entry["thickness_um"] / 1000.0,
                 "z0_mm": entry["zmin_um"]       / 1000.0,
-                # True only when the XML actually states this layer's height.
-                # Marker layers — EdgeSeal.boundary, prBoundary, Recog — are
-                # not in the stackup and get rank-based fallback heights that
-                # carry no physical meaning, so they must be distinguishable
-                # from layers whose Z is real. See drop_stack_to_die_surface.
-                "from_xml": True,
             }
         else:
             fallback_layers.append(L)
@@ -978,13 +783,10 @@ def load_gds(gds_path,
              flat_layer_keys=None,    # (layer_id, datatype) always rendered as flat 2D face (never extruded)
              mesh_3d=False,           # bypass OCCT B-rep: build Mesh.Mesh directly from triangulated polygons
              auto_bbox_threshold=None,# collapse layer to bbox when polygon count exceeds this (None = use module default)
-             poly_budget=None,        # cap on TOTAL polygons built as real geometry (None = module default)
              force_bbox_keys=None,    # user-selected (layer_id, datatype) pairs to always render as bounding box
              exclude_auto_bbox_keys=None, # user-selected keys that must never be auto-collapsed to bbox
-             protect_via_keys=None,   # VIA layers that must never be auto-collapsed — see below
-             exact_geometry=False,    # build every polygon as drawn — see below
              use_gdstk_union=False,   # merge overlapping polygons per layer in C++ before building shapes
-             use_cache=True,          # serialise result to disk; second import is near-instant
+             use_cache=False,         # serialise result to disk; second import is near-instant
              parallel_workers=0,      # number of threads for data-prep phase (0 = serial)
              progress_callback=None
              ):
@@ -1004,52 +806,14 @@ def load_gds(gds_path,
         }
     """
     _bbox_threshold = AUTO_BBOX_POLY_THRESHOLD if auto_bbox_threshold is None else int(auto_bbox_threshold)
-    _poly_budget = AUTO_POLY_BUDGET if poly_budget is None else int(poly_budget)
 
     # ── disk-cache check ──────────────────────────────────────────────────────
-    # EVERY argument that can change the geometry has to be in this key. It is
-    # not a place to be selective: an omitted argument does not degrade the
-    # cache, it silently serves geometry built under different rules and the
-    # import looks like it ignored the setting entirely.
-    #
-    # protect_via_keys was exactly that failure. Turning via protection on
-    # produced a byte-identical key, so the cache returned the flattened via
-    # layers built before the option existed — the fix appeared to do nothing.
-    # stack_mm was the same bug waiting to happen: switching PDK profile
-    # changes every Z position while leaving the key untouched.
-    def _stack_fingerprint(stack):
-        if not stack:
-            return ()
-        try:
-            return tuple(sorted(
-                (k, round(float(v.get("t_mm", 0.0)), 9),
-                 round(float(v.get("z0_mm", 0.0)), 9))
-                for k, v in stack.items()))
-        except Exception:
-            return (repr(stack),)
-
     _cache_options = {
         "preview_2d": preview_2d, "min_area": min_area_mm2,
         "decimate": decimate_tol_mm, "fill_bbox": fill_as_bbox,
         "mesh_3d": mesh_3d, "bbox_thresh": _bbox_threshold,
-        "budget": _poly_budget,
         "force_bbox": tuple(sorted(force_bbox_keys or [])),
         "excl_bbox":  tuple(sorted(exclude_auto_bbox_keys or [])),
-        "protect_via": tuple(sorted(protect_via_keys or [])),
-        "exact_geometry": bool(exact_geometry),
-        "fill_keys":  tuple(sorted(fill_layer_keys or [])),
-        "flat_keys":  tuple(sorted(flat_layer_keys or [])),
-        "contacts_only": bool(contacts_only_3d),
-        "contact_keys": tuple(sorted(contact_keys or [])),
-        "max_polys": max_polys_per_layer,
-        "skip_fill_dt": bool(skip_fill_datatype),
-        "gdstk_union": bool(use_gdstk_union),
-        "compound": bool(compound_per_layer),
-        "stack": _stack_fingerprint(stack_mm),
-        "fill_map": tuple(sorted(
-            k for k, v in (ihp_map or {}).items()
-            if "FILL" in {t.upper() for t in v.get("edi_types", set())})),
-        "transform": repr(transform) if transform is not None else None,
     }
     _ck = _cache_key(gds_path, selected_layers, _cache_options) if use_cache else None
     if _ck:
@@ -1082,25 +846,11 @@ def load_gds(gds_path,
         # Filler detection: DT=22 convention + any explicitly declared fill keys
         # + any key whose EDI type set contains "FILL" (catches Drawing layers like
         # 29/0 that carry millions of dummy-metal polygons but use DT=0, not DT=22)
-        # exact_geometry: build the layout as drawn, matching KLayout.
-        #
-        # Every automatic simplification is switched off together rather than
-        # by six separate arguments, because they can only be trusted as a set
-        # — each one alone still leaves a layer collapsed and the result still
-        # does not match KLayout. force_bbox_keys is deliberately still
-        # honoured: that is an explicit per-layer request from the user, not
-        # an automatic decision.
-        _exact = bool(exact_geometry)
-
-        _fill_keys = set() if _exact else set(fill_layer_keys or [])
+        _fill_keys = set(fill_layer_keys or [])
         _fill_keys.update(force_bbox_keys or [])   # user-selected bbox layers
         _flat_keys = set(flat_layer_keys or [])
 
         def _is_filler(lyr, dt):
-            # In exact mode nothing is "filler": dummy-metal fill is real
-            # geometry in the layout and KLayout draws every rectangle of it.
-            if _exact:
-                return (lyr, dt) in _fill_keys      # only explicit requests
             if dt == 22 or (lyr, dt) in _fill_keys:
                 return True
             # If the EDI map explicitly tags this key as FILL, collapse it to a
@@ -1246,25 +996,7 @@ def load_gds(gds_path,
         # collapses it to a single bounding-box solid instead of processing
         # each polygon individually.
         _exclude_auto_bbox = set(exclude_auto_bbox_keys or [])
-
-        # VIA layers are never auto-collapsed. Both mechanisms below replace a
-        # layer with ONE bounding box, and for a via array that is not a
-        # simplification but a falsehood: an array of separate pillars between
-        # two metals becomes a single solid slab shorting them together. It
-        # also destroys the one thing vias are looked at for — where the
-        # vertical connections actually are.
-        #
-        # A via layer is also the WORST case for the budget's own heuristic,
-        # which collapses the heaviest layers first: vias are always among the
-        # most numerous polygons on a chip, so they are collapsed first while
-        # being the least acceptable to lose.
-        #
-        # Callers that genuinely want vias simplified have two purpose-built
-        # routes that keep the array's structure: force_bbox_keys (explicit,
-        # per layer) and gds.ToggleViaDetailCommand (proximity clustering).
-        _protect_via = set(protect_via_keys or [])
-
-        if _bbox_threshold > 0 and not _exact:
+        if _bbox_threshold > 0:
             _key_counts: dict = {}
             for lyr, dt, _ in polygons:
                 k = (lyr, dt)
@@ -1272,12 +1004,7 @@ def load_gds(gds_path,
                     _key_counts[k] = _key_counts.get(k, 0) + 1
             for k, cnt in _key_counts.items():
                 if cnt > _bbox_threshold and not _is_filler(k[0], k[1]):
-                    if k in _protect_via:
-                        FreeCAD.Console.PrintMessage(
-                            f"  Auto-bbox skipped: layer {k[0]}/{k[1]} has {cnt:,} polygons "
-                            f"but is a VIA layer — kept in full detail\n"
-                        )
-                    elif k in _exclude_auto_bbox:
+                    if k in _exclude_auto_bbox:
                         FreeCAD.Console.PrintMessage(
                             f"  Auto-bbox skipped: layer {k[0]}/{k[1]} has {cnt:,} polygons "
                             f"but user kept full geometry\n"
@@ -1289,58 +1016,6 @@ def load_gds(gds_path,
                             f"(threshold {_bbox_threshold:,}) → bounding box\n"
                         )
 
-        # ── Polygon budget: bound the import TIME, not just per-layer size ────
-        # The per-layer threshold above cannot promise anything about how long
-        # an import takes: a layout made of many medium layers slips under it
-        # and still builds a hundred thousand solids. Measured on a real 46 MB
-        # layout, build time tracks the surviving polygon count closely —
-        # 82,000 polygons took 51 s, 8,700 took 15 s — so capping that count
-        # is what actually caps the wait.
-        #
-        # The heaviest surviving layers are collapsed first, since they cost
-        # the most and are the least legible anyway (a layer of 40,000 tiny
-        # shapes reads as a filled area at any sane zoom). Layers the user has
-        # explicitly kept are never touched.
-        # auto_bbox_threshold=0 is the callers' existing way of saying "give me
-        # everything" — core.lod_import uses it when the user promotes a layer
-        # to full detail on purpose. Applying a budget there would quietly
-        # collapse the very layer that was just asked for.
-        if _poly_budget and _poly_budget > 0 and _bbox_threshold > 0 and not _exact:
-            _survivor_counts = {}
-            for lyr, dt, _ in polygons:
-                k = (lyr, dt)
-                # Protected vias are left out of the accounting, not merely
-                # out of the collapse list. Counting them was measured to be
-                # actively harmful: on a six-layer import of a real chip the
-                # budget could not reach its target anyway (the protected via
-                # layers alone are 100k polygons), so it collapsed every metal
-                # to a bounding box, took the same 62 s, and left via pillars
-                # floating against featureless slabs. The budget should govern
-                # only what it is actually allowed to act on.
-                if (k in wanted and k not in _fill_keys
-                        and k not in _protect_via and not _is_filler(lyr, dt)):
-                    _survivor_counts[k] = _survivor_counts.get(k, 0) + 1
-            _remaining = sum(_survivor_counts.values())
-            if _remaining > _poly_budget:
-                for k, cnt in sorted(_survivor_counts.items(), key=lambda kv: -kv[1]):
-                    if _remaining <= _poly_budget:
-                        break
-                    if k in _exclude_auto_bbox:
-                        continue
-                    _fill_keys.add(k)
-                    _remaining -= cnt
-                    FreeCAD.Console.PrintWarning(
-                        f"  Budget bbox: layer {k[0]}/{k[1]} ({cnt:,} polygons) "
-                        f"→ bounding box, to keep the import under "
-                        f"{_poly_budget:,} polygons\n"
-                    )
-                FreeCAD.Console.PrintMessage(
-                    f"  Polygon budget: building {_remaining:,} of "
-                    f"{sum(_survivor_counts.values()):,} polygons. Raise "
-                    f"poly_budget, or keep a layer explicitly, for more "
-                    f"detail.\n"
-                )
-
         # ── Micro-area pre-scan: collapse sub-micron Fill-Metal layers ────────
         # Many process nodes (e.g. IHP SG13G2) insert hundreds of thousands of
         # sub-micron dummy-metal rectangles for CMP planarisation.  These are
@@ -1348,7 +1023,7 @@ def load_gds(gds_path,
         # Strategy: sample up to MICRO_AREA_SAMPLE_SIZE polygons per layer,
         # compute the median area in µm², and collapse any layer below
         # MICRO_AREA_BBOX_THRESHOLD_UM2 to a single bounding-box solid.
-        if MICRO_AREA_BBOX_THRESHOLD_UM2 > 0.0 and _HAS_NP and not _exact:
+        if MICRO_AREA_BBOX_THRESHOLD_UM2 > 0.0 and _HAS_NP:
             # Group raw polygon point arrays by key for sampling
             _key_sample: dict = {}
             for lyr, dt, poly_pts_raw in polygons:
@@ -1385,19 +1060,7 @@ def load_gds(gds_path,
                     continue
                 median_um2 = float(_np.median(areas_um2))
                 if median_um2 < MICRO_AREA_BBOX_THRESHOLD_UM2:
-                    if k in _protect_via:
-                        # Vias are sub-micron BY DEFINITION — an SG13G2
-                        # contact is about 0.16 um^2 against this 2 um^2
-                        # threshold — so this scan, written to kill dummy
-                        # fill, collapses every via layer on every chip. It
-                        # is the mechanism that flattens a via array into a
-                        # slab even when the polygon budget never fires.
-                        FreeCAD.Console.PrintMessage(
-                            f"  Micro-area bbox skipped: layer {k[0]}/{k[1]} "
-                            f"median={median_um2:.4f} um^2 but is a VIA layer "
-                            f"— kept in full detail\n"
-                        )
-                    elif k in _exclude_auto_bbox:
+                    if k in _exclude_auto_bbox:
                         FreeCAD.Console.PrintMessage(
                             f"  Micro-area bbox skipped: layer {k[0]}/{k[1]} "
                             f"median={median_um2:.4f} µm² but user kept full geometry\n"
@@ -1440,88 +1103,52 @@ def load_gds(gds_path,
                 )
             polygons = filtered_contact + rest_out
 
-        # ── Phase 1: bucket polygons; bbox extents are computed in BATCH ───────
-        # A layer bound for a bounding box needs only the min/max over all its
-        # points, so it must not be transformed one polygon at a time. On a
-        # real 46 MB layout the bbox-bound layers hold 3.2 MILLION polygons of
-        # 4-6 points each, where NumPy's per-call overhead dwarfs the actual
-        # arithmetic: measured 23.7 s that way versus 1.7 s for the same points
-        # concatenated and transformed once — a 14x difference, and the single
-        # largest cost in the whole import.
+        # ── Phase 1: bbox accumulators (serial) + bucket normal polygons ────────
         _raw_normals: dict = {}   # key -> [pts_array, ...]
-        _body_raw: list = []      # contacts_only_3d: everything outside contacts
-        _fill_raw: dict = {}      # key -> [pts_array, ...] awaiting one bbox
         for layer, datatype, poly_pts_raw in polygons:
+            poly_pts = _points_array(poly_pts_raw)
             key = (layer, datatype)
             if key not in wanted:
                 continue
-            poly_pts = _points_array(poly_pts_raw)
 
-            # contacts_only_3d: non-contact layers → body bbox accumulator.
-            #
-            # Protected vias are exempt. This is the FOURTH mechanism that
-            # flattens a via layer and the one that survives all the others:
-            # it does not collapse the layer to its own bounding box, it
-            # merges it into the single combined body solid, so a via array
-            # comes out as one slab spanning the whole die — visibly bridging
-            # pads that share nothing.
-            #
-            # It fires on layers the user explicitly ticked for immediate
-            # load, since LOD mode categorises vias as "routing" and only
-            # contact layers escape the accumulator.
-            if (contacts_only_3d and key not in _contact_keys
-                    and key not in _protect_via):
-                _body_raw.append(poly_pts)
+            # contacts_only_3d: non-contact layers → body bbox accumulator
+            if contacts_only_3d and key not in _contact_keys:
+                _arr_b = _vec_transform(poly_pts, s, rot_deg, mirror_y, tx, ty)
+                if len(_arr_b) > 0:
+                    if _HAS_NP and isinstance(_arr_b, _np.ndarray):
+                        _xmn, _xmx = float(_arr_b[:, 0].min()), float(_arr_b[:, 0].max())
+                        _ymn, _ymx = float(_arr_b[:, 1].min()), float(_arr_b[:, 1].max())
+                    else:
+                        _xmn, _xmx = min(p[0] for p in _arr_b), max(p[0] for p in _arr_b)
+                        _ymn, _ymx = min(p[1] for p in _arr_b), max(p[1] for p in _arr_b)
+                    if _body_extents is None:
+                        _body_extents = [_xmn, _ymn, _xmx, _ymx]
+                    else:
+                        _body_extents[0] = min(_body_extents[0], _xmn)
+                        _body_extents[1] = min(_body_extents[1], _ymn)
+                        _body_extents[2] = max(_body_extents[2], _xmx)
+                        _body_extents[3] = max(_body_extents[3], _ymx)
                 continue
 
             if _is_filler(layer, datatype):
                 if fill_as_bbox:
-                    _fill_raw.setdefault(key, []).append(poly_pts)
+                    _arr_f = _vec_transform(poly_pts, s, rot_deg, mirror_y, tx, ty)
+                    if len(_arr_f) > 0:
+                        if _HAS_NP and isinstance(_arr_f, _np.ndarray):
+                            _xmn, _xmx = float(_arr_f[:, 0].min()), float(_arr_f[:, 0].max())
+                            _ymn, _ymx = float(_arr_f[:, 1].min()), float(_arr_f[:, 1].max())
+                        else:
+                            _xmn, _xmx = min(p[0] for p in _arr_f), max(p[0] for p in _arr_f)
+                            _ymn, _ymx = min(p[1] for p in _arr_f), max(p[1] for p in _arr_f)
+                        if key in fill_extents:
+                            e = fill_extents[key]
+                            e[0] = min(e[0], _xmn); e[1] = min(e[1], _ymn)
+                            e[2] = max(e[2], _xmx); e[3] = max(e[3], _ymx)
+                        else:
+                            fill_extents[key] = [_xmn, _ymn, _xmx, _ymx]
                 continue
 
             _raw_normals.setdefault(key, []).append(poly_pts)
-
-        def _batched_extents(arrays):
-            """[xmin, ymin, xmax, ymax] over many polygons, transformed once."""
-            if not arrays:
-                return None
-            if _HAS_NP:
-                try:
-                    big = _np.concatenate(
-                        [_np.asarray(a, dtype=float).reshape(-1, 2)
-                         for a in arrays if len(a) > 0], axis=0)
-                except ValueError:
-                    return None
-                if big.size == 0:
-                    return None
-                out = _vec_transform(big, s, rot_deg, mirror_y, tx, ty)
-                arr = _np.asarray(out, dtype=float)
-                return [float(arr[:, 0].min()), float(arr[:, 1].min()),
-                        float(arr[:, 0].max()), float(arr[:, 1].max())]
-            # No NumPy: fall back to the original per-polygon walk.
-            ext = None
-            for a in arrays:
-                t = _vec_transform(a, s, rot_deg, mirror_y, tx, ty)
-                if not len(t):
-                    continue
-                xs = [p[0] for p in t]
-                ys = [p[1] for p in t]
-                cur = [min(xs), min(ys), max(xs), max(ys)]
-                if ext is None:
-                    ext = cur
-                else:
-                    ext[0] = min(ext[0], cur[0]); ext[1] = min(ext[1], cur[1])
-                    ext[2] = max(ext[2], cur[2]); ext[3] = max(ext[3], cur[3])
-            return ext
-
-        if _body_raw:
-            _be = _batched_extents(_body_raw)
-            if _be is not None:
-                _body_extents = _be
-        for _fk, _fl in _fill_raw.items():
-            _fe = _batched_extents(_fl)
-            if _fe is not None:
-                fill_extents[_fk] = _fe
 
         # progress total from normal-polygon count
         _all_raw_count = sum(len(v) for v in _raw_normals.values())
@@ -2060,8 +1687,7 @@ def _find_pin_layer_keys(gds_path: str, ihp_map: dict,
 
 
 def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
-                                selected_layers=None, top_n: int = 3,
-                                stack_mm=None) -> int:
+                                selected_layers=None, top_n: int = 3) -> int:
     """
     Detect the top-N PIN/bond-pad layers, extrude the actual pad metal geometry
     to PDK thickness, and place a ContactPoint marker at every pin location.
@@ -2110,10 +1736,6 @@ def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
     scale     = (lib.unit * 1000.0) if getattr(lib, "unit", None) else 0.001
     top_cells = lib.top_level() or lib.cells
 
-    # Text labels name the pads a netlist refers to (see core.pad_names).
-    from core.pad_names import read_labels_mm, label_in_box
-    labels = read_labels_mm(lib, top_cells)
-
     # ── ray-casting point-in-polygon (GDS units, avoids mm conversion) ───────
     def _contains(poly_pts, px, py):
         n       = len(poly_pts)
@@ -2131,16 +1753,10 @@ def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
     _MIN_PAD_MM = 0.010   # 10 µm
 
     # ── stack info for Z position / thickness ─────────────────────────────────
-    # *stack_mm* is the stacking the import itself used (from the stackup XML
-    # when there is one). The rank-based heuristic only fills in a layer it
-    # does not cover — used alone, it put the pads, and every contact point
-    # on them, at heights the PDK never stated.
-    heuristic_mm = build_stack_mm(
+    stack_mm = build_stack_mm(
         [{"layer_id": lid, "datatype": dt, "name": name} for lid, dt, name in candidates],
         ihp_map,
     )
-    stack_mm = {key: (stack_mm or {}).get(key) or value
-                for key, value in heuristic_mm.items()}
 
     # ── helper: top-face centre ────────────────────────────────────────────────
     def _top_face_center(shape):
@@ -2252,7 +1868,6 @@ def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
             # ── extrude pad polygons → solids ─────────────────────────────────
             solids   = []
             contacts = []   # Base.Vector snap points (one per pad)
-            pad_names = []  # the label inside each pad, "" when unlabelled
 
             for pts_raw, (cx_mm, cy_mm) in pad_pairs:
                 pts2d = [(float(p[0]) * scale, float(p[1]) * scale) for p in pts_raw]
@@ -2266,9 +1881,6 @@ def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
                     solid = face.extrude(FreeCAD.Vector(0, 0, t_mm))
                     solids.append(solid)
                     contacts.append(Base.Vector(cx_mm, cy_mm, z0_mm + t_mm))
-                    xs = [x for x, _y in pts2d]
-                    ys = [y for _x, y in pts2d]
-                    pad_names.append(label_in_box(labels, min(xs), min(ys), max(xs), max(ys)))
                 except Exception:
                     continue
 
@@ -2283,9 +1895,8 @@ def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
             # one display object for the whole PIN layer
             pad_grp = doc.addObject("Part::Feature", f"GDS_PINs_{edi_name}")
             pad_grp.Shape = compound
-            if FreeCAD.GuiUp:
-                pad_grp.ViewObject.ShapeColor   = _ORANGE
-                pad_grp.ViewObject.Transparency = 0
+            pad_grp.ViewObject.ShapeColor   = _ORANGE
+            pad_grp.ViewObject.Transparency = 0
             pad_grp.addProperty("App::PropertyBool",   "IsGDSPin", "GDS",
                                  "Auto-detected PIN pad layer")
             pad_grp.addProperty("App::PropertyString", "EDIName",  "GDS",
@@ -2294,7 +1905,7 @@ def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
             pad_grp.EDIName  = edi_name
 
             # one ContactPoint marker per pad (at DT=2 centroid or poly centroid)
-            for snap_pt, pad_name in zip(contacts, pad_names):
+            for snap_pt in contacts:
                 marker = doc.addObject("Part::Feature", f"ContactPoint_{cp_idx:03d}")
                 marker.Shape = Part.Vertex(snap_pt.x, snap_pt.y, snap_pt.z)
 
@@ -2308,16 +1919,10 @@ def import_pin_pads_as_contacts(gds_path: str, ihp_map: dict, doc,
                 marker.ContactPoint   = snap_pt
                 marker.SourceObject   = pad_grp.Name
                 marker.IsContactPoint = True
-                marker.addProperty("App::PropertyString", "PadName", "Wirebond",
-                                    "Pad name from the layout's text label")
-                marker.PadName = pad_name
-                if pad_name:
-                    marker.Label = f"ContactPoint {pad_name}"
 
-                if FreeCAD.GuiUp:
-                    marker.ViewObject.PointSize   = 8
-                    marker.ViewObject.PointColor  = _ORANGE
-                    marker.ViewObject.DisplayMode = "Points"
+                marker.ViewObject.PointSize   = 8
+                marker.ViewObject.PointColor  = _ORANGE
+                marker.ViewObject.DisplayMode = "Points"
 
                 cp_idx  += 1
                 cp_count += 1

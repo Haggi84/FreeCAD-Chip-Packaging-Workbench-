@@ -30,22 +30,12 @@ from Get_Path import get_icon
 # ── Colour resolution ─────────────────────────────────────────────────────────
 
 def _layer_colors(layer: dict, ihp_map: dict,
-                  match_klayout: bool, highlight_bondable: bool,
-                  exact_geometry: bool = False):
+                  match_klayout: bool, highlight_bondable: bool):
     """Returns (shape_rgb, line_rgb, transparency) for a layer."""
     lid = layer.get("layer_id", 0)
     dt  = layer.get("datatype",  0)
     m   = ihp_map.get((lid, dt))
     types = m["edi_types"] if m else set()
-
-    if exact_geometry:
-        # Straight from the .lyp, with no workbench opinion applied. The
-        # bondable highlight below repaints pad layers gold, which is useful
-        # for wire bonding and is the one thing that makes an otherwise
-        # KLayout-faithful view disagree with KLayout on colour.
-        return (hex_to_rgb(layer.get("fill-color",  "#FFFFFF")),
-                hex_to_rgb(layer.get("frame-color", "#000000")),
-                0)
 
     if match_klayout:
         sr = hex_to_rgb(layer.get("fill-color",  "#FFFFFF"))
@@ -66,8 +56,7 @@ def _layer_colors(layer: dict, ihp_map: dict,
 # ── Document construction ─────────────────────────────────────────────────────
 
 def _populate_document(doc, shapes, filtered_layers, ihp_map,
-                       match_klayout, highlight_bondable, mesh_3d,
-                       exact_geometry=False):
+                       match_klayout, highlight_bondable, mesh_3d):
     """
     Creates FreeCAD objects for all shapes.
     Returns (layer_objects, pending_colors).
@@ -88,8 +77,7 @@ def _populate_document(doc, shapes, filtered_layers, ihp_map,
         if not shp:
             continue
 
-        sr, lr, tr = _layer_colors(layer, ihp_map, match_klayout,
-                                    highlight_bondable, exact_geometry)
+        sr, lr, tr = _layer_colors(layer, ihp_map, match_klayout, highlight_bondable)
 
         if shp.get("is_mesh"):
             obj = doc.addObject("Mesh::Feature", f"Layer_{name}_{lid}")
@@ -136,6 +124,33 @@ def _setup_property_panel(doc, ihp_map, map_path, gds_path,
     pp.filtered_layers = filtered_layers
     pp.update_properties([], unique_colors, {})
     return pp
+
+
+# ── Resolve technology file ───────────────────────────────────────────────────
+
+def _resolve_tech_file(tech_config, kind: str, title: str,
+                        file_filter: str, optional: bool = False):
+    """Returns path from tech_config or file dialog."""
+    has_fn = getattr(tech_config, f"has_{kind}")
+    get_fn = getattr(tech_config, f"get_{kind}")
+
+    if has_fn():
+        p = get_fn()
+        FreeCAD.Console.PrintMessage(f"TechConfig: {kind.upper()}  {p}\n")
+        return p
+
+    p, _ = QtWidgets.QFileDialog.getOpenFileName(None, title, "", file_filter)
+    if not p:
+        if optional:
+            FreeCAD.Console.PrintWarning(f"No {kind.upper()} selected — skipping.\n")
+            return None
+        QtWidgets.QMessageBox.critical(None, "Error",
+                                       f"{kind.upper()} file not found.")
+        return None
+
+    kw = {"map_": p} if kind == "map" else {kind: p}
+    tech_config.set_local(**kw)
+    return p
 
 
 # ── Import with progress display ──────────────────────────────────────────────
@@ -219,89 +234,12 @@ def _run_render(doc, layer_objects, pending_colors):
 
 # ── Post-import: PIN instances, group ────────────────────────────────────────
 
-def _add_die_body(doc, gds_path, stackup_data, options, stack_mm=None):
-    """
-    Build the epi + silicon slabs under the lowest drawn layer.
-
-    A die is mostly the body below the interconnect — on SG13G2 the drawn
-    stack is 14.23 um and the silicon under it is 183.75 um — and none of it
-    was being modelled, so the imported object was under 8% of the real part.
-
-    The footprint comes from the die outline (seal ring / prBoundary) rather
-    than the bounding box of whatever layers happened to be loaded: in LOD
-    mode that is two contact layers, which would put a substrate under only
-    part of the die.
-    """
-    if not bool(options.get("add_die_body", True)):
-        return []
-    try:
-        import core.substrate as substrate
-        from core.chip_proxy import describe_die_footprint
-
-        if not substrate.substrate_layers_mm(stackup_data):
-            return []          # stackup declares no body; nothing to build
-        outline = describe_die_footprint(gds_path)
-        made = substrate.build_substrate_objects(
-            doc, outline["footprint_mm"], stackup_data)
-
-        # Fill the space between the die surface and the lowest layer this
-        # layout actually uses. A PDK defines more levels than any one design
-        # draws on, and that volume is oxide in the real part, not air.
-        if bool(options.get("fill_dielectric_gap", True)):
-            from core.tech.stackup import lowest_real_layer_z0
-            lowest = lowest_real_layer_z0(stack_mm or {})
-            fill = substrate.build_dielectric_fill(
-                doc, outline["footprint_mm"], stackup_data, lowest)
-            if fill is not None:
-                made.append(fill)
-        return made
-    except Exception as exc:
-        FreeCAD.Console.PrintWarning(f"[Substrate] not built: {exc}\n")
-        return []
-
-
-def _add_unused_levels(doc, gds_path, stackup_data, options, stack_mm=None):
-    """
-    Build a slab for every PDK level this layout does not draw on.
-
-    The import only ever builds what the GDS contains, which leaves the
-    model unlike the stack the PDK describes: on a layout that routes on the
-    top metals, everything from Activ up to Vmim is simply absent, and the
-    metal appears to float 6.4 um above the silicon with nothing in between.
-
-    Which levels are empty is decided against the whole GDS rather than the
-    layers loaded immediately — a layer waiting to be loaded on demand is one
-    the layout draws on, and filling it in as empty would be wrong and would
-    collide with it the moment it loaded.
-    """
-    if not bool(options.get("show_unused_levels", True)) or not stackup_data:
-        return []
-    try:
-        import core.stack_levels as stack_levels
-        from core.chip_proxy import describe_die_footprint
-
-        keys = stack_levels.keys_in_gds(gds_path)
-        empty = stack_levels.unused(stackup_data, keys)
-        if not empty:
-            return []
-        outline = describe_die_footprint(gds_path)
-        return stack_levels.build(
-            doc, outline["footprint_mm"], empty, stackup_data,
-            shift_mm=stack_levels.stack_shift_mm(stack_mm or {}, stackup_data))
-    except Exception as exc:
-        FreeCAD.Console.PrintWarning(f"[Stack] unused levels not built: {exc}\n")
-        return []
-
-
 def _post_import(doc, gds_path, ihp_map, selected_layers,
-                 auto_pin_contacts, before_objs,
-                 stackup_data=None, options=None, stack_mm=None,
-                 technology=None):
+                 auto_pin_contacts, before_objs):
     """
     After the actual import:
     - Display GDS cells named "pin" as flat 2D shapes
     - Auto-PIN detection (optional)
-    - Build the die body (epi + substrate) below the layout
     - Create GDS_Die group
     Returns cp_count (0 if auto_pin_contacts is disabled).
     """
@@ -320,16 +258,7 @@ def _post_import(doc, gds_path, ihp_map, selected_layers,
         cp_count = Core_Functionality.import_pin_pads_as_contacts(
             gds_path, ihp_map, doc,
             selected_layers=selected_layers, top_n=3,
-            stack_mm=stack_mm,
         )
-
-    # Die body — built before the group is formed, so the slabs are swept
-    # into GDS_Die with everything else the import produced.
-    _add_die_body(doc, gds_path, stackup_data, options or {}, stack_mm)
-
-    # Built before the group is formed, like the die body, so the empty
-    # levels are swept into GDS_Die with everything else.
-    _add_unused_levels(doc, gds_path, stackup_data, options or {}, stack_mm)
 
     # GDS_Die group
     grp = doc.addObject("App::DocumentObjectGroup", "GDS_Die")
@@ -338,54 +267,18 @@ def _post_import(doc, gds_path, ihp_map, selected_layers,
         if o.Name not in before_objs and o.Name != grp.Name:
             grp.addObject(o)
 
-    # The technology goes on the group, and everything in it inherits from
-    # there (core.gds_tech.technology_of) — one tag per import rather than
-    # one per layer, so a second chip imported from another PDK into the
-    # same document keeps its own.
-    if technology:
-        import core.gds_tech as gds_tech
-        gds_tech.tag(grp, technology)
-
     return cp_count
 
 
-def _apply_display_mode(doc, pending_colors, keep_via_detail=True,
-                            exact_geometry=False):
-    """
-    Post-import display setup.
-
-    Used to bake every layer into a fast triangulated mesh first; that
-    feature was removed, so the only remaining step is whether via layers
-    start as clustered blocks.
-    """
-    if exact_geometry:
-        try:
-            from gds.ToggleViaDetailCommand import set_via_detailed
-            set_via_detailed(True)
-        except Exception as e:
-            FreeCAD.Console.PrintWarning(f"[GDS] Via state: {e}\n")
-        FreeCAD.Console.PrintMessage(
-            "[GDS] Exact KLayout geometry — via blocks skipped. Still "
-            "available from the Render toolbar.\n")
-        return
-    # VIA layers → simple outlined blocks, unless the user asked to keep via
-    # detail. This step runs AFTER the geometry is built and swaps the real
-    # via arrays for clustered blocks, so on its own it undoes every
-    # protection applied during the build — which is exactly how an import
-    # could report "VIA detail protected" and still show blocks.
-    if keep_via_detail:
-        # Tell the toggle where the document actually stands, or its first
-        # press would compute the wrong direction and appear to do nothing.
-        try:
-            from gds.ToggleViaDetailCommand import set_via_detailed
-            set_via_detailed(True)
-        except Exception as e:
-            FreeCAD.Console.PrintWarning(f"[GDS] Via state: {e}\n")
-        FreeCAD.Console.PrintMessage(
-            "[GDS] Via simplify skipped — 'Keep VIA layers in full detail' is "
-            "on. Press Toggle VIA Detail (Render toolbar) to cluster them "
-            "into blocks; the blocks are built on demand.\n")
-        return
+def _apply_performance_mode(doc, pending_colors):
+    """Performance mode after import; reapply colours afterwards."""
+    try:
+        from gds.TogglePerformanceModeCommand import apply_performance_mode
+        apply_performance_mode(doc)
+    except Exception as e:
+        FreeCAD.Console.PrintWarning(f"[GDS] Performance mode: {e}\n")
+    # VIA layers → simple outlined blocks by default (full detail on demand
+    # via the Toggle VIA Detail button).
     try:
         from gds.ToggleViaDetailCommand import apply_via_simplified
         apply_via_simplified(doc)
@@ -417,24 +310,43 @@ def load_gds_layers():
             QtWidgets.QMessageBox.critical(None, "Error", "GDS file not found.")
             return (None,) * 8
 
-        # ── Technology configuration ───────────────────────
-        # Asked per import rather than taken from the session: a package
-        # holds dies from more than one process, and the answer is recorded
-        # on what this import creates (core.gds_tech), so each die keeps
-        # saying which PDK it is from. The LYP is required here — the whole
-        # layer-selection and colour pipeline below is built on it.
-        from ui.TechnologyDialog import choose_technology
+        # ── Technology configuration ───────────────────────────────────────
+        from core.TechConfig import tech_config
 
-        technology = choose_technology(None, gds_path, require_lyp=True)
-        if technology is None:
+        if not tech_config.is_configured():
+            msg = QtWidgets.QMessageBox(None)
+            msg.setWindowTitle("Technology Configuration")
+            msg.setText("No technology profile configured.")
+            msg.setInformativeText(
+                "Use the built-in IHP SG13G2 configuration, "
+                "or select files manually?"
+            )
+            btn_std = msg.addButton("Default (IHP SG13G2)",
+                                    QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+            msg.addButton("Select Manually",
+                          QtWidgets.QMessageBox.ButtonRole.ActionRole)
+            msg.addButton(QtWidgets.QMessageBox.StandardButton.Cancel)
+            msg.setDefaultButton(btn_std)
+            msg.exec_()
+            clicked = msg.clickedButton()
+            if clicked is None or clicked == msg.button(
+                    QtWidgets.QMessageBox.StandardButton.Cancel):
+                return (None,) * 8
+            if clicked == btn_std:
+                tech_config.apply_builtin_to_local()
+
+        lyp_path = _resolve_tech_file(tech_config, "lyp", "Select LYP File",
+                                      "LYP Files (*.lyp *.LYP)")
+        if lyp_path is None:
             return (None,) * 8
 
-        lyp_path = technology["lyp_path"]
-        map_path = technology["map_path"] or None
-        xml_path = technology["xml_path"] or None
-        ihp_map = Core_Functionality.parse_map(map_path) if map_path else {}
-        stackup_data = (Core_Functionality.parse_stackup_xml(xml_path)
-                        if xml_path else {})
+        map_path = _resolve_tech_file(tech_config, "map", "Select IHP MAP (optional)",
+                                      "MAP Files (*.map *.MAP)", optional=True)
+        ihp_map  = Core_Functionality.parse_map(map_path) if map_path else {}
+
+        xml_path = _resolve_tech_file(tech_config, "xml", "Select Stackup XML (optional)",
+                                      "XML Files (*.xml *.XML)", optional=True)
+        stackup_data = Core_Functionality.parse_stackup_xml(xml_path) if xml_path else {}
 
         layers_with_colors = Core_Functionality.parse_lyp(lyp_path)
         if not layers_with_colors:
@@ -515,7 +427,6 @@ def load_gds_layers():
         layer_objects, pending_colors = _populate_document(
             doc, shapes, layers_to_load, ihp_map,
             aux["match_klayout"], aux["highlight_bondable"], aux["mesh_3d"],
-            aux.get("exact_geometry", False),
         )
 
         try:
@@ -527,10 +438,7 @@ def load_gds_layers():
         pp.update_properties(layers_to_load, unique_colors, layer_objects)
 
         cp_count = _post_import(doc, gds_path, ihp_map, layers_to_load,
-                                aux["auto_pin_contacts"], before_objs,
-                                stackup_data=stackup_data, options=options,
-                                stack_mm=aux.get("stack_mm"),
-                                technology=technology)
+                                aux["auto_pin_contacts"], before_objs)
 
         if aux["auto_pin_contacts"]:
             if cp_count:
@@ -540,29 +448,11 @@ def load_gds_layers():
                     "Ready for wire bonding.",
                 )
             else:
-                # An empty result is not necessarily a broken file: a layout
-                # whose pads follow none of the conventions auto-PIN knows
-                # (SKY130's, for one) imports with nothing to bond to.
-                answer = QtWidgets.QMessageBox.question(
+                QtWidgets.QMessageBox.warning(
                     None, "Auto-PIN",
-                    "No PIN pads were found.\n\n"
-                    "That happens when the pads are not drawn the way "
-                    "automatic detection expects \u2014 SKY130 layouts, for "
-                    "instance, keep their pad openings on a layer it does "
-                    "not recognise.\n\n"
-                    "Pick them out of the file now?",
-                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-                    QtWidgets.QMessageBox.Yes)
-                if answer == QtWidgets.QMessageBox.Yes:
-                    try:
-                        from gds.PadPickerCommand import define_pads
-                        import core.gds_pads as _gds_pads
-                        targets = _gds_pads.chips_in(doc)
-                        if targets:
-                            define_pads(doc, targets[-1], gds_path)
-                    except Exception as exc:
-                        FreeCAD.Console.PrintError(
-                            f"[Pads] could not open the pad picker: {exc}\n")
+                    "No PIN pads found.\n"
+                    "Tip: load an IHP .map file for best results.",
+                )
 
         # Stash the raw source-file inputs on aux so the LOD manager's
         # workbench-state save-provider can persist and reconstruct it
@@ -575,10 +465,7 @@ def load_gds_layers():
         # promote requests from the DetailLayerPanel.
         _start_lod_manager(doc, gds_path, aux)
 
-        _apply_display_mode(
-            doc, pending_colors,
-            keep_via_detail=bool(options.get("keep_via_detail", True)),
-            exact_geometry=aux.get("exact_geometry", False))
+        _apply_performance_mode(doc, pending_colors)
 
         return (doc, layer_objects, all_avail_layers, unique_colors,
                 gds_path, lyp_path, options, map_path)

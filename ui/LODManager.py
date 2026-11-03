@@ -22,33 +22,31 @@ Thread safety: load_gds() runs in a QThread. The OCCT objects
 are passed as BREP strings and written into the document in the main thread
 via Qt signal.
 
-Relationship to the other GDS display mechanisms
+Relationship to the other GDS performance mechanisms
 ------------------------------------------------------
-This is one of three independent, cooperating mechanisms that control how a
+This is one of four independent, cooperating mechanisms that control how a
 layer looks in the viewport. Each answers a different question:
 
   1. LODManager (here)                    — does the layer's real geometry
                                              exist in the document AT ALL?
                                              (lazy/progressive import loading)
-  2. gds.ToggleViaDetailCommand           — for VIA layers specifically, is
+  2. gds.TogglePerformanceModeCommand     — once loaded, is it rendered as
+                                             native B-rep or a pre-baked mesh?
+                                             (render-speed optimisation,
+                                             same visual detail either way)
+  3. gds.ToggleViaDetailCommand           — for VIA layers specifically, is
                                              the real via array shown, or a
                                              proximity-clustered simplified
                                              block? (intentionally LESS detail)
-  3. ui.DetailLayerPanel._simplify_layer  — manual, per-row, destructive
+  4. ui.DetailLayerPanel._simplify_layer  — manual, per-row, destructive
                                              swap of an already-loaded
                                              layer's Shape for its bounding
-                                             box (independent of #2)
-
-There was a fourth — gds.TogglePerformanceModeCommand, which swapped each
-layer for a pre-baked triangulated mesh. It was removed: it made the viewport
-fast by displaying an approximation of the geometry rather than the geometry.
-What survived is gds.LayerDisplay, which only sets per-layer tessellation
-quality and display mode, both of which leave the solid untouched.
+                                             box (independent of #2/#3)
 
 When a layer is promoted here (_insert_layer / _show_layer), it hands off to
-gds.LayerDisplay.sync_new_layer_display() — that routes a via layer to
-mechanism 2 so it matches the rest of the document instead of appearing in
-full detail on its own.
+gds.TogglePerformanceModeCommand.sync_new_layer_display() rather than always
+forcing full B-rep Detail — that keeps a freshly-loaded layer consistent
+with whatever fast-mesh state the rest of the document is already in.
 """
 
 from __future__ import annotations
@@ -63,7 +61,7 @@ from compat import QtCore, QtWidgets
 
 from core import Core_Functionality
 from core.lod_import import get_lazy_load_params
-from gds.LayerDisplay import sync_new_layer_display
+from gds.TogglePerformanceModeCommand import sync_new_layer_display
 
 # Global registry: doc.Name → LODManager
 # Necessary because FreeCAD App.Document (C++) does not allow Python attributes
@@ -388,15 +386,6 @@ class LODManager(QtCore.QObject):
                 obj = doc.addObject("Part::Feature", obj_name)
                 obj.Shape = box
 
-                # SAY SO IN THE LABEL. A placeholder is a plain die-sized
-                # box carrying the layer's own name and colour, which is
-                # indistinguishable in the tree from that layer loaded and
-                # collapsed to a bounding box — a real and repeated source of
-                # "why is this layer just a rectangle?". The label is the
-                # only place the difference is visible without clicking
-                # through to the IsLayerPlaceholder property.
-                obj.Label = f"{obj_name}  [not loaded]"
-
                 # Colour from LYP (dimmed to be recognisable as a placeholder)
                 fc = layer_dict.get("fill-color", "#888888")
                 try:
@@ -404,7 +393,7 @@ class LODManager(QtCore.QObject):
                 except Exception:
                     r, g, b = 0.5, 0.5, 0.5
                 obj.ViewObject.ShapeColor   = (r, g, b)
-                obj.ViewObject.Transparency = 80   # ghosted — not real geometry
+                obj.ViewObject.Transparency = 60   # clearly transparent = placeholder
                 obj.ViewObject.LineColor    = (0.3, 0.3, 0.3)
 
                 # Metadata
@@ -568,14 +557,10 @@ class LODManager(QtCore.QObject):
             self._aux.get("match_klayout", True),
             self._aux.get("highlight_bondable", True),
         )
-        # Remove / update placeholder marker, including the "[not loaded]"
-        # label — leaving that on a layer that now holds real geometry would
-        # be worse than never having marked it.
+        # Remove / update placeholder marker
         try:
             if hasattr(existing, "IsLayerPlaceholder"):
                 existing.IsLayerPlaceholder = False
-            if "[not loaded]" in (existing.Label or ""):
-                existing.Label = existing.Label.split("[not loaded]")[0].strip()
         except Exception:
             pass
 
@@ -587,10 +572,12 @@ class LODManager(QtCore.QObject):
             existing.ViewObject.Transparency = display_tr
             existing.ViewObject.Visibility   = True
             if target == LODState.DETAIL:
-                # Follow the document's current display convention instead
-                # of always forcing full detail — a via layer loaded while
-                # every other via shows as a block must become a block too.
-                # PREVIEW's flat 2D polygons need no such handling.
+                # Respect the document's current fast-mesh state instead of
+                # always forcing full B-rep Detail — otherwise a layer
+                # loaded after the initial import would visually and
+                # performance-wise stick out from an already-meshed
+                # document.  PREVIEW's flat 2D polygons are already
+                # lightweight, so they skip mesh baking entirely.
                 sync_new_layer_display(doc, existing)
         except Exception:
             pass
@@ -624,7 +611,7 @@ class LODManager(QtCore.QObject):
 
     def _show_layer(self, key: tuple):
         """Makes an already-loaded object visible again, respecting the
-        document's current via-detail state (see sync_new_layer_display)."""
+        document's current fast-mesh state (see sync_new_layer_display)."""
         obj = self._obj_map.get(key)
         if obj:
             try:

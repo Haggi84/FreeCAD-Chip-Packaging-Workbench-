@@ -9,7 +9,7 @@ When activated it pops up a small menu at the cursor with
 
 import FreeCAD
 import FreeCADGui
-from compat import QtWidgets, QtGui
+from compat import QtWidgets, QtGui, exec_menu
 
 from Get_Path import get_icon
 
@@ -34,7 +34,7 @@ class SessionMenuCommand:
             "Load Design Session",
         )
 
-        action = menu.exec_(QtGui.QCursor.pos())
+        action = exec_menu(menu, QtGui.QCursor.pos())
 
         if action == save_act:
             from session.SaveSessionCommand import SaveSessionCommand

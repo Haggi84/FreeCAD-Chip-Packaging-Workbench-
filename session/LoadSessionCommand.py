@@ -4,7 +4,8 @@
 Load Design Session command.
 
 Thin branded wrapper around FreeCAD's native document open. Extensible
-state restoration (VIA detail mode, LOD manager state, …) happens automatically via session.WorkbenchState's
+state restoration (fast-mesh mode, VIA detail mode, LOD manager state, …)
+happens automatically via session.WorkbenchState's
 RestoreObserver.slotFinishRestoreDocument — registered once at workbench
 init in InitGui.py — so it fires identically whether the user uses this
 button or native File > Open.

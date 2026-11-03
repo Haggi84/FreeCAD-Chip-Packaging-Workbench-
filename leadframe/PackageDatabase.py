@@ -33,6 +33,31 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Tuple
 
 
+FAMILY_PROPERTIES = {
+    "QFP": {
+        "thermal_performance": "Good",
+        "electrical_performance": "Good",
+        "rework": "Medium",
+        "cost": "Medium",
+        "mounting": "Surface mount",
+    },
+    "QFN": {
+        "thermal_performance": "Excellent",
+        "electrical_performance": "Excellent",
+        "rework": "Hard",
+        "cost": "Medium",
+        "mounting": "Surface mount",
+    },
+    "BGA": {
+        "thermal_performance": "Excellent",
+        "electrical_performance": "Excellent",
+        "rework": "Very Hard",
+        "cost": "High",
+        "mounting": "Surface mount",
+    },
+}
+
+
 # ── data container ─────────────────────────────────────────────────────────────
 
 @dataclass
@@ -68,6 +93,80 @@ class PackageSpec:
     # Display
     tags:  List[str]  = field(default_factory=list)  # e.g. ["RF", "open-cavity"]
     datasheet_url: str = ""   # direct link to a PDF datasheet, if known
+
+    @property
+    def has_exposed_pad(self) -> bool:
+        """Whether the package provides a die-attach/exposed thermal pad."""
+        return self.family in ("QFN", "QFP", "SOIC", "TSSOP") and self.has_die_paddle
+
+    @property
+    def rf_capable(self) -> bool:
+        return any("rf" in tag.lower() for tag in self.tags)
+
+    @property
+    def supports_wirebond(self) -> bool:
+        return True
+
+    @property
+    def supports_flip_chip(self) -> bool:
+        return self.family == "BGA" or any(
+            "flip-chip" in tag.lower() for tag in self.tags
+        )
+
+    @property
+    def supports_surface_mount(self) -> bool:
+        return self.family != "DIP"
+
+    @property
+    def supports_through_hole(self) -> bool:
+        return self.family == "DIP"
+
+    def _family_property(self, name: str, fallback: str) -> str:
+        return FAMILY_PROPERTIES.get(self.family, {}).get(name, fallback)
+
+    @property
+    def thermal_performance(self) -> str:
+        return self._family_property("thermal_performance", "Low-Moderate")
+
+    @property
+    def electrical_performance(self) -> str:
+        return self._family_property("electrical_performance", "Low")
+
+    @property
+    def rework(self) -> str:
+        return self._family_property("rework", "Easy")
+
+    @property
+    def cost(self) -> str:
+        return self._family_property("cost", "Low")
+
+    @property
+    def mounting(self) -> str:
+        return self._family_property(
+            "mounting",
+            "Through hole" if self.family == "DIP" else "Surface mount",
+        )
+
+    # Backward-compatible aliases for callers using the earlier names.
+    @property
+    def thermal_class(self) -> str:
+        return self.thermal_performance
+
+    @property
+    def electrical_class(self) -> str:
+        return self.electrical_performance
+
+    @property
+    def rework_class(self) -> str:
+        return self.rework
+
+    @property
+    def cost_class(self) -> str:
+        return self.cost
+
+    @property
+    def mounting_method(self) -> str:
+        return self.mounting
 
     # ── derived ────────────────────────────────────────────────────────────
 
